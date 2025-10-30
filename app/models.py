@@ -90,7 +90,7 @@ class FormFieldMapping(ConfigBase):
     label = Column(String(255), nullable=False, comment="字段前端别名 (label)")
     widget_type = Column(String(255), nullable=False, comment="字段类型 (type)")
 
-    last_updated = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     __table_args__ = (
         # 确保每个任务中，MySQL 的列名是唯一的
