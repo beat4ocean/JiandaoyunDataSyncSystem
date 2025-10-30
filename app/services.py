@@ -106,7 +106,7 @@ class FieldMappingService:
                     widget_name=widget_name,  # _widget_xxx_
                     widget_alias=widget_alias,  # name
                     label=label,
-                    widget_type=widget_type,
+                    type=widget_type,
                     data_modify_time=data_modify_time
                 )
                 new_mappings.append(mapping)
@@ -277,7 +277,7 @@ class SyncService:
         解析复合主键并从行中提取值
         """
         if not task.pk_field_names:
-            raise ValueError(f"[{task.task_id}] pk_field_name is not configured.")
+            raise ValueError(f"[{task.task_id}] pk_field_names is not configured.")
 
         # pk_field_name 格式 "pk1,pk2,pk3"
         pk_fields = [pk.strip() for pk in task.pk_field_names.split(',')]
@@ -433,7 +433,8 @@ class SyncService:
             status: str,
             binlog_file: str = None,
             binlog_pos: int = None,
-            last_sync_time: datetime = None
+            last_sync_time: datetime = None,
+            is_full_sync_first: bool = None
     ):
         """
         安全地更新任务状态 (使用传入的会话)
@@ -446,6 +447,8 @@ class SyncService:
                 task.last_binlog_pos = binlog_pos
             if last_sync_time:
                 task.last_sync_time = last_sync_time
+            if is_full_sync_first is not None:
+                task.is_full_sync_first = is_full_sync_first
 
             config_session.commit()
         except Exception as e:
@@ -453,19 +456,14 @@ class SyncService:
             print(f"[{task.task_id}] CRITICAL: Failed to update task status to {status}: {e}")
 
     # --- 公共同步方法 ---
+    # --- 首次全量同步的内部方法 ---
     @retry()
-    def run_full_replace(self, config_session: Session, source_session: Session, task: SyncTask):
+    def _run_full_sync(self, config_session: Session, source_session: Session, task: SyncTask, delete_first: bool):
         """
-        执行全量替换同步
-        (视图检查, 事务 ID, 修复响应逻辑)
+        内部全量同步逻辑, 支持SQL过滤和选择性删除
         """
-        if self._is_view(task):
-            log_sync_error(task_config=task,
-                           extra_info=f"[{task.task_id}] FULL_REPLACE mode is not allowed for VIEWS. Skipping task.")
-            return
-
-        print(f"[{task.task_id}] Running FULL_REPLACE sync...")
-        self._update_task_status(config_session, task, status='running')
+        mode = "FULL_REPLACE" if delete_first else "INITIAL_SYNC"
+        print(f"[{task.task_id}] Running {mode} sync...")
 
         total_deleted = 0
         total_created = 0
@@ -481,34 +479,40 @@ class SyncService:
             data_api_delete = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=10)
             data_api_create = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=10)
 
-            # 2. 删除简道云所有数据
-            print(f"[{task.task_id}] Deleting all data from Jdy...")
-            data_id = None
-            while True:
-                response = data_api_query.query_list_data(
-                    task.jdy_app_id, task.jdy_entry_id,
-                    limit=500, data_id=data_id, fields=["_id"]
-                )
-                jdy_data = response.get('data', [])
-                if not jdy_data:
-                    break
+            # 2. 仅在 delete_first=True 时删除
+            if delete_first:
+                print(f"[{task.task_id}] Deleting all data from Jdy...")
+                data_id = None
+                while True:
+                    response = data_api_query.query_list_data(
+                        task.jdy_app_id, task.jdy_entry_id,
+                        limit=500, data_id=data_id, fields=["_id"]
+                    )
+                    jdy_data = response.get('data', [])
+                    if not jdy_data:
+                        break
 
-                data_ids = [d['_id'] for d in jdy_data]
-                delete_response = data_api_delete.delete_batch_data(task.jdy_app_id, task.jdy_entry_id, data_ids)
+                    data_ids = [d['_id'] for d in jdy_data]
+                    delete_response = data_api_delete.delete_batch_data(task.jdy_app_id, task.jdy_entry_id, data_ids)
 
-                # 检查 success_count
-                success_count = delete_response.get('success_count', 0)
-                total_deleted += success_count
-                if success_count != len(data_ids):
-                    log_sync_error(task_config=task,
-                                   extra_info=f"[{task.task_id}] Delete mismatch. Requested: {len(data_ids)}, Deleted: {success_count}.")
+                    success_count = delete_response.get('success_count', 0)
+                    total_deleted += success_count
+                    if success_count != len(data_ids):
+                        log_sync_error(task_config=task,
+                                       extra_info=f"[{task.task_id}] Delete mismatch. Requested: {len(data_ids)}, Deleted: {success_count}.")
 
-                data_id = jdy_data[-1]['_id']
+                    data_id = jdy_data[-1]['_id']
+                print(f"[{task.task_id}] Jdy data deleted ({total_deleted} items). Fetching from source DB...")
+            else:
+                print(f"[{task.task_id}] Skipping deletion for {mode}.")
 
-            print(f"[{task.task_id}] Jdy data deleted ({total_deleted} items). Fetching from source DB...")
+            # 3. 构建带 SQL 过滤的查询
+            base_query = f"SELECT * FROM `{task.source_table}`"
+            params = {}
+            if task.source_filter_sql:
+                base_query += f" WHERE {task.source_filter_sql}"
 
-            # 3. 获取源数据
-            rows = source_session.execute(text(f"SELECT * FROM `{task.source_table}`")).mappings().all()
+            rows = source_session.execute(text(base_query), params).mappings().all()
 
             # 4. 批量创建数据
             batch_data = []
@@ -524,14 +528,11 @@ class SyncService:
                         task.jdy_app_id, task.jdy_entry_id,
                         data_list=batch_data, transaction_id=trans_id
                     )
-
-                    # 检查 success_count
                     success_count = response.get('success_count', 0)
                     total_created += success_count
                     if success_count != len(batch_data):
                         log_sync_error(task_config=task,
-                                       extra_info=f"[{task.task_id}] Create mismatch. Requested: {len(batch_data)}, Created: {success_count}. TransID: {trans_id}")
-
+                                       extra_info=f"[{task.task_id}] Create mismatch. Req: {len(batch_data)}, Created: {success_count}. TransID: {trans_id}")
                     batch_data = []
 
             if batch_data:
@@ -540,37 +541,85 @@ class SyncService:
                     task.jdy_app_id, task.jdy_entry_id,
                     data_list=batch_data, transaction_id=trans_id
                 )
-                # 检查 success_count
                 success_count = response.get('success_count', 0)
                 total_created += success_count
                 if success_count != len(batch_data):
                     log_sync_error(task_config=task,
-                                   extra_info=f"[{task.task_id}] Create mismatch. Requested: {len(batch_data)}, Created: {success_count}. TransID: {trans_id}")
+                                   extra_info=f"[{task.task_id}] Create mismatch. Req: {len(batch_data)}, Created: {success_count}. TransID: {trans_id}")
 
             print(
-                f"[{task.task_id}] FULL_REPLACE sync completed. Source rows: {len(rows)}, Created in Jdy: {total_created}.")
+                f"[{task.task_id}] {mode} sync completed. Source rows: {len(rows)}, Created in Jdy: {total_created}.")
             if len(rows) != total_created:
                 log_sync_error(task_config=task,
                                extra_info=f"[{task.task_id}] FINAL COUNT MISMATCH. Source: {len(rows)}, Created: {total_created}.")
 
-            self._update_task_status(config_session, task, status='idle',
+            # 更新时间, 但不更新状态 (由调用者更新)
+            self._update_task_status(config_session, task,
+                                     status=task.status,  # 保持状态不变
                                      last_sync_time=datetime.now(TZ_UTC_8))
 
         except Exception as e:
-            config_session.rollback()  # 确保状态回滚
-            log_sync_error(task_config=task, error=e, extra_info=f"[{task.task_id}] FULL_REPLACE failed.")
+            # 不更新状态, 只记录日志, 抛出异常
+            log_sync_error(task_config=task, error=e, extra_info=f"[{task.task_id}] {mode} failed.")
+            raise e  # 抛出异常, 让调用者处理状态
+
+    @retry()
+    def run_full_replace(self, config_session: Session, source_session: Session, task: SyncTask):
+        """
+        执行全量替换同步
+        (视图检查, 事务 ID, 修复响应逻辑)
+        """
+        if self._is_view(task):
+            log_sync_error(task_config=task,
+                           extra_info=f"[{task.task_id}] FULL_REPLACE mode is not allowed for VIEWS. Skipping task.")
+            return
+
+        print(f"[{task.task_id}] Running FULL_REPLACE sync (Scheduled)...")
+        self._update_task_status(config_session, task, status='running')
+
+        try:
+            # 调用新的内部方法, 强制删除
+            self._run_full_sync(config_session, source_session, task, delete_first=True)
+            # 成功, 设置为空闲
+            self._update_task_status(config_session, task, status='idle')
+
+        except Exception:
+            # _run_full_sync 已经记录了日志
+            config_session.rollback()
             self._update_task_status(config_session, task, status='error')
 
     @retry()
     def run_incremental(self, config_session: Session, source_session: Session, task: SyncTask):
         """
         执行增量同步 (Upsert)
-        (接受会话, 事务 ID, 去重, 复合主键)
+        (接受会话, 事务 ID, 去重, 复合主键，支持首次全量同步 和 source_filter_sql)
         """
         print(f"[{task.task_id}] Running INCREMENTAL sync...")
         self._update_task_status(config_session, task, status='running')
 
         try:
+            current_sync_time = datetime.now(TZ_UTC_8)
+
+            # 1. 检查是否需要首次全量同步
+            if task.is_full_sync_first:
+                print(f"[{task.task_id}] First run: Executing initial full sync (no delete)...")
+                try:
+                    # 调用全量同步 (不删除)
+                    self._run_full_sync(config_session, source_session, task, delete_first=False)
+                    # 成功后, 更新状态并退出
+                    self._update_task_status(config_session, task,
+                                             status='idle',
+                                             last_sync_time=current_sync_time,
+                                             is_full_sync_first=False)
+                    print(f"[{task.task_id}] Initial full sync complete.")
+                    return  # 本次运行结束
+                except Exception as e:
+                    # 首次全量同步失败, 保持 is_full_sync_first=True, 设为 error
+                    config_session.rollback()
+                    self._update_task_status(config_session, task, status='error')
+                    return  # 退出
+
+            # 2. 正常增量逻辑
             if not task.incremental_field:
                 raise ValueError("Incremental field (e.g., last_modified) is not configured.")
 
@@ -580,29 +629,33 @@ class SyncService:
             if not payload_map or not alias_map:
                 raise ValueError("Field mapping is empty.")
 
-            # 1. 实例化
+            # 3. 实例化
             data_api_query = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=30)
             data_api_delete = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=10)  # 用于去重
             data_api_create = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=20)  # Single create
             data_api_update = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=20)  # Single update
 
-            # 2. 确定时间戳
+            # 4. 确定时间戳
             last_sync = task.last_sync_time or datetime(1970, 1, 1, tzinfo=TZ_UTC_8)
-            current_sync_time = datetime.now(TZ_UTC_8)
 
-            # 3. 获取源数据
-            query = text(
+            # 5. 获取源数据 (带 SQL 过滤)
+            base_query = (
                 f"SELECT * FROM `{task.source_table}` "
                 f"WHERE `{task.incremental_field}` >= :last_sync"
             )
-            rows = source_session.execute(query, {"last_sync": last_sync}).mappings().all()
+            params = {"last_sync": last_sync}
+
+            if task.source_filter_sql:
+                base_query += f" AND ({task.source_filter_sql})"
+
+            rows = source_session.execute(text(base_query), params).mappings().all()
 
             if not rows:
                 print(f"[{task.task_id}] No new data found since {last_sync}.")
                 self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
                 return
 
-            # 4. 遍历并 Upsert
+            # 6. 遍历并 Upsert
             count_new, count_updated = 0, 0
             for row in rows:
                 row_dict = dict(row)
@@ -655,7 +708,7 @@ class SyncService:
     def run_binlog_listener(self, task: SyncTask):
         """
         运行一个长连接的 Binlog 监听器
-        (独立创建会话, 事务 ID, 去重, 复合主键)
+        (独立创建会话, 事务 ID, 去重, 复合主键，支持首次全量同步)
         """
         if self._is_view(task):
             log_sync_error(task_config=task,
@@ -666,8 +719,7 @@ class SyncService:
         current_thread().name = thread_name
         print(f"[{thread_name}] Starting...")
 
-        # 1. 实例化
-        # 注意: 实例化一次, 在循环中使用
+        # 1. 实例化 API 客户端
         data_api_query = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=30)
         data_api_delete = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=10)  # 用于去重和删除
         data_api_create = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=20)
@@ -675,13 +727,34 @@ class SyncService:
 
         stream = None
         try:
-            # 2. 在线程启动时创建一次性的 ConfigSession 来更新状态
-            with ConfigSession() as session:
-                self._update_task_status(session, task, status='running')
-                # 重新加载 task 对象以获取最新状态
-                session.refresh(task)
+            # 2. 检查是否需要首次全量同步 (在启动监听器之前)
+            if task.is_full_sync_first:
+                print(f"[{thread_name}] First run: Executing initial full sync (no delete)...")
+                try:
+                    with ConfigSession() as config_session, SourceSession() as source_session:
+                        self._run_full_sync(config_session, source_session, task, delete_first=False)
 
-            # 3. 独立创建会话和映射 (在循环外)
+                        # 成功后, 更新状态
+                        self._update_task_status(config_session, task,
+                                                 status='running',  # 保持 running, 因为我们要继续启动 binlog
+                                                 last_sync_time=datetime.now(TZ_UTC_8),
+                                                 is_full_sync_first=False)
+                        print(f"[{thread_name}] Initial full sync complete. Proceeding to binlog...")
+                except Exception as e:
+                    # 首次全量同步失败, 记录日志, 将任务设为 error 并退出线程
+                    log_sync_error(task_config=task, error=e,
+                                   extra_info=f"[{thread_name}] Initial full sync failed. Stopping binlog listener.")
+                    with ConfigSession() as config_session:
+                        self._update_task_status(config_session, task, status='error')
+                    return  # 退出线程
+
+            # 3. 在线程启动时创建一次性的 ConfigSession 来更新状态 (如果上面没运行)
+            if not task.is_full_sync_first:  # 仅在非首次运行时
+                with ConfigSession() as session:
+                    self._update_task_status(session, task, status='running')
+                    session.refresh(task)  # 确保 task 对象是最新的
+
+            # 4. 独立创建会话和映射 (在循环外)
             # Binlog 线程需要自己的会话
             with ConfigSession() as config_session:
                 mapping_service = FieldMappingService()
@@ -710,7 +783,7 @@ class SyncService:
                 log_file = stream.log_file
                 log_pos = stream.log_pos
 
-                # 4. 在循环内部为 *每个事件* 创建短暂的会话
+                # 5. 在循环内部为 *每个事件* 创建短暂的会话
                 try:
                     with ConfigSession() as config_session, SourceSession() as source_session:
 
@@ -770,7 +843,7 @@ class SyncService:
                                                    extra_info=f"[{thread_name}] Delete event skipped: Jdy ID not found.",
                                                    payload=row['values'])
 
-                        # 5. 事件处理完成后, 在会话内更新位置
+                        # 6. 事件处理完成后, 在会话内更新位置
                         self._update_task_status(config_session, task, 'running', log_file, log_pos)
 
                 except (requests.exceptions.RequestException, requests.exceptions.HTTPError) as api_err:

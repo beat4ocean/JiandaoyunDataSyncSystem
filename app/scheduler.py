@@ -20,64 +20,64 @@ scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
 running_binlog_listeners = set()
 
 
-def scheduled_job_runner():
+# 用于 FULL_REPLACE 和 INCREMENTAL 模式的包装器
+def run_task_wrapper(task_id: int):
     """
-    APScheduler 作业: 运行 FULL_REPLACE 和 INCREMENTAL 任务。
-    (增加 prepare_source_table 调用)
+    APScheduler 作业包装器: 运行单个 FULL_REPLACE 或 INCREMENTAL 任务。
+    包含并发检查逻辑。
     """
-    thread_name = "SchedulerThread"
+    thread_name = f"TaskRunner-{task_id}"
     current_thread().name = thread_name
-    print(f"[{thread_name}] Checking for scheduled tasks...")
+
+    sync_service = SyncService()
 
     with ConfigSession() as config_session:
         try:
-            tasks_to_run = config_session.query(SyncTask).filter(
-                SyncTask.is_active == True,
-                SyncTask.status.in_(['idle', 'error']),
-                SyncTask.sync_mode.in_(['FULL_REPLACE', 'INCREMENTAL'])
-            ).all()
+            task = config_session.query(SyncTask).get(task_id)
 
-            if not tasks_to_run:
-                # print(f"[{thread_name}] No scheduled tasks to run.")
+            # 1. 检查任务是否有效
+            if not task:
+                print(f"[{thread_name}] Task {task_id} not found. Removing job.")
+                scheduler.remove_job(f"task_{task_id}")
                 return
 
-            print(f"[{thread_name}] Found {len(tasks_to_run)} tasks to run.")
-            sync_service = SyncService()  # 实例化
+            if not task.is_active:
+                print(f"[{thread_name}] Task {task_id} is disabled. Skipping.")
+                return
 
-            for task in tasks_to_run:
-                try:
-                    # 在运行任务前, 准备源表 (添加 _id 等)
-                    sync_service._prepare_source_table(task)
+            # 2. (关键) 并发检查: 如果任务已在运行, 则丢弃本次执行
+            if task.status == 'running':
+                print(f"[{thread_name}] Task {task_id} is already running. Skipping this run.")
+                return
 
-                    # 重新加载 task, 以防 prepare_source_table
-                    config_session.refresh(task)
+            print(f"[{thread_name}] Starting task: {task.task_name} (Mode: {task.sync_mode})")
 
-                    if task.sync_mode == 'FULL_REPLACE':
-                        with SourceSession() as source_session:
-                            sync_service.run_full_replace(config_session, source_session, task)
+            # 3. 运行前准备 (添加 _id 等)
+            sync_service._prepare_source_table(task)
 
-                    elif task.sync_mode == 'INCREMENTAL':
-                        with SourceSession() as source_session:
-                            sync_service.run_incremental(config_session, source_session, task)
+            # 4. 执行任务
+            with SourceSession() as source_session:
+                if task.sync_mode == 'FULL_REPLACE':
+                    sync_service.run_full_replace(config_session, source_session, task)
 
-                except Exception as task_err:
-                    print(f"[{thread_name}] Error running task {task.task_id}: {task_err}")
-                    traceback.print_exc()
-                    # 标记任务失败, 但不停止调度器
-                    try:
-                        task.status = 'error'
-                        config_session.commit()
-                    except Exception as status_err:
-                        print(
-                            f"[{thread_name}] CRITICAL: Failed to set error status for task {task.task_id}: {status_err}")
-                        config_session.rollback()
-
+                elif task.sync_mode == 'INCREMENTAL':
+                    sync_service.run_incremental(config_session, source_session, task)
 
         except OperationalError as e:
-            print(f"[{thread_name}] DB connection error in scheduled_job_runner: {e}")
+            print(f"[{thread_name}] DB connection error in task runner: {e}")
+            log_sync_error(task_config=task, error=e, extra_info="Task runner DB connection error.")
+            # 状态已在 service 中设置为 'error'
         except Exception as e:
-            print(f"[{thread_name}] Error in scheduled_job_runner: {e}")
+            print(f"[{thread_name}] Unknown error in task runner: {e}")
             traceback.print_exc()
+            log_sync_error(task_config=task, error=e, extra_info="Task runner unknown error.")
+            # 确保状态被设置
+            try:
+                if task:
+                    task.status = 'error'
+                    config_session.commit()
+            except:
+                config_session.rollback()
 
 
 def run_binlog_listener_in_thread(task_id: int):
@@ -153,6 +153,10 @@ def check_and_start_new_binlog_listeners():
                     if not task:
                         continue
 
+                    # (关键) 检查是否已在运行 (以防万一)
+                    if task.status == 'running' and task_id in running_binlog_listeners:
+                        continue
+
                     print(f"[{thread_name}] Starting listener for task: {task.task_id}...")
 
                     # 在启动监听器前, 准备源表 (添加 _id 等)
@@ -214,19 +218,56 @@ def update_all_field_mappings_job():
 def start_scheduler(app: Flask):
     """
     添加作业并启动调度器。
+    现在为每个任务动态创建作业。
     """
     with app.app_context():
         print("Starting APScheduler...")
         try:
-            # 1. 添加 FULL_REPLACE / INCREMENTAL 运行器
-            scheduler.add_job(
-                scheduled_job_runner,
-                trigger='interval',
-                minutes=Config.CHECK_INTERVAL_MINUTES,
-                id='scheduled_job_runner',
-                replace_existing=True,
-                next_run_time=datetime.now(TZ_UTC_8) + timedelta(seconds=10)  # 10秒后启动
-            )
+            with ConfigSession() as config_session:
+                # 1. 遍历所有激活的任务并动态添加作业
+                tasks = config_session.query(SyncTask).filter_by(is_active=True).all()
+                print(f"Found {len(tasks)} active tasks to schedule.")
+
+                for task in tasks:
+                    job_id = f"task_{task.task_id}"
+
+                    if task.sync_mode == 'FULL_REPLACE':
+                        if task.full_replace_time:
+                            print(f"Scheduling {job_id} (FULL_REPLACE) at {task.full_replace_time}")
+                            scheduler.add_job(
+                                run_task_wrapper,
+                                trigger='cron',
+                                hour=task.full_replace_time.hour,
+                                minute=task.full_replace_time.minute,
+                                args=[task.task_id],
+                                id=job_id,
+                                replace_existing=True,
+                                max_instances=1  # (关键) 防止并发
+                            )
+                        else:
+                            print(
+                                f"Warning: Task {task.task_id} (FULL_REPLACE) is active but has no full_replace_time. It will not run.")
+
+                    elif task.sync_mode == 'INCREMENTAL':
+                        if task.incremental_interval and task.incremental_interval > 0:
+                            print(f"Scheduling {job_id} (INCREMENTAL) every {task.incremental_interval} minutes.")
+                            scheduler.add_job(
+                                run_task_wrapper,
+                                trigger='interval',
+                                minutes=task.incremental_interval,
+                                args=[task.task_id],
+                                id=job_id,
+                                replace_existing=True,
+                                max_instances=1,  # (关键) 防止并发
+                                next_run_time=datetime.now(TZ_UTC_8) + timedelta(seconds=10)  # 10秒后启动
+                            )
+                        else:
+                            print(
+                                f"Warning: Task {task.task_id} (INCREMENTAL) is active but has no incremental_interval. It will not run.")
+
+                    elif task.sync_mode == 'BINLOG':
+                        # BINLOG 任务由 check_and_start_new_binlog_listeners 自动处理
+                        print(f"Task {job_id} (BINLOG) will be managed by BinlogManager.")
 
             # 2. 添加 BINLOG 监听器管理器
             scheduler.add_job(
@@ -235,6 +276,7 @@ def start_scheduler(app: Flask):
                 seconds=30,  # 每 30 秒检查一次是否有新/停止的 binlog 任务
                 id='binlog_manager',
                 replace_existing=True,
+                max_instances=1,  # (关键) 防止并发
                 next_run_time=datetime.now(TZ_UTC_8) + timedelta(seconds=5)  # 5秒后启动
             )
 
@@ -245,11 +287,13 @@ def start_scheduler(app: Flask):
                 minutes=Config.CACHE_REFRESH_INTERVAL_MINUTES,
                 id='field_mapping_updater',
                 replace_existing=True,
+                max_instances=1,  # (关键) 防止并发
                 next_run_time=datetime.now(TZ_UTC_8) + timedelta(seconds=3)  # 3秒后首次启动
             )
 
             scheduler.start()
-            print("Scheduler started successfully.")
+            print("Scheduler started successfully with dynamic jobs.")
+
         except Exception as e:
             print(f"CRITICAL: Failed to start scheduler: {e}")
             traceback.print_exc()
