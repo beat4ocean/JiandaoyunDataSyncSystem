@@ -1,17 +1,17 @@
-import time
 import datetime
-from decimal import Decimal
+import time
+
 from flask import current_app
-from sqlalchemy import text, update
 from pymysqlreplication import BinLogStreamReader
 from pymysqlreplication.row_event import (
     WriteRowsEvent,
     UpdateRowsEvent,
     DeleteRowsEvent,
 )
+from sqlalchemy import text
 
-from app.models import db, SyncTask, FormFieldMapping
 from app.jdy_api import DataApi, FormApi, JdyApiError
+from app.models import db, SyncTask, FormFieldMapping
 from app.utils import log_sync_error, send_wecom_notification
 
 
@@ -48,7 +48,10 @@ class FieldMappingService:
         """
         current_app.logger.info(f"[Task {task.task_id}] Updating field mappings from JDY API...")
         try:
-            api_key = current_app.config['JDY_API_KEY']
+            api_key = task.jdy_api_key
+            if not api_key:
+                raise Exception(f"Task {task.task_id} missing jdy_api_key")
+
             form_api = FormApi(api_key=api_key, app_id=task.jdy_app_id)
 
             jdy_fields = form_api.get_form_fields(task.jdy_entry_id)
@@ -97,7 +100,6 @@ class SyncService:
 
     def __init__(self):
         self.mapping_service = FieldMappingService()
-        self.api_key = current_app.config['JDY_API_KEY']
 
     def get_task(self, task_id):
         return SyncTask.query.get(task_id)
@@ -197,7 +199,7 @@ class SyncService:
         current_app.logger.info(f"[Task {task.task_id}] Starting FULL_REPLACE...")
 
         try:
-            data_api = DataApi(self.api_key, task.jdy_app_id, task.jdy_entry_id)
+            data_api = DataApi(task.jdy_api_key, task.jdy_app_id, task.jdy_entry_id)
             field_map = self.mapping_service.get_field_map(task.task_id)
             if not field_map:
                 raise Exception("获取字段映射失败，任务终止")
@@ -248,14 +250,14 @@ class SyncService:
                                      last_sync_time=datetime.datetime.utcnow())
             current_app.logger.info(
                 f"[Task {task.task_id}] FULL_REPLACE finished. Total success: {total_success}/{len(jdy_data_list)}")
-            send_wecom_notification(f"同步完成: {task.task_name}",
+            send_wecom_notification(task.wecom_bot_key, f"同步完成: {task.task_name}",
                                     f"模式: 全量替换\n成功: {total_success}/{len(jdy_data_list)}")
 
         except Exception as e:
             current_app.logger.error(f"[Task {task.task_id}] FULL_REPLACE failed: {e}")
             self._update_task_status(task.task_id, "error", message=str(e))
             log_sync_error(task.task_id, f"FULL_REPLACE 失败: {e}")
-            send_wecom_notification(f"同步失败: {task.task_name}", f"错误: {e}")
+            send_wecom_notification(task.wecom_bot_key, f"同步失败: {task.task_name}", f"错误: {e}")
 
     def run_incremental(self, task: SyncTask):
         """
@@ -269,7 +271,7 @@ class SyncService:
             return
 
         try:
-            data_api = DataApi(self.api_key, task.jdy_app_id, task.jdy_entry_id)
+            data_api = DataApi(task.jdy_api_key, task.jdy_app_id, task.jdy_entry_id)
             field_map = self.mapping_service.get_field_map(task.task_id)
             if not field_map:
                 raise Exception("获取字段映射失败，任务终止")
@@ -343,13 +345,13 @@ class SyncService:
             self._update_task_status(task.task_id, "running", last_sync_time=current_sync_time)
             msg = f"增量同步完成。\n创建: {create_count}, 更新: {update_count}, 失败: {fail_count}"
             current_app.logger.info(f"[Task {task.task_id}] {msg}")
-            send_wecom_notification(f"同步完成: {task.task_name}", msg)
+            send_wecom_notification(task.wecom_bot_key, f"同步完成: {task.task_name}", msg)
 
         except Exception as e:
             current_app.logger.error(f"[Task {task.task_id}] INCREMENTAL failed: {e}")
             self._update_task_status(task.task_id, "error", message=str(e))
             log_sync_error(task.task_id, f"INCREMENTAL 失败: {e}")
-            send_wecom_notification(f"同步失败: {task.task_name}", f"错误: {e}")
+            send_wecom_notification(task.wecom_bot_key, f"同步失败: {task.task_name}", f"错误: {e}")
 
     def run_binlog_listener(self, task: SyncTask, app):
         """
@@ -376,7 +378,7 @@ class SyncService:
                 blocking=True
             )
 
-            data_api = DataApi(app.config['JDY_API_KEY'], task.jdy_app_id, task.jdy_entry_id)
+            data_api = DataApi(task.jdy_api_key, task.jdy_app_id, task.jdy_entry_id)
 
             # 在 app 上下文中获取字段映射
             with app.app_context():
@@ -472,7 +474,7 @@ class SyncService:
                 current_app.logger.error(f"[Task {task.task_id}] BINLOG listener thread CRASHED: {e}")
                 self._update_task_status(task.task_id, "error", message=f"Binlog 监听器崩溃: {e}")
                 log_sync_error(task.task_id, f"Binlog 监听器崩溃: {e}")
-                send_wecom_notification(f"同步失败: {task.task_name}", f"Binlog 监听器崩溃: {e}")
+                send_wecom_notification(task.wecom_bot_key, f"同步失败: {task.task_name}", f"Binlog 监听器崩溃: {e}")
 
         finally:
             if stream:
