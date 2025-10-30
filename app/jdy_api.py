@@ -1,280 +1,250 @@
+# -*- coding: utf-8 -*-
+"""
+简道云 API 客户端 (v5)
+"""
 import requests
-import time
 import json
-from functools import wraps
-from flask import current_app
-from app.utils import json_serializer  # 导入我们的自定义序列化器
+import time
+from datetime import datetime, timedelta
 
-
-# --- 异常类 ---
-
-class JdyApiError(Exception):
-    def __init__(self, code, message, *args, **kwargs):
-        self.code = code
-        self.message = message
-        super().__init__(f"API Error Code: {code}, Message: {message}", *args, **kwargs)
-
-
-class JdyRateLimitError(JdyApiError):
-    pass
-
-
-class JdyAuthError(JdyApiError):
-    pass
-
-
-# --- API 客户端基类 ---
 
 class ApiClient:
-    BASE_URL = 'https://api.jiandaoyun.com/api/v4'
+    """
+    简道云 API 客户端基类
+    内置了身份验证、请求发送、错误处理、速率限制和失败重试的核心逻辑。
+    """
+    _rate_limit_records = {}
 
-    def __init__(self, api_key, rate_limit_qps=10, retry_count=3, timeout=30):
+    def __init__(self, api_key, host, qps=10, retry_count=3, retry_delay=5):
+        """
+        初始化客户端。
+        :param api_key: 租户专属的 API Key
+        :param host: API Host (e.g., https://api.jiandaoyun.com)
+        :param qps: 此类API的QPS限制
+        :param retry_count: 失败重试次数
+        :param retry_delay: 失败重试延迟（秒）
+        """
+        if not api_key or not host:
+            raise ValueError("必须提供 API 密钥和主机。")
         self.api_key = api_key
-        self.qps = rate_limit_qps
+        self.host = host
+        self.qps = qps
         self.retry_count = retry_count
-        self.timeout = timeout
-        self._last_request_time = 0
-        self._rate_limit_interval = 1.0 / self.qps
+        self.retry_delay = retry_delay
+        self.min_interval = timedelta(seconds=1 / qps) if qps > 0 else timedelta(seconds=0)
 
-    def _rate_limit_control(self):
-        now = time.time()
-        elapsed = now - self._last_request_time
-        if elapsed < self._rate_limit_interval:
-            sleep_time = self._rate_limit_interval - elapsed
-            time.sleep(sleep_time)
-        self._last_request_time = time.time()
+    def _throttle(self, endpoint):
+        """根据端点控制 API 调用速率。"""
+        now = datetime.utcnow()
+        last_call_time = ApiClient._rate_limit_records.get(endpoint)
 
-    def _send_request(self, method, endpoint_url, payload_dict):
+        if last_call_time:
+            elapsed = now - last_call_time
+            wait_time = self.min_interval - elapsed
+            if wait_time.total_seconds() > 0:
+                # print(f"Throttling API call to {endpoint} for {wait_time.total_seconds():.3f} seconds")
+                time.sleep(wait_time.total_seconds())
+
+        ApiClient._rate_limit_records[endpoint] = datetime.utcnow()  # 更新时间戳
+
+    def _send_request(self, endpoint, data):
         """
-        发送请求的核心方法
-        *** 此处集成了 main.py 的优势 (自定义 json_serializer) ***
+        发送 POST 请求的私有核心方法，包含重试和速率限制逻辑。
         """
-        self._rate_limit_control()
-
-        url = f"{self.BASE_URL}{endpoint_url}"
         headers = {
-            'Authorization': f'Bearer {self.api_key}',
-            'Content-Type': 'application/json'  # 必须手动指定
+            'Authorization': 'Bearer ' + self.api_key,
+            'Content-Type': 'application/json;charset=utf-8'
         }
-
-        # 关键修改：
-        # 1. 使用 json.dumps 和我们的自定义 serializer
-        # 2. 传递 data= 参数，而不是 json= 参数
-        try:
-            data_bytes = json.dumps(
-                payload_dict,
-                default=json_serializer,
-                ensure_ascii=False
-            ).encode('utf-8')
-        except Exception as e:
-            current_app.logger.error(f"Failed to serialize JSON payload: {e}")
-            raise JdyApiError(code=999, message=f"JSON 序列化失败: {e}")
+        url = self.host.rstrip('/') + '/' + endpoint.lstrip('/')
+        # 注意：此处不再 dumps，requests 会自动处理 dict
+        payload_dict = data  # Keep it as dict for logging
 
         last_exception = None
-
-        for attempt in range(self.retry_count):
+        for attempt in range(self.retry_count + 1):
             try:
-                # 使用 data=data_bytes
-                res = requests.post(
-                    url=url,
-                    data=data_bytes,
-                    headers=headers,
-                    timeout=self.timeout
-                )
+                self._throttle(endpoint)
+                # print(f"Sending request to {url} with payload: {json.dumps(payload_dict, ensure_ascii=False)}") # Debugging line
+                res = requests.post(url=url, json=payload_dict, headers=headers,
+                                    timeout=30)  # Increase timeout, use json parameter
 
-                # 弃用 print()，改用 current_app.logger
-                if res.status_code == 401:
-                    raise JdyAuthError(code=401, message="API 密钥无效或过期")
+                # --- 增强错误日志 ---
+                if res.status_code >= 400:
+                    try:
+                        error_info = res.json()
+                        print(f"API 错误: Code={error_info.get('code')}, Msg={error_info.get('msg')}")
+                        # 打印请求体以帮助诊断 400 Bad Request
+                        print(f"请求失败的 Payload: {json.dumps(payload_dict, ensure_ascii=False, indent=2)}")
+                    except json.JSONDecodeError:
+                        print(f"API 请求失败，状态码: {res.status_code}, 响应内容非JSON: {res.text}")
+                        print(f"请求失败的 Payload: {json.dumps(payload_dict, ensure_ascii=False, indent=2)}")
+                    res.raise_for_status()  # 引发 HTTPError
+                # --- 结束增强 ---
 
-                if res.status_code == 429:
-                    current_app.logger.warning("JDY API Rate limit hit (429), retrying...")
-                    raise JdyRateLimitError(code=429, message="API QPS limit exceeded")
+                # Handle potential empty successful response (e.g., delete)
+                try:
+                    # 尝试解析JSON，即使是空响应也应该返回一个空字典或特定成功结构
+                    json_response = res.json()
+                    # 如果API没有返回任何内容但状态码是成功的 (e.g., 204 No Content),
+                    # 或者返回了非标准的成功响应体，提供一个默认成功结构。
+                    if not json_response and res.ok:
+                        return {"status": "success", "_raw_status_code": res.status_code}
+                    return json_response
+                except json.JSONDecodeError:
+                    # 如果响应体为空或者不是JSON，但是状态码表示成功
+                    if res.ok:
+                        print(f"警告：API 请求成功 (状态码 {res.status_code}) 但响应体为空或非JSON。")
+                        return {"status": "success", "_raw_status_code": res.status_code, "_raw_response": res.text}
+                    else:
+                        # 理论上 raise_for_status 应该已经处理了非OK状态码
+                        # 但为了健壮性，这里也处理一下
+                        print(f"错误：API 请求失败 (状态码 {res.status_code}) 且响应体非JSON: {res.text}")
+                        # 重新抛出，让上层知道出错了
+                        res.raise_for_status()
 
-                res_json = res.json()
 
-                # 检查简道云业务错误码
-                if 'code' in res_json and res_json['code'] != 200:
-                    # 8303 也是一种速率限制
-                    if res_json['code'] == 8303:
-                        current_app.logger.warning("JDY API Rate limit hit (8303), retrying...")
-                        raise JdyRateLimitError(code=8303, message="API QPS limit exceeded (8303)")
-
-                    raise JdyApiError(code=res_json['code'], message=res_json.get('msg', 'Unknown API error'))
-
-                # HTTP 状态码错误
-                res.raise_for_status()
-
-                return res_json
-
-            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, JdyRateLimitError) as e:
+            except (requests.exceptions.RequestException, requests.exceptions.HTTPError) as e:
                 last_exception = e
-                current_app.logger.warning(
-                    f"Request failed (Attempt {attempt + 1}/{self.retry_count}): {e}. Retrying...")
-                time.sleep(2 ** attempt)  # 指数退避
-            except JdyApiError as e:
-                # 业务错误或认证错误，通常不应重试
-                current_app.logger.error(f"JDY API Error: {e}")
-                raise
-            except Exception as e:
-                last_exception = e
-                current_app.logger.error(f"Unexpected error during API request: {e}")
-                time.sleep(2 ** attempt)
+                print(f"API 请求到 '{endpoint}' 失败 (尝试 {attempt + 1}/{self.retry_count + 1}): {e}")
+                if attempt < self.retry_count:
+                    current_delay = self.retry_delay * (2 ** attempt)  # Exponential backoff
+                    print(f"将在 {current_delay} 秒后重试...")
+                    time.sleep(current_delay)
+                else:  # All retries failed
+                    print(f"对 '{endpoint}' 的所有重试均失败。最后错误: {e}")
+                    # 尝试打印详细错误 (如果可用)
+                    if hasattr(e, 'response') and e.response is not None:
+                        try:
+                            print(f"失败响应详情: {e.response.text}")
+                        except Exception:
+                            pass  # Ignore if response text cannot be read
+                    raise last_exception  # Re-raise the last exception after all retries fail
 
-        current_app.logger.error(f"Request failed after {self.retry_count} retries.")
-        raise last_exception
-
-    def post(self, endpoint, payload):
-        return self._send_request('POST', endpoint, payload)
-
-
-# --- 按功能封装 API ---
-
-class DataApi(ApiClient):
-    """
-    封装数据相关 API (增删改查)
-    """
-
-    def __init__(self, api_key, app_id, entry_id, **kwargs):
-        self.app_id = app_id
-        self.entry_id = entry_id
-        super().__init__(api_key, **kwargs)
-
-    def _build_endpoint(self, path):
-        return f"/app/{self.app_id}/entry/{self.entry_id}{path}"
-
-    def query_list_data(self, fields=None, limit=500, data_filter=None):
-        """
-        查询多条数据 (支持分页)
-        """
-        endpoint = self._build_endpoint('/data')
-        all_data = []
-        data_id_after = None
-
-        while True:
-            payload = {
-                "limit": limit,
-                "fields": fields or [],
-                "filter": data_filter or {"rel": "and", "cond": []}
-            }
-            if data_id_after:
-                payload["data_id"] = data_id_after
-
-            try:
-                res_json = self.post(endpoint, payload)
-                data_list = res_json.get('data', [])
-                if not data_list:
-                    break
-
-                all_data.extend(data_list)
-                data_id_after = data_list[-1]['_id']
-
-                if len(data_list) < limit:
-                    break  # 最后一页
-
-            except JdyApiError as e:
-                current_app.logger.error(f"Failed to query list data: {e}")
-                raise
-        return all_data
-
-    def create_batch_data(self, data_list, trigger_workflow=False):
-        """
-        批量创建数据
-        """
-        endpoint = self._build_endpoint('/data_batch_create')
-        payload = {
-            "data_list": data_list,
-            "trigger_workflow": trigger_workflow
-        }
-        try:
-            res_json = self.post(endpoint, payload)
-            # 返回成功数和失败详情
-            return res_json.get('success_count', 0), res_json.get('fail_list', [])
-        except JdyApiError as e:
-            current_app.logger.error(f"Failed to create batch data: {e}")
-            raise
-
-    def create_single_data(self, data_dict, trigger_workflow=False):
-        """
-        创建单条数据
-        """
-        endpoint = self._build_endpoint('/data_create')
-        payload = {
-            "data": data_dict,
-            "trigger_workflow": trigger_workflow
-        }
-        try:
-            res_json = self.post(endpoint, payload)
-            return res_json.get('data', {})  # 返回创建成功的数据 (包含 _id)
-        except JdyApiError as e:
-            current_app.logger.error(f"Failed to create single data: {e}")
-            raise
-
-    def update_single_data(self, data_id, data_dict, trigger_workflow=False):
-        """
-        更新单条数据
-        """
-        endpoint = self._build_endpoint('/data_update')
-        payload = {
-            "data_id": data_id,
-            "data": data_dict,
-            "trigger_workflow": trigger_workflow
-        }
-        try:
-            self.post(endpoint, payload)
-            return True
-        except JdyApiError as e:
-            current_app.logger.error(f"Failed to update single data (ID: {data_id}): {e}")
-            raise
-
-    def delete_batch_data(self, data_ids):
-        """
-        批量删除数据
-        """
-        endpoint = self._build_endpoint('/data_batch_delete')
-        payload = {"data_ids": data_ids}
-        try:
-            res_json = self.post(endpoint, payload)
-            return res_json.get('success_count', 0)
-        except JdyApiError as e:
-            current_app.logger.error(f"Failed to delete batch data: {e}")
-            raise
-
-    def delete_single_data(self, data_id):
-        """
-        删除单条数据
-        """
-        endpoint = self._build_endpoint('/data_delete')
-        payload = {"data_id": data_id}
-        try:
-            self.post(endpoint, payload)
-            return True
-        except JdyApiError as e:
-            current_app.logger.error(f"Failed to delete single data (ID: {data_id}): {e}")
-            raise
+        # This part should ideally not be reached if retries are configured > 0
+        print(f"警告: _send_request 意外退出重试循环 for {endpoint}")
+        if last_exception:
+            raise last_exception
+        else:
+            # Should not happen, but raise a generic error if it does
+            raise Exception(f"Unknown error in _send_request for {endpoint} after retries")
 
 
+# ==============================================================================
+# 表单接口 (Form APIs)
+# ==============================================================================
 class FormApi(ApiClient):
     """
-    封装表单结构 API
+    封装了与简道云「表单结构」相关的接口。
     """
 
-    def __init__(self, api_key, app_id, **kwargs):
-        self.app_id = app_id
-        super().__init__(api_key, **kwargs)
+    def __init__(self, api_key, host, **kwargs):
+        # 表单字段查询接口V5, QPS限制为30
+        qps = kwargs.get("qps", 30)
+        retry_count = kwargs.get("retry_count", 3)
+        retry_delay = kwargs.get("retry_delay", 5)
+        super().__init__(api_key, host, qps=qps, retry_count=retry_count, retry_delay=retry_delay)
 
-    def get_form_fields(self, entry_id):
+    def get_form_widgets(self, app_id, entry_id):
         """
-        获取表单字段列表
+        表单字段查询接口 (V5)
+        获取指定表单的所有字段信息。
+        文档: https://api.jiandaoyun.com/api/v5/app/entry/widget/list
         """
-        endpoint = f"/app/{self.app_id}/entry/{entry_id}/fields"
-        # 这是一个 GET 请求，但我们封装的 _send_request 是 POST
-        # 为了简单起见，我们假设（或在文档中确认）简道云支持 POST /api/v4/app/.../fields
-        # 如果它 *必须* 是 GET，我们需要重构 _send_request 来处理 GET
+        endpoint = "api/v5/app/entry/widget/list"
+        data = {"app_id": app_id, "entry_id": entry_id}
+        return self._send_request(endpoint, data)
 
-        # 假设文档允许 POST 查询:
-        try:
-            res_json = self.post(endpoint, {})
-            return res_json.get('fields', [])
-        except JdyApiError as e:
-            current_app.logger.error(f"Failed to get form fields for entry {entry_id}: {e}")
-            raise
+
+# ==============================================================================
+# 数据接口 (Data APIs)
+# ==============================================================================
+class DataApi(ApiClient):
+    """
+    封装了与简道云「表单数据」相关的增删改查接口。
+    """
+
+    def __init__(self, api_key, host, qps, **kwargs):
+        """
+        :param qps: 必须为特定操作指定QPS, e.g., 30 for list, 10 for batch_create.
+        """
+        retry_count = kwargs.get("retry_count", 3)
+        retry_delay = kwargs.get("retry_delay", 5)  # 基础延迟
+        super().__init__(api_key, host, qps=qps, retry_count=retry_count, retry_delay=retry_delay)
+
+    def get_single_data(self, app_id, entry_id, data_id):
+        """查询单条数据 (V5, QPS: 30)"""
+        if self.qps > 30: print("警告: QPS可能设置错误，查询单条数据应为 30")
+        endpoint = "api/v5/app/entry/data/get"
+        data = {"app_id": app_id, "entry_id": entry_id, "data_id": data_id}
+        return self._send_request(endpoint, data)
+
+    def query_list_data(self, app_id, entry_id, limit=100, data_id=None, fields=None, filter=None):
+        """查询多条数据 (V5, QPS: 30)"""
+        if self.qps > 30: print("警告: QPS可能设置错误，查询多条数据应为 30")
+        endpoint = "api/v5/app/entry/data/list"
+        data = {
+            "app_id": app_id,
+            "entry_id": entry_id,
+            "limit": limit
+        }
+        if data_id:
+            data['data_id'] = data_id
+        if fields:
+            # Ensure fields is a list
+            if isinstance(fields, str):
+                fields = [fields]
+            data['fields'] = fields
+        if filter:
+            # Filter should be a dictionary
+            if not isinstance(filter, dict):
+                print("警告: query_list_data 中的 filter 参数必须是字典。")
+            else:
+                data['filter'] = filter
+        return self._send_request(endpoint, data)
+
+    def create_single_data(self, app_id, entry_id, data_payload, **kwargs):
+        """新建单条数据 (V5, QPS: 20)"""
+        if self.qps > 20: print("警告: QPS可能设置错误，新建单条数据应为 20")
+        endpoint = "api/v5/app/entry/data/create"
+        data = {"app_id": app_id, "entry_id": entry_id, "data": data_payload, **kwargs}
+        return self._send_request(endpoint, data)
+
+    def create_batch_data(self, app_id, entry_id, data_list, **kwargs):
+        """新建多条数据 (V5, QPS: 10)"""
+        if self.qps > 10: print("警告: QPS可能设置错误，新建多条数据应为 10")
+        endpoint = "api/v5/app/entry/data/batch_create"
+        data = {"app_id": app_id, "entry_id": entry_id, "data_list": data_list, **kwargs}
+        return self._send_request(endpoint, data)
+
+    def update_single_data(self, app_id, entry_id, data_id, data_payload, **kwargs):
+        """修改单条数据 (V5, QPS: 20)"""
+        if self.qps > 20: print("警告: QPS可能设置错误，修改单条数据应为 20")
+        endpoint = "api/v5/app/entry/data/update"
+        data = {"app_id": app_id, "entry_id": entry_id, "data_id": data_id, "data": data_payload, **kwargs}
+        return self._send_request(endpoint, data)
+
+    def update_batch_data(self, app_id, entry_id, data_ids, data_payload, **kwargs):
+        """修改多条数据 (V5, QPS: 10)"""
+        if self.qps > 10: print("警告: QPS可能设置错误，修改多条数据应为 10")
+        endpoint = "api/v5/app/entry/data/batch_update"
+        # Ensure data_ids is a list
+        if isinstance(data_ids, str):
+            data_ids = [data_ids]
+        data = {"app_id": app_id, "entry_id": entry_id, "data_ids": data_ids, "data": data_payload, **kwargs}
+        return self._send_request(endpoint, data)
+
+    def delete_single_data(self, app_id, entry_id, data_id, **kwargs):
+        """删除单条数据 (V5, QPS: 20)"""
+        if self.qps > 20: print("警告: QPS可能设置错误，删除单条数据应为 20")
+        endpoint = "api/v5/app/entry/data/delete"
+        data = {"app_id": app_id, "entry_id": entry_id, "data_id": data_id, **kwargs}
+        return self._send_request(endpoint, data)
+
+    def delete_batch_data(self, app_id, entry_id, data_ids):
+        """删除多条数据 (V5, QPS: 10)"""
+        if self.qps > 10: print("警告: QPS可能设置错误，删除多条数据应为 10")
+        endpoint = "api/v5/app/entry/data/batch_delete"
+        # Ensure data_ids is a list
+        if isinstance(data_ids, str):
+            data_ids = [data_ids]
+        data = {"app_id": app_id, "entry_id": entry_id, "data_ids": data_ids}
+        return self._send_request(endpoint, data)
