@@ -1,8 +1,9 @@
-import datetime
+from datetime import datetime
 import json
 import time
 import uuid
 from threading import current_thread
+from typing import Tuple, List, Any
 
 import requests
 from pymysqlreplication import BinLogStreamReader
@@ -69,8 +70,15 @@ class FieldMappingService:
 
             # 3. V5 响应结构
             widgets = response.get('widgets', [])
-            data_modify_time = response.get("dataModifyTime")  # "2021-09-08T03:40:26.586Z"
-            form_name = response.get('name') or response.get('formName')
+            data_modify_time_str = response.get("dataModifyTime")  # "2021-09-08T03:40:26.586Z"
+            form_name = response.get('name') or response.get('formName', '')
+
+            data_modify_time = None
+            if data_modify_time_str:
+                try:
+                    data_modify_time = datetime.fromisoformat(data_modify_time_str.replace('Z', '+00:00'))
+                except ValueError:
+                    print(f"[{task.task_id}] Warning: Could not parse dataModifyTime '{data_modify_time_str}'.")
 
             if not widgets:
                 print(f"[{task.task_id}] No widgets found for form.")
@@ -191,7 +199,7 @@ class SyncService:
                         processed_value = value
 
                 # 2. 序列化简单类型 (datetime, decimal)
-                #    如果 processed_value 是 list/dict (来自上一步), json_serializer 不会被调用
+                #    如果 processed_value 是 list/dict, json_serializer 不会被调用
                 #    如果 processed_value 是 简单类型, 它将被正确序列化
                 try:
                     # 此步骤确保 datetime, Decimal 等被正确转换为 str/float
@@ -204,10 +212,28 @@ class SyncService:
 
         return data_payload
 
+    def _get_pk_fields_and_values(self, task: SyncTask, row: dict) -> Tuple[List[str], List[Any]]:
+        """
+        解析复合主键并从行中提取值
+        """
+        if not task.pk_field_names:
+            raise ValueError(f"[{task.task_id}] pk_field_name is not configured.")
+
+        # pk_field_name 格式 "pk1,pk2,pk3"
+        pk_fields = [pk.strip() for pk in task.pk_field_names.split(',')]
+        pk_values = []
+
+        for field in pk_fields:
+            if field not in row:
+                raise ValueError(f"[{task.task_id}] Composite PK field '{field}' not found in row data.")
+            pk_values.append(row[field])
+
+        return pk_fields, pk_values
+
     def _find_jdy_id_by_pk(
             self,
             task: SyncTask,
-            pk_value,
+            row_dict: dict,  # 传入整行数据
             data_api_query: DataApi,
             data_api_delete: DataApi,
             alias_map: dict
@@ -215,27 +241,35 @@ class SyncService:
         """
         通过主键 (PK) 在简道云中查找对应的 _id
         """
-        if task.pk_field_name not in alias_map:
-            log_sync_error(
-                task_config=task,
-                extra_info=f"[{task.task_id}] PK field '{task.pk_field_name}' not in alias map. Cannot find Jdy ID."
-            )
-            return None
-
-        jdy_pk_field = alias_map[task.pk_field_name]
 
         try:
+            # 1. 获取复合主键字段和值
+            pk_fields, pk_values = self._get_pk_fields_and_values(task, row_dict)
+
+            filter_conditions = []
+            log_pk_values = {}  # 用于日志
+
+            # 2. 构建复合查询
+            for i, field_name in enumerate(pk_fields):
+                if field_name not in alias_map:
+                    raise ValueError(f"PK field '{field_name}' not in alias map.")
+
+                jdy_pk_field = alias_map[field_name]
+                pk_value = pk_values[i]
+                log_pk_values[field_name] = pk_value
+
+                filter_conditions.append({
+                    "field": jdy_pk_field,
+                    "method": "eq",
+                    "value": [pk_value]  # 传入数组
+                })
+
             filter_payload = {
                 "rel": "and",
-                "cond": [
-                    {
-                        "field": jdy_pk_field,
-                        "method": "eq",
-                        "value": [pk_value]
-                    }
-                ]
+                "cond": filter_conditions
             }
-            # V5 API (QPS 30) - 查找所有重复项
+
+            # 3. V5 API (QPS 30) - 查找所有重复项
             response = data_api_query.query_list_data(
                 app_id=task.jdy_app_id,
                 entry_id=task.jdy_entry_id,
@@ -245,18 +279,19 @@ class SyncService:
             )
 
             jdy_data = response.get('data', [])
+            log_pk_str = json.dumps(log_pk_values)  # 用于日志
 
             if not jdy_data:
                 return None  # 未找到
 
-            # --- 主键去重逻辑 ---
+            # 4. 主键去重逻辑
             if len(jdy_data) > 1:
                 id_to_keep = jdy_data[0].get('_id')
                 ids_to_delete = [d.get('_id') for d in jdy_data[1:] if d.get('_id')]
 
                 log_sync_error(
                     task_config=task,
-                    extra_info=f"[{task.task_id}] Found {len(jdy_data)} duplicate entries for PK {pk_value}. Keeping {id_to_keep}, deleting {len(ids_to_delete)}."
+                    extra_info=f"[{task.task_id}] Found {len(jdy_data)} duplicate entries for PK {log_pk_str}. Keeping {id_to_keep}, deleting {len(ids_to_delete)}."
                 )
 
                 try:
@@ -266,19 +301,19 @@ class SyncService:
                     log_sync_error(
                         task_config=task,
                         error=e,
-                        extra_info=f"[{task.task_id}] Failed to delete duplicate entries for PK {pk_value}."
+                        extra_info=f"[{task.task_id}] Failed to delete duplicate entries for PK {log_pk_str}."
                     )
 
                 return id_to_keep  # 返回保留的 ID
 
-            # --- 正常情况 ---
+            # 5. 正常情况
             return jdy_data[0].get('_id')  # 只有一个, 正常返回
 
-        except (requests.exceptions.RequestException, requests.exceptions.HTTPError) as e:
+        except Exception as e:  # 捕获包括 ValueError
             log_sync_error(
                 task_config=task,
                 error=e,
-                extra_info=f"[{task.task_id}] V5 API error finding Jdy ID by PK {pk_value}."
+                extra_info=f"[{task.task_id}] V5 API error finding Jdy ID by PK."
             )
             return None
 
@@ -287,7 +322,7 @@ class SyncService:
             source_session: Session,
             task: SyncTask,
             jdy_id: str,
-            pk_value
+            row_dict: dict  # 传入整行数据
     ):
         """
         将简道云 _id 回写到源数据库
@@ -297,23 +332,38 @@ class SyncService:
             return  # 视图不能回写
 
         try:
-            # 使用 text() 来确保表名和列名被正确处理
+            # 1. 获取复合主键字段和值
+            pk_fields, pk_values = self._get_pk_fields_and_values(task, row_dict)
+
+            # 2. 构建复合 WHERE 子句
+            where_clauses = []
+            params = {"jdy_id": jdy_id}
+            log_pk_values = {}
+
+            for i, field_name in enumerate(pk_fields):
+                param_name = f"pk_val_{i}"
+                where_clauses.append(f"`{field_name}` = :{param_name}")
+                params[param_name] = pk_values[i]
+                log_pk_values[field_name] = pk_values[i]
+
+            where_sql = " AND ".join(where_clauses)
+
+            # 3. 构建并执行
             update_stmt = text(
                 f'UPDATE `{task.source_table}` SET `_id` = :jdy_id '
-                f'WHERE `{task.pk_field_name}` = :pk_value AND `_id` IS NULL'
+                f'WHERE {where_sql} AND `_id` IS NULL'
             )
-            source_session.execute(update_stmt, {
-                "jdy_id": jdy_id,
-                "pk_value": pk_value
-            })
+
+            source_session.execute(update_stmt, params)
             source_session.commit()
 
         except Exception as e:
             source_session.rollback()
+            log_pk_str = json.dumps(log_pk_values) if 'log_pk_values' in locals() else "UNKNOWN"
             log_sync_error(
                 task_config=task,
                 error=e,
-                extra_info=f"[{task.task_id}] Failed to writeback _id {jdy_id} to PK {pk_value}."
+                extra_info=f"[{task.task_id}] Failed to writeback _id {jdy_id} to PK {log_pk_str}."
             )
 
     def _update_task_status(
@@ -323,7 +373,7 @@ class SyncService:
             status: str,
             binlog_file: str = None,
             binlog_pos: int = None,
-            last_sync_time: datetime.datetime = None
+            last_sync_time: datetime = None
     ):
         """
         安全地更新任务状态 (使用传入的会话)
@@ -386,7 +436,7 @@ class SyncService:
                 data_ids = [d['_id'] for d in jdy_data]
                 delete_response = data_api_delete.delete_batch_data(task.jdy_app_id, task.jdy_entry_id, data_ids)
 
-                # 修复: 检查 success_count
+                # 检查 success_count
                 success_count = delete_response.get('success_count', 0)
                 total_deleted += success_count
                 if success_count != len(data_ids):
@@ -443,7 +493,8 @@ class SyncService:
                 log_sync_error(task_config=task,
                                extra_info=f"[{task.task_id}] FINAL COUNT MISMATCH. Source: {len(rows)}, Created: {total_created}.")
 
-            self._update_task_status(config_session, task, status='idle', last_sync_time=datetime.now(TZ_UTC_8))
+            self._update_task_status(config_session, task, status='idle',
+                                     last_sync_time=datetime.now(TZ_UTC_8))
 
         except Exception as e:
             config_session.rollback()  # 确保状态回滚
@@ -454,7 +505,7 @@ class SyncService:
     def run_incremental(self, config_session: Session, source_session: Session, task: SyncTask):
         """
         执行增量同步 (Upsert)
-        (接受会话, 事务 ID, 去重)
+        (接受会话, 事务 ID, 去重, 复合主键)
         """
         print(f"[{task.task_id}] Running INCREMENTAL sync...")
         self._update_task_status(config_session, task, status='running')
@@ -476,8 +527,8 @@ class SyncService:
             data_api_update = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=20)  # Single update
 
             # 2. 确定时间戳
-            last_sync = task.last_sync_time or datetime.datetime(1970, 1, 1, tzinfo=TZ_UTC_8)
-            current_sync_time = datetime.datetime.now(TZ_UTC_8)
+            last_sync = task.last_sync_time or datetime(1970, 1, 1, tzinfo=TZ_UTC_8)
+            current_sync_time = datetime.now(TZ_UTC_8)
 
             # 3. 获取源数据
             query = text(
@@ -495,17 +546,20 @@ class SyncService:
             count_new, count_updated = 0, 0
             for row in rows:
                 row_dict = dict(row)
-                pk_value = row_dict.get(task.pk_field_name)
-                if not pk_value:
-                    log_sync_error(task_config=task, extra_info=f"[{task.task_id}] Row missing PK value. Skipping.",
+
+                # 检查复合主键
+                try:
+                    self._get_pk_fields_and_values(task, row_dict)
+                except ValueError as e:
+                    log_sync_error(task_config=task, error=e, extra_info=f"[{task.task_id}] Row missing PK. Skipping.",
                                    payload=row_dict)
                     continue
 
                 data_payload = self._transform_row_to_jdy(row_dict, payload_map)
 
-                # 传入 data_api_delete 以进行去重
+                # 传入 row_dict 以进行复合主键去重
                 jdy_id = row_dict.get('_id') or self._find_jdy_id_by_pk(
-                    task, pk_value,
+                    task, row_dict,
                     data_api_query, data_api_delete, alias_map
                 )
 
@@ -526,7 +580,8 @@ class SyncService:
                     new_jdy_id = response.get('data', {}).get('_id')
                     if new_jdy_id:
                         count_new += 1
-                        self._writeback_id_to_source(source_session, task, new_jdy_id, pk_value)
+                        # 传入 row_dict 以进行复合主键回写
+                        self._writeback_id_to_source(source_session, task, new_jdy_id, row_dict)
 
             print(f"[{task.task_id}] INCREMENTAL sync completed. New: {count_new}, Updated: {count_updated}.")
             self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
@@ -540,7 +595,7 @@ class SyncService:
     def run_binlog_listener(self, task: SyncTask):
         """
         运行一个长连接的 Binlog 监听器
-        (独立创建会话, 事务 ID, 去重)
+        (独立创建会话, 事务 ID, 去重, 复合主键)
         """
         if self._is_view(task):
             log_sync_error(task_config=task,
@@ -616,14 +671,14 @@ class SyncService:
                                 )
                                 new_jdy_id = response.get('data', {}).get('_id')
                                 if new_jdy_id:
-                                    pk_value = row['values'].get(task.pk_field_name)
-                                    self._writeback_id_to_source(source_session, task, new_jdy_id, pk_value)
+                                    # 传入 row['values']
+                                    self._writeback_id_to_source(source_session, task, new_jdy_id, row['values'])
                                 print(f"[{thread_name}] Created data.")
 
                             elif isinstance(binlog_event, UpdateRowsEvent):
-                                pk_value = row['after_values'].get(task.pk_field_name)
+                                # 传入 row['after_values']
                                 jdy_id = row['after_values'].get('_id') or self._find_jdy_id_by_pk(
-                                    task, pk_value,
+                                    task, row['after_values'],
                                     data_api_query, data_api_delete, alias_map
                                 )
 
@@ -636,13 +691,13 @@ class SyncService:
                                     print(f"[{thread_name}] Updated data.")
                                 else:
                                     log_sync_error(task_config=task,
-                                                   extra_info=f"[{thread_name}] Update event skipped: Jdy ID not found for PK {pk_value}.",
+                                                   extra_info=f"[{thread_name}] Update event skipped: Jdy ID not found.",
                                                    payload=row['after_values'])
 
                             elif isinstance(binlog_event, DeleteRowsEvent):
-                                pk_value = row['values'].get(task.pk_field_name)
+                                # 传入 row['values']
                                 jdy_id = row['values'].get('_id') or self._find_jdy_id_by_pk(
-                                    task, pk_value,
+                                    task, row['values'],
                                     data_api_query, data_api_delete, alias_map
                                 )
 
@@ -652,7 +707,7 @@ class SyncService:
                                     print(f"[{thread_name}] Deleted data.")
                                 else:
                                     log_sync_error(task_config=task,
-                                                   extra_info=f"[{thread_name}] Delete event skipped: Jdy ID not found for PK {pk_value}.",
+                                                   extra_info=f"[{thread_name}] Delete event skipped: Jdy ID not found.",
                                                    payload=row['values'])
 
                         # 5. 事件处理完成后, 在会话内更新位置

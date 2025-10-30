@@ -47,7 +47,7 @@ class SyncTask(ConfigBase):
 
     # 源数据库配置
     source_table = Column(String(255), nullable=False, comment="源数据库表名")
-    pk_field_name = Column(String(255), nullable=False, comment="源表主键字段名")
+    pk_field_names = Column(String(255), nullable=False, comment="源表主键字段名")
     incremental_field = Column(String(100), comment="增量同步依赖的时间字段 (仅 INCREMENTAL 模式)")
 
     # 简道云配置

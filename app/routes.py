@@ -102,7 +102,7 @@ def health_check():
     try:
         # 检查配置数据库
         g.config_session.execute(text("SELECT 1"))
-        # 检查目标数据库
+        # 检查源数据库
         g.source_session.execute(text("SELECT 1"))
         return jsonify({"status": "ok", "databases": "connected"})
     except Exception as e:

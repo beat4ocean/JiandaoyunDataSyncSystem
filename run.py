@@ -1,97 +1,119 @@
+import atexit
+
+from flask import Flask
 from sqlalchemy import text, inspect
+from sqlalchemy.exc import OperationalError, NoSuchTableError
+from sqlalchemy.orm import scoped_session
 
+# 导入 app, models, scheduler
 from app import create_app
-from app.models import config_metadata, config_engine, source_engine, ConfigSession, SyncTask
-from app.scheduler import start_scheduler
+from app.models import (
+    ConfigSession, config_engine, source_engine,
+    config_metadata, SyncTask
+)
+from app.scheduler import scheduler, start_scheduler
 
-# 1. 创建 App 实例
-app = create_app()
 
-
-def initialize_databases():
+def initialize_databases(app: Flask):
     """
-    初始化数据库表
+    初始化数据库：
+    1. 创建配置库中的所有表 (如 sync_tasks)。
+    2. 检查源库中的业务表，并按需添加 `_id` 字段。
     """
-    app.logger.info("Initializing Config Database (jdy_sync_config_db)...")
-    try:
-        config_metadata.create_all(config_engine)
-        app.logger.info("Config Database tables created/checked.")
-    except Exception as e:
-        app.logger.error(f"CRITICAL: Failed to initialize Config Database: {e}")
-        raise
+    with app.app_context():
+        print("Initializing databases...")
 
-    app.logger.info("Checking Source Database (source_business_db)...")
-    try:
-        # 检查目标数据库连接
-        with source_engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        app.logger.info("Source Database connection successful.")
+        # 1. 创建配置库表
+        try:
+            config_metadata.create_all(config_engine)
+            print("Config database tables checked/created.")
+        except Exception as e:
+            print(f"CRITICAL: Failed to create config database tables: {e}")
+            raise
 
-        # 检查源表中的 _id 字段 (使用手动会话)
-        with ConfigSession() as session:
-            tasks_tables = session.query(SyncTask.source_table).distinct().all()
-            source_tables = [table for (table,) in tasks_tables]
+        # 2. 检查并修改源库表
+        print("Checking source tables for `_id` column...")
 
-        if not source_tables:
-            app.logger.info("No tasks found, skipping _id column check.")
-            return
+        # 需要一个 config session 来读取任务
+        config_session = scoped_session(ConfigSession)
+        try:
+            tasks = config_session.query(SyncTask).all()
 
-        inspector = inspect(source_engine)
-        db_name = app.config['SOURCE_DB_NAME']
-        table_type_query = text(
-            "SELECT table_type FROM information_schema.tables "
-            "WHERE table_schema = :db_name AND table_name = :table_name"
-        )
+            with source_engine.connect() as source_conn:
+                for task in tasks:
+                    if not task.source_table:
+                        continue
 
-        with source_engine.connect() as conn:
-            for table_name in source_tables:
-                if not inspector.has_table(table_name):
-                    app.logger.warning(f"Source table '{table_name}' does not exist. Skipping _id check.")
-                    continue
+                    try:
+                        # 检查表是否存在
+                        inspector = inspect(source_engine)
+                        if not inspector.has_table(task.source_table):
+                            print(
+                                f"Warning: Table '{task.source_table}' for task {task.task_id} not found in source DB.")
+                            continue
 
-                table_type = None
-                table_type_result = conn.execute(table_type_query,
-                                                 {"db_name": db_name, "table_name": table_name}).fetchone()
-                if table_type_result:
-                    table_type = table_type_result[0]
+                        # 检查 `_id` 列是否存在
+                        columns = [col['name'] for col in inspector.get_columns(task.source_table)]
+                        if '_id' not in columns:
+                            print(f"Adding `_id` column to table '{task.source_table}'...")
+                            try:
+                                # 为 _id 添加 varchar(50) 和索引
+                                source_conn.execute(text(
+                                    f"ALTER TABLE `{task.source_table}` ADD COLUMN `_id` VARCHAR(50) NULL DEFAULT NULL"))
+                                source_conn.execute(
+                                    text(f"ALTER TABLE `{task.source_table}` ADD INDEX `idx__id` (`_id`)"))
+                                source_conn.commit()
+                                print(f"Successfully added `_id` column and index to '{task.source_table}'.")
+                            except Exception as alter_e:
+                                source_conn.rollback()
+                                print(f"ERROR: Failed to add `_id` column to '{task.source_table}': {alter_e}")
 
-                if table_type == 'VIEW':
-                    app.logger.info(f"Source table {table_name} is a VIEW. Skipping _id column check.")
-                    continue
+                    except NoSuchTableError:
+                        print(
+                            f"Warning: Table '{task.source_table}' for task {task.task_id} not found (NoSuchTableError).")
+                    except Exception as task_e:
+                        print(f"Error processing table for task {task.task_id} ('{task.source_table}'): {task_e}")
 
-                if table_type == 'BASE TABLE':
-                    columns = [col['name'] for col in inspector.get_columns(table_name)]
-                    if '_id' not in columns:
-                        try:
-                            # 尝试添加字段
-                            conn.execute(text(
-                                f"ALTER TABLE `{table_name}` ADD COLUMN _id VARCHAR(50) NULL DEFAULT NULL COMMENT 'JDY _id'"))
-                            conn.commit()
-                            app.logger.info(f"Added '_id' column to source table {table_name}.")
-                        except Exception as e:
-                            app.logger.warning(f"Could not add '_id' column to {table_name}: {e}")
-                    else:
-                        app.logger.info(f"Column '_id' already exists in {table_name}.")
-                else:
-                    app.logger.warning(
-                        f"Source table {table_name} is of unknown type '{table_type}'. Skipping _id check.")
+        except OperationalError as e:
+            print(f"ERROR: Cannot connect to databases during initialization: {e}")
+        except Exception as e:
+            print(f"ERROR: Failed during database initialization: {e}")
+        finally:
+            config_session.remove()
 
-        app.logger.info("Source Database schema check completed.")
-
-    except Exception as e:
-        app.logger.error(f"CRITICAL: Failed to connect or check Source Database! {e}")
-        # 在生产环境中可能希望停止启动
-        # raise
+        print("Database initialization complete.")
 
 
-if __name__ == '__main__':
-    # 1. 初始化数据库
-    initialize_databases()
+def shutdown_scheduler():
+    """在应用退出时关闭调度器"""
+    print("Shutting down scheduler...")
+    if scheduler.running:
+        scheduler.shutdown()
+    print("Scheduler shut down.")
 
-    # 2. 启动调度器 (传入 app 以读取 config)
+
+# --- 应用启动 ---
+if __name__ == "__main__":
+    app = create_app()
+
+    # 1. 初始化数据库 (建表, 添加 _id 字段)
+    initialize_databases(app)
+
+    # 2. 注册退出时关闭调度器的钩子
+    atexit.register(shutdown_scheduler)
+
+    # 3. 启动调度器
     start_scheduler(app)
 
-    # 3. 启动 Flask Web 服务器
-    app.logger.info("Starting Flask Web Server on 0.0.0.0:5000...")
-    # use_reloader=False 对 APScheduler 很重要
-    app.run(host='0.0.0.0', port=5000, use_reloader=False)
+    # 4. 启动 Flask Web 服务器
+    # 注意: 在生产环境中, 应使用 Gunicorn 或 uWSGI
+    print("Starting Flask web server...")
+    try:
+        app.run(host='0.0.0.0', port=5000)
+    except (KeyboardInterrupt, SystemExit):
+        print("Flask server received shutdown signal.")
+    finally:
+        # 确保调度器在 Ctrl+C 时也能关闭
+        if scheduler.running:
+            scheduler.shutdown()
+        print("Application exiting.")

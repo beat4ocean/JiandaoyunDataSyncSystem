@@ -13,56 +13,65 @@ else:
 
 
 class Config:
-    """
-    Flask 应用配置类
-    从环境变量中加载配置
-    """
+    # --- 数据库连接 (从 .env 读取) ---
 
-    # --- 数据库 URL  ---
+    # 1. 配置数据库 (存储任务)
     CONFIG_DB_USER = os.getenv('CONFIG_DB_USER', 'root')
     CONFIG_DB_PASSWORD = quote_plus(os.getenv('CONFIG_DB_PASSWORD', 'password'))
     CONFIG_DB_HOST = os.getenv('CONFIG_DB_HOST', 'localhost')
     CONFIG_DB_PORT = int(os.getenv('CONFIG_DB_PORT', '3306'))
-    CONFIG_DB_NAME = os.getenv('CONFIG_DB_NAME', 'jdy_sync_config_db')
-    CONFIG_DB_TYPE = os.getenv('CONFIG_DB_TYPE', 'mysql+pymysql')
+    CONFIG_DB_NAME = os.getenv('CONFIG_DB_NAME', 'jdy_sync_config')
 
-    CONFIG_DB_URL = (
-        f"{CONFIG_DB_TYPE}://{CONFIG_DB_USER}:{CONFIG_DB_PASSWORD}@"
-        f"{CONFIG_DB_HOST}:{CONFIG_DB_PORT}/{CONFIG_DB_NAME}?charset=utf8mb4"
-    )
-
-    # --- 目标数据库 (Source DB) ---
+    # 2. 目标/源 数据库 (存储业务数据) - (已修复: 重命名为 SOURCE)
     SOURCE_DB_USER = os.getenv('SOURCE_DB_USER', 'root')
     SOURCE_DB_PASSWORD = quote_plus(os.getenv('SOURCE_DB_PASSWORD', 'password'))
     SOURCE_DB_HOST = os.getenv('SOURCE_DB_HOST', 'localhost')
     SOURCE_DB_PORT = int(os.getenv('SOURCE_DB_PORT', '3306'))
-    SOURCE_DB_NAME = os.getenv('SOURCE_DB_NAME', 'source_business_db')
-    SOURCE_DB_TYPE = os.getenv('SOURCE_DB_TYPE', 'mysql+pymysql')
+    # services.py 需要 (Binlog 和 _is_view)
+    SOURCE_DB_NAME = os.getenv('SOURCE_DB_NAME', 'source_db_name')
+
+    # 3. Binlog 专用连接 (通常是只读副本)
+    BINLOG_DB_USER = os.getenv('BINLOG_DB_USER', 'binlog_user')
+    BINLOG_DB_PASSWORD = os.getenv('BINLOG_DB_PASSWORD', 'binlog_pass')
+    BINLOG_DB_HOST = os.getenv('BINLOG_DB_HOST', 'localhost')
+    BINLOG_DB_PORT = int(os.getenv('BINLOG_DB_PORT', '3306'))
+
+    # --- 数据库连接字符串 ---
+    CONFIG_DB_URL = (
+        f"mysql+pymysql://{CONFIG_DB_USER}:{CONFIG_DB_PASSWORD}@"
+        f"{CONFIG_DB_HOST}:{CONFIG_DB_PORT}/{CONFIG_DB_NAME}?charset=utf8mb4"
+    )
 
     SOURCE_DB_URL = (
-        f"{SOURCE_DB_TYPE}://{SOURCE_DB_USER}:{SOURCE_DB_PASSWORD}@"
+        f"mysql+pymysql://{SOURCE_DB_USER}:{SOURCE_DB_PASSWORD}@"
         f"{SOURCE_DB_HOST}:{SOURCE_DB_PORT}/{SOURCE_DB_NAME}?charset=utf8mb4"
     )
 
     # 数据库连接参数
     DB_CONNECT_ARGS = {
-        'connect_timeout': 10
+        "connect_timeout": 20
+    }
+
+    # Binlog 读取器设置
+    BINLOG_MYSQL_SETTINGS = {
+        "host": BINLOG_DB_HOST,
+        "port": int(BINLOG_DB_PORT),
+        "user": BINLOG_DB_USER,
+        "passwd": BINLOG_DB_PASSWORD
     }
 
     # --- 简道云 API 配置 ---
     JDY_API_HOST = os.getenv('JDY_API_HOST', 'https://api.jiandaoyun.com')
 
-    # --- Binlog 配置 (与目标/源数据库相同) ---
-    BINLOG_MYSQL_SETTINGS = {
-        'host': SOURCE_DB_HOST,
-        'port': int(SOURCE_DB_PORT),
-        'user': SOURCE_DB_USER,
-        'passwd': os.getenv('SOURCE_DB_PASSWORD', 'password'),  # 不能使用 quote_plus()，否则可能会导致 binlog 配置错误
-        'charset': 'utf8'
-    }
+    # --- 调度器配置 ---
+    CHECK_INTERVAL_MINUTES = int(os.getenv('CHECK_INTERVAL_MINUTES', 1))
+    CACHE_REFRESH_INTERVAL_MINUTES = int(os.getenv('CACHE_REFRESH_INTERVAL_MINUTES', 5))
 
 
-# 导出实例 (方便 models.py 等文件导入)
+# 导出实例
 CONFIG_DB_URL = Config.CONFIG_DB_URL
 SOURCE_DB_URL = Config.SOURCE_DB_URL
 DB_CONNECT_ARGS = Config.DB_CONNECT_ARGS
+# JDY_API_HOST = Config.JDY_API_HOST
+# BINLOG_MYSQL_SETTINGS = Config.BINLOG_MYSQL_SETTINGS
+# CHECK_INTERVAL_MINUTES = Config.CHECK_INTERVAL_MINUTES
