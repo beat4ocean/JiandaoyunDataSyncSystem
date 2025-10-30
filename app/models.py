@@ -7,6 +7,7 @@ from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 
 from app.config import CONFIG_DB_URL, SOURCE_DB_URL, DB_CONNECT_ARGS
+from app.utils import TZ_UTC_8
 
 # --- 数据库引擎和会话 ---
 
@@ -66,8 +67,8 @@ class SyncTask(ConfigBase):
     send_error_log_to_wecom = Column(Boolean, default=False, nullable=False, comment="是否发送错误日志到企微")
     wecom_robot_webhook_url = Column(String(500), nullable=True, comment="企业微信机器人 Webhook URL")
 
-    created_at = Column(DateTime, default=datetime.utcnow, comment="创建时间")
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow,
+    created_at = Column(DateTime, default=datetime.now(TZ_UTC_8), comment="创建时间")
+    updated_at = Column(DateTime, default=datetime.now(TZ_UTC_8), onupdate=datetime.now(TZ_UTC_8),
                         comment="更新时间")
 
     __table_args__ = (
@@ -91,7 +92,7 @@ class FormFieldMapping(ConfigBase):
     widget_type = Column(String(255), nullable=False, comment="字段类型 (type)")
     data_modify_time = Column(DateTime, nullable=True, comment="字段修改时间")
 
-    last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_updated = Column(DateTime, default=datetime.now(TZ_UTC_8), onupdate=datetime.now(TZ_UTC_8))
 
     __table_args__ = (
         # 确保每个任务中，MySQL 的列名是唯一的

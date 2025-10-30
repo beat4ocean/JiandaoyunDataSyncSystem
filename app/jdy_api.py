@@ -7,6 +7,8 @@ import json
 import time
 from datetime import datetime, timedelta
 
+from app.utils import TZ_UTC_8
+
 
 class ApiClient:
     """
@@ -35,7 +37,7 @@ class ApiClient:
 
     def _throttle(self, endpoint):
         """根据端点控制 API 调用速率。"""
-        now = datetime.utcnow()
+        now = datetime.now(TZ_UTC_8)
         last_call_time = ApiClient._rate_limit_records.get(endpoint)
 
         if last_call_time:
@@ -45,7 +47,7 @@ class ApiClient:
                 # print(f"Throttling API call to {endpoint} for {wait_time.total_seconds():.3f} seconds")
                 time.sleep(wait_time.total_seconds())
 
-        ApiClient._rate_limit_records[endpoint] = datetime.utcnow()  # 更新时间戳
+        ApiClient._rate_limit_records[endpoint] = datetime.now(TZ_UTC_8)  # 更新时间戳
 
     def _send_request(self, endpoint, data):
         """
