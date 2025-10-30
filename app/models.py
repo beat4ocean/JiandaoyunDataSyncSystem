@@ -89,6 +89,7 @@ class FormFieldMapping(ConfigBase):
     widget_alias = Column(String(255), nullable=False, comment="字段后端别名 (name, 用于 API 查询/匹配)")
     label = Column(String(255), nullable=False, comment="字段前端别名 (label)")
     widget_type = Column(String(255), nullable=False, comment="字段类型 (type)")
+    data_modify_time = Column(DateTime, nullable=True, comment="字段修改时间")
 
     last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

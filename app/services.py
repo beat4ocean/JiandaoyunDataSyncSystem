@@ -1,654 +1,608 @@
 import datetime
+import json
 import time
+from threading import current_thread
 
-from flask import current_app
+import requests
 from pymysqlreplication import BinLogStreamReader
 from pymysqlreplication.row_event import (
     WriteRowsEvent,
     UpdateRowsEvent,
     DeleteRowsEvent,
 )
-from requests import RequestException, HTTPError
-from sqlalchemy import text
+from sqlalchemy import text, inspect
+from sqlalchemy.exc import OperationalError, IntegrityError
+from sqlalchemy.orm import Session
 
-from app.jdy_api import DataApi, FormApi
-from app.models import db, SyncTask, FormFieldMapping
-from app.utils import log_sync_error, send_wecom_notification, json_serializer, retry
+from app.config import Config
+from app.jdy_api import FormApi, DataApi
+
+from app.models import (
+    ConfigSession, SourceSession, source_engine,
+    SyncTask, FormFieldMapping
+)
+from app.utils import log_sync_error, json_serializer, TZ_UTC_8, retry
+
+# 缓存视图状态
+view_status_cache = {}
 
 
 class FieldMappingService:
     """
-    处理字段映射的服务
+    处理字段映射的缓存和更新
     """
 
     @retry()
-    def _get_mappings(self, task_id):
+    def get_payload_mapping(self, config_session: Session, task_id: int) -> dict:
         """
-        从数据库缓存中获取所有字段映射
-        如果缓存为空，则从 API 更新
+        获取用于构建 API *payload* 的映射。
+        返回: { 'widget_alias': 'jdy_widget_name' }
+               (e.g., { 'name': '_widget_123' })
         """
-        mappings = FormFieldMapping.query.filter_by(task_id=task_id).all()
-        if not mappings:
-            current_app.logger.warning(f"[Task {task_id}] No field mappings found in cache. Attempting to update.")
-            task = SyncTask.query.get(task_id)
-            if task:
-                self.update_form_fields_mapping(task)
-                mappings = FormFieldMapping.query.filter_by(task_id=task_id).all()
-            else:
-                current_app.logger.error(f"[Task {task_id}] Task not found, cannot update mappings.")
-                return []
-        return mappings
-
-    def get_payload_mapping(self, task_id):
-        """
-        获取用于构建 API 负载 (data) 的映射
-        :return: dict {widget_alias: widget_name} (e.g., {'dept_name': '_widget_123'})
-        """
-        mappings = self._get_mappings(task_id)
+        mappings = config_session.query(FormFieldMapping).filter_by(task_id=task_id).all()
+        # widget_alias 现在是 MySQL 的列名
         return {m.widget_alias: m.widget_name for m in mappings}
 
-    # def get_alias_mapping(self, task_id):
-    #     """
-    #     获取用于 API 查询 (filter) 和 PK 验证的映射
-    #     :return: dict {widget_alias: widget_alias} (e.g., {'dept_name': 'dept_name'})
-    #     """
-    #     mappings = self._get_mappings(task_id)
-    #     return {m.widget_alias: m.widget_alias for m in mappings}
+    @retry()
+    def get_alias_mapping(self, config_session: Session, task_id: int) -> dict:
+        """
+        获取用于 API *查询过滤* 的映射。
+        返回: { 'mysql_column_name': 'jdy_widget_alias' }
+               (e.g., { 'name': 'name' })
+        """
+        mappings = config_session.query(FormFieldMapping).filter_by(task_id=task_id).all()
+        # widget_alias 既是 MySQL 列名, 也是 Jdy API filter 的 'name'
+        return {m.widget_alias: m.widget_alias for m in mappings}
 
     @retry()
-    def update_form_fields_mapping(self, task: SyncTask):
+    def update_form_fields_mapping(self, config_session: Session, task: SyncTask):
         """
-        从简道云 API 获取最新字段，并更新到数据库缓存
+        从简道云 API 更新指定任务的字段映射缓存
         """
-        current_app.logger.info(f"[Task {task.task_id}] Updating field mappings from JDY API...")
+        print(f"[{task.task_id}] Updating field mappings for task...")
         try:
-            api_key = task.jdy_api_key
-            host = current_app.config['JDY_API_HOST']
-            if not api_key:
-                raise Exception(f"Task {task.task_id} missing jdy_api_key")
+            # 1. 实例化
+            form_api = FormApi(api_key=task.jdy_api_key, host=Config.JDY_API_HOST, qps=30)
 
-            form_api = FormApi(api_key=api_key, host=host)
-
-            # 调用 get_form_widgets
+            # 2. 调用
             response = form_api.get_form_widgets(task.jdy_app_id, task.jdy_entry_id)
 
-            # 解析响应
-            jdy_fields = response.get('widgets', response.get('data', response))
-            if not isinstance(jdy_fields, list):
-                raise Exception(f"Failed to parse widgets list from API response: {response}")
+            # 3. V5 响应结构
+            widgets = response.get('widgets', [])
+            data_modify_time = response.get("dataModifyTime")  # "2021-09-08T03:40:26.586Z"
+            form_name = response.get('name') or response.get('formName')
 
-            if not jdy_fields:
-                current_app.logger.warning(f"[Task {task.task_id}] JDY API returned no fields.")
+            if not widgets:
+                print(f"[{task.task_id}] No widgets found for form.")
                 return
 
-            # 1. 删除旧映射
-            FormFieldMapping.query.filter_by(task_id=task.task_id).delete()
+            # 4. 删除旧映射
+            config_session.query(FormFieldMapping).filter_by(task_id=task.task_id).delete()
 
-            # 2. 插入新映射
+            # 5. 插入新映射
             new_mappings = []
-            for field in jdy_fields:
-                # 简道云widget别名 (e.g., 'name', 'department',  '部门')
-                widget_alias = field.get('name')
-                # 简道云widget字段ID (e.g., '_widget_12345')
-                widget_name = field.get('widgetName')
-                # 简道云表单字段名
-                widget_label = field.get('label')
-                # 字段类型 (e.g., 'text', 'select')
+            for field in widgets:
+                # 假设 V5 API 结构
+                widget_alias = field.get('name')  # 'name' 字段 (用于查询/匹配)
+                widget_name = field.get('widgetName')  # '_widget_xxx' (用于提交)
+                label = field.get('label')
                 widget_type = field.get('type')
 
-                # # 如果 API 响应中没有 widget_name，我们回退到使用 name
-                # if not widget_name:
-                #     widget_name = widget_alias
-                #     current_app.logger.warning(
-                #         f"[Task {task.task_id}] Field '{widget_alias}' missing 'widget_name' key, falling back to 'name'.")
+                if not (widget_alias and widget_name and label and widget_type):
+                    # 跳过无效的字段 (例如 'SerialId' 可能没有 widget_name)
+                    continue
 
-                # 核心逻辑：MySQL 列名 (column_name) 与 简道云后端别名 (widget_alias/name) 一致
-
-                new_map = FormFieldMapping(
+                mapping = FormFieldMapping(
                     task_id=task.task_id,
-                    form_name=None,
-                    widget_name=widget_name,
-                    widget_alias=widget_alias,
-                    label=widget_label,
-                    widget_type=widget_type
+                    form_name=form_name,
+                    widget_name=widget_name,  # _widget_xxx_
+                    widget_alias=widget_alias,  # name
+                    label=label,
+                    widget_type=widget_type,
+                    data_modify_time=data_modify_time
                 )
-                new_mappings.append(new_map)
+                new_mappings.append(mapping)
 
-            db.session.bulk_save_objects(new_mappings)
-            db.session.commit()
-            current_app.logger.info(f"[Task {task.task_id}] Updated {len(new_mappings)} field mappings.")
+            config_session.add_all(new_mappings)
+            config_session.commit()
+            print(f"[{task.task_id}] Successfully updated {len(new_mappings)} field mappings.")
 
-        except Exception as e:
-            db.session.rollback()
-            current_app.logger.error(f"[Task {task.task_id}] Failed to update field mappings: {e}")
-            log_sync_error(task.task_id, f"更新字段映射失败: {e}")
-            raise
+        except (requests.exceptions.RequestException, requests.exceptions.HTTPError) as e:
+            config_session.rollback()
+            log_sync_error(
+                task_config=task,
+                error=e,
+                extra_info=f"[{task.task_id}] Failed to update field mappings via V5 API."
+            )
+        except IntegrityError as e:
+            config_session.rollback()
+            log_sync_error(
+                task_config=task,
+                error=e,
+                extra_info=f"[{task.task_id}] Failed to update mappings due to IntegrityError (e.g., duplicate widget_alias?)."
+            )
 
 
 class SyncService:
     """
-    核心同步逻辑服务
+    处理核心同步逻辑
     """
 
     def __init__(self):
-        self.mapping_service = FieldMappingService()
-        self.view_cache = {}  # 用于缓存表是否为视图
+        self._view_status_cache = {}  # 实例级别的缓存
 
-    def get_task(self, task_id):
-        return SyncTask.query.get(task_id)
-
-    def _get_source_db_engine(self):
-        """获取源数据库的 bind engine"""
-        return db.session.get_bind('source_db')
-
-    def _is_view(self, task: SyncTask):
+    def _is_view(self, task: SyncTask) -> bool:
         """
-        检查源表是否为视图
+        检查源表是否是一个视图 (VIEW)
         """
-        if task.task_id in self.view_cache:
-            return self.view_cache[task.task_id]
+        cache_key = task.source_table
+        if cache_key in self._view_status_cache:
+            return self._view_status_cache[cache_key]
 
-        is_view = False
         try:
-            db_name = current_app.config['SOURCE_DB_NAME']
-            table_name = task.source_table
-            engine = self._get_source_db_engine()
-            with engine.connect() as conn:
-                query = text(
-                    "SELECT table_type FROM information_schema.tables "
-                    "WHERE table_schema = :db_name AND table_name = :table_name"
-                )
-                result = conn.execute(query, {"db_name": db_name, "table_name": table_name}).fetchone()
+            inspector = inspect(source_engine)
+            db_name = Config.SOURCE_DB_NAME  # 从 Config 获取
 
-                if result and result[0] == 'VIEW':
-                    is_view = True
+            if not inspector.has_table(task.source_table):
+                raise ValueError(f"Source table {task.source_table} does not exist.")
 
-            self.view_cache[task.task_id] = is_view
+            table_type_query = text(
+                "SELECT table_type FROM information_schema.tables "
+                "WHERE table_schema = :db_name AND table_name = :table_name"
+            )
+            with source_engine.connect() as conn:
+                result = conn.execute(table_type_query,
+                                      {"db_name": db_name, "table_name": task.source_table}).fetchone()
+
+            is_view = (result and result[0] == 'VIEW')
+            self._view_status_cache[cache_key] = is_view
+
+            if is_view:
+                print(f"[{task.task_id}] Source table {task.source_table} is a VIEW.")
+
             return is_view
 
         except Exception as e:
-            current_app.logger.error(f"[Task {task.task_id}] Failed to check if table is view: {e}")
-            # 出错时，为安全起见假设它不是视图
-            return False
+            log_sync_error(
+                task_config=task,
+                error=e,
+                extra_info=f"[{task.task_id}] Failed to check if table is view."
+            )
+            return False  # 默认不是视图以防止意外
 
-    def _transform_row_to_jdy(self, row, payload_map):
+    def _transform_row_to_jdy(self, row: dict, payload_map: dict) -> dict:
         """
-        将数据库行 (RowProxy 或 dict) 转换为简道云 data 字典
+        将数据库行 (dict) 转换为简道云 API data 负载
         """
-        jdy_data = {}
-        row_dict = dict(row)  # 转换为字典
+        data_payload = {}
+        for col_name, value in row.items():
+            if col_name in payload_map:
+                widget_name = payload_map[col_name]
 
-        # 遍历 MySQL 行的 {列名: 值}
-        for mysql_col, value in row_dict.items():
-            # 根据列名 (column_name) 查找对应的 API 提交键 (widget_name)
-            widget_name = payload_map.get(mysql_col)
-
-            # 如果找到了映射关系
-            if widget_name and value is not None:
+                # 关键: 使用 json_serializer 预处理 V5 API 不支持的类型
                 try:
-                    # 主动序列化 Decimal, datetime 等
-                    serialized_value = json_serializer(value)
+                    processed_value = json.loads(json.dumps(value, default=json_serializer))
                 except TypeError:
-                    # 对于其他类型，转为字符串
-                    serialized_value = str(value)
+                    processed_value = str(value)  # 回退
 
-                # jdy_data['_widget_123'] = {"value": ...}
-                jdy_data[widget_name] = {"value": serialized_value}
-        return jdy_data
+                data_payload[widget_name] = {"value": processed_value}
 
-    @retry()
-    def _update_task_status(self, task_id, status, message=None, last_sync_time=None, binlog_file=None,
-                            binlog_pos=None):
+        return data_payload
+
+    def _find_jdy_id_by_pk(
+            self,
+            config_session: Session,
+            task: SyncTask,
+            pk_value,
+            data_api: DataApi,
+            alias_map: dict
+    ) -> str | None:
         """
-        更新任务状态和日志 (在 app 上下文中调用)
+        通过主键 (PK) 在简道云中查找对应的 _id
+        """
+        if task.pk_field_name not in alias_map:
+            log_sync_error(
+                task_config=task,
+                extra_info=f"[{task.task_id}] PK field '{task.pk_field_name}' not in alias map. Cannot find Jdy ID."
+            )
+            return None
+
+        jdy_pk_field = alias_map[task.pk_field_name]
+
+        try:
+            filter_payload = {
+                "rel": "and",
+                "cond": [
+                    {
+                        "field": jdy_pk_field,
+                        "method": "eq",
+                        "value": [pk_value]
+                    }
+                ]
+            }
+            # V5 API (QPS 30)
+            response = data_api.query_list_data(
+                app_id=task.jdy_app_id,
+                entry_id=task.jdy_entry_id,
+                limit=1,
+                fields=["_id"],
+                filter=filter_payload
+            )
+
+            if response and response.get('data'):
+                return response['data'][0].get('_id')
+            return None
+
+        except (requests.exceptions.RequestException, requests.exceptions.HTTPError) as e:
+            log_sync_error(
+                task_config=task,
+                error=e,
+                extra_info=f"[{task.task_id}] V5 API error finding Jdy ID by PK {pk_value}."
+            )
+            return None
+
+    def _writeback_id_to_source(
+            self,
+            source_session: Session,
+            task: SyncTask,
+            jdy_id: str,
+            pk_value
+    ):
+        """
+        将简道云 _id 回写到源数据库
+        """
+        if self._is_view(task):
+            # print(f"[{task.task_id}] Skipping _id writeback for VIEW.")
+            return  # 视图不能回写
+
+        try:
+            # 使用 text() 来确保表名和列名被正确处理
+            update_stmt = text(
+                f'UPDATE `{task.source_table}` SET `_id` = :jdy_id '
+                f'WHERE `{task.pk_field_name}` = :pk_value AND `_id` IS NULL'
+            )
+            source_session.execute(update_stmt, {
+                "jdy_id": jdy_id,
+                "pk_value": pk_value
+            })
+            source_session.commit()
+
+        except Exception as e:
+            source_session.rollback()
+            log_sync_error(
+                task_config=task,
+                error=e,
+                extra_info=f"[{task.task_id}] Failed to writeback _id {jdy_id} to PK {pk_value}."
+            )
+
+    def _update_task_status(
+            self,
+            config_session: Session,
+            task: SyncTask,
+            status: str,
+            binlog_file: str = None,
+            binlog_pos: int = None,
+            last_sync_time: datetime = None
+    ):
+        """
+        安全地更新任务状态 (使用传入的会话)
         """
         try:
-            task = SyncTask.query.get(task_id)
-            if not task:
-                current_app.logger.error(f"Task {task_id} not found during status update.")
-                return
-
             task.status = status
-            if message:
-                task.last_error_message = message
-            if last_sync_time:
-                task.last_sync_time = last_sync_time
             if binlog_file:
                 task.last_binlog_file = binlog_file
             if binlog_pos:
                 task.last_binlog_pos = binlog_pos
+            if last_sync_time:
+                task.last_sync_time = last_sync_time
 
-            db.session.commit()
+            config_session.commit()
         except Exception as e:
-            db.session.rollback()
-            current_app.logger.error(f"[Task {task_id}] CRITICAL: Failed to update task status: {e}")
+            config_session.rollback()
+            print(f"[{task.task_id}] CRITICAL: Failed to update task status to {status}: {e}")
 
+    # --- 公共同步方法 ---
     @retry()
-    def _find_jdy_id_by_pk(self, task: SyncTask, pk_field_alias, pk_value):
+    def run_full_replace(self, config_session: Session, source_session: Session, task: SyncTask):
         """
-        通过业务主键在简道云中查找对应的 _id
-        (使用 pk_field_alias, 即 'name' 字段)
+        执行全量替换同步
         """
-        try:
-            host = current_app.config['JDY_API_HOST']
-            # 实例化用于 'list' (QPS 30) 的客户端
-            list_api = DataApi(api_key=task.jdy_api_key, host=host, qps=30)
-
-            data_filter = {
-                "rel": "and",
-                "cond": [
-                    {"field": pk_field_alias, "type": "text", "method": "eq", "value": pk_value}
-                ]
-            }
-            # query_list_data 返回的是 data 列表
-            result_list = list_api.query_list_data(
-                app_id=task.jdy_app_id,
-                entry_id=task.jdy_entry_id,
-                fields=[pk_field_alias],
-                limit=1,
-                filter=data_filter
-            )
-            if result_list:
-                return result_list[0]['_id']
-
-        except Exception as e:
-            current_app.logger.error(f"Failed to find JDY ID by PK ({pk_field_alias}={pk_value}): {e}")
-        return None
-
-    @retry()
-    def _writeback_id_to_source(self, task: SyncTask, pk_value, jdy_id):
-        """
-        将简道云 _id 回写到源数据库
-        (此操作在视图上会失败，这是符合预期的)
-        """
-        # 1. 检查是否为视图
         if self._is_view(task):
-            current_app.logger.debug(
-                f"[Task {task.task_id}] Source is a VIEW. Skipping _id writeback for PK={pk_value}.")
+            log_sync_error(task_config=task,
+                           extra_info=f"[{task.task_id}] FULL_REPLACE mode is not allowed for VIEWS. Skipping task.")
             return
 
-        # 2. 正常回写
-        id_field_in_source = '_id'
-        try:
-            engine = self._get_source_db_engine()
-            with engine.connect() as conn:
-                stmt = text(
-                    f"UPDATE {task.source_table} "
-                    f"SET {id_field_in_source} = :jdy_id "
-                    f"WHERE {task.pk_field_name} = :pk_value"
-                )
-                conn.execute(stmt, {"jdy_id": jdy_id, "pk_value": pk_value})
-                conn.commit()
-            current_app.logger.info(f"[Task {task.task_id}] Writeback _id={jdy_id} for PK={pk_value} success.")
-        except Exception as e:
-            current_app.logger.warning(f"[Task {task.task_id}] Failed to writeback _id to source table: {e}")
-            log_sync_error(task.task_id, f"回写 _id 失败 (PK: {pk_value}): {e}")
-
-    # --- 三种同步模式的实现 ---
-    @retry()
-    def run_full_replace(self, task: SyncTask):
-        """
-        执行 FULL_REPLACE 同步
-        """
-        current_app.logger.info(f"[Task {task.task_id}] Starting FULL_REPLACE...")
-
-        # 1. 检查是否为视图
-        if self._is_view(task):
-            msg = "FULL_REPLACE mode is not allowed for VIEWs."
-            current_app.logger.error(f"[Task {task.task_id}] {msg}")
-            self._update_task_status(task.task_id, "error", message=msg)
-            return
+        print(f"[{task.task_id}] Running FULL_REPLACE sync...")
+        self._update_task_status(config_session, task, status='running')
 
         try:
-            host = current_app.config['JDY_API_HOST']
-            # 按需实例化 API 客户端
-            list_api = DataApi(task.jdy_api_key, host, qps=30)
-            batch_delete_api = DataApi(task.jdy_api_key, host, qps=10)
-            batch_create_api = DataApi(task.jdy_api_key, host, qps=10)
-
-            payload_map = self.mapping_service.get_payload_mapping(task.task_id)
+            mapping_service = FieldMappingService()
+            payload_map = mapping_service.get_payload_mapping(config_session, task.task_id)
             if not payload_map:
-                raise Exception("获取字段映射失败，任务终止")
+                raise ValueError("Field mapping is empty.")
 
-            # 1. 获取简道云全量数据 ID
-            current_app.logger.info(f"[Task {task.task_id}] Fetching all data from JDY...")
-            jdy_data = list_api.query_list_data(task.jdy_app_id, task.jdy_entry_id, fields=['_id'])
-            jdy_ids = [d['_id'] for d in jdy_data]
-            current_app.logger.info(f"[Task {task.task_id}] Found {len(jdy_ids)} existing entries in JDY.")
+            # 1. 实例化
+            data_api_query = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=30)
+            data_api_delete = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=10)
+            data_api_create = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=10)
 
-            # 2. 删除简道云全量数据
-            if jdy_ids:
-                # 批量删除
-                chunk_size = 100
-                for i in range(0, len(jdy_ids), chunk_size):
-                    chunk = jdy_ids[i:i + chunk_size]
-                    deleted_count = batch_delete_api.delete_batch_data(task.jdy_app_id, task.jdy_entry_id, chunk)
-                    current_app.logger.info(f"[Task {task.task_id}] Deleted {deleted_count} entries...")
-                    time.sleep(1)
-
-            # 3. 获取源数据库全量数据
-            current_app.logger.info(f"[Task {task.task_id}] Fetching all data from source DB...")
-            engine = self._get_source_db_engine()
-            with engine.connect() as conn:
-                result = conn.execute(text(f"SELECT * FROM {task.source_table}"))
-                source_rows = result.fetchall()
-
-            # 4. 转换并分批插入简道云
-            jdy_data_list = []
-            for row in source_rows:
-                # 使用新的转换方法
-                jdy_data = self._transform_row_to_jdy(row, payload_map)
-                if jdy_data:
-                    jdy_data_list.append(jdy_data)
-
-            current_app.logger.info(f"[Task {task.task_id}] Inserting {len(jdy_data_list)} new entries to JDY...")
-            total_success = 0
-            chunk_size = 100
-            for i in range(0, len(jdy_data_list), chunk_size):
-                chunk = jdy_data_list[i:i + chunk_size]
-                # create_batch_data 返回 {"success_count": N, "fail_list": [...]}
-                response_dict = batch_create_api.create_batch_data(task.jdy_app_id, task.jdy_entry_id, chunk)
-                success_count = response_dict.get('success_count', 0)
-                fail_list = response_dict.get('fail_list', [])
-
-                total_success += success_count
-                if fail_list:
-                    current_app.logger.error(f"[Task {task.task_id}] Batch create failed for {len(fail_list)} items.")
-                    for fail in fail_list:
-                        log_sync_error(task.task_id, f"批量创建失败: {fail.get('error_msg') or fail.get('msg')}",
-                                       fail.get('data'))
-                time.sleep(1)
-
-            self._update_task_status(task.task_id, "running", message="Full replace completed.",
-                                     last_sync_time=datetime.datetime.utcnow())
-            current_app.logger.info(
-                f"[Task {task.task_id}] FULL_REPLACE finished. Total success: {total_success}/{len(jdy_data_list)}")
-            send_wecom_notification(task.wecom_bot_key, f"同步完成: {task.task_name}",
-                                    f"模式: 全量替换\n成功: {total_success}/{len(jdy_data_list)}")
-
-        except Exception as e:
-            current_app.logger.error(f"[Task {task.task_id}] FULL_REPLACE failed: {e}")
-            self._update_task_status(task.task_id, "error", message=str(e))
-            log_sync_error(task.task_id, f"FULL_REPLACE 失败: {e}")
-            send_wecom_notification(task.wecom_bot_key, f"同步失败: {task.task_name}", f"错误: {e}")
-
-    @retry()
-    def run_incremental(self, task: SyncTask):
-        """
-        执行 INCREMENTAL 同步
-        """
-        current_app.logger.info(f"[Task {task.task_id}] Starting INCREMENTAL...")
-
-        if not task.incremental_field or not task.last_sync_time:
-            current_app.logger.error(f"[Task {task.task_id}] 增量字段或上次同步时间未配置，任务终止。")
-            self._update_task_status(task.task_id, "error", message="增量字段或上次同步时间未配置")
-            return
-
-        try:
-            host = current_app.config['JDY_API_HOST']
-            # 实例化 API 客户端
-            single_update_api = DataApi(task.jdy_api_key, host, qps=20)
-            single_create_api = DataApi(task.jdy_api_key, host, qps=20)
-
-            payload_map = self.mapping_service.get_payload_mapping(task.task_id)
-            # alias_map = self.mapping_service.get_alias_mapping(task.task_id)
-
-            # if not payload_map or not alias_map:
-            if not payload_map:
-                raise Exception("获取字段映射失败，任务终止")
-
-            ## task.pk_field_name (e.g., 'dept_name')
-            ## alias_map 是 {'dept_name': 'dept_name'}
-            # if task.pk_field_name not in alias_map:
-            #    raise Exception(f"主键 '{task.pk_field_name}' (widget_alias) 未在字段映射中，无法执行增量同步。")
-
-            # jdy_pk_alias = alias_map[task.pk_field_name]
-            jdy_pk_alias = task.pk_field_name
-            id_field_in_source = '_id'
-
-            start_time = task.last_sync_time
-            current_sync_time = datetime.datetime.utcnow()
-
-            # 1. 查询源数据库中更新的数据
-            engine = self._get_source_db_engine()
-            with engine.connect() as conn:
-                query = text(
-                    f"SELECT * FROM {task.source_table} "
-                    f"WHERE {task.incremental_field} >= :start_time"
+            # 2. 删除简道云所有数据
+            print(f"[{task.task_id}] Deleting all data from Jdy...")
+            data_id = None
+            while True:
+                response = data_api_query.query_list_data(
+                    task.jdy_app_id, task.jdy_entry_id,
+                    limit=500, data_id=data_id, fields=["_id"]
                 )
-                result = conn.execute(query, {"start_time": start_time})
-                updated_rows = result.fetchall()
+                jdy_data = response.get('data', [])
+                if not jdy_data:
+                    break
 
-            current_app.logger.info(f"[Task {task.task_id}] Found {len(updated_rows)} updated rows since {start_time}.")
-            if not updated_rows:
-                self._update_task_status(task.task_id, "running", last_sync_time=current_sync_time)
-                current_app.logger.info(f"[Task {task.task_id}] No updates found. Task finished.")
-                return
+                data_ids = [d['_id'] for d in jdy_data]
+                data_api_delete.delete_batch_data(task.jdy_app_id, task.jdy_entry_id, data_ids)
+                data_id = jdy_data[-1]['_id']
 
-            # 2. 逐条处理 (Upsert 逻辑)
-            create_count = 0
-            update_count = 0
-            fail_count = 0
+            print(f"[{task.task_id}] Jdy data deleted. Fetching from source DB...")
 
-            for row in updated_rows:
+            # 3. 获取源数据
+            rows = source_session.execute(text(f"SELECT * FROM `{task.source_table}`")).mappings().all()
+
+            # 4. 批量创建数据
+            batch_data = []
+            for row in rows:
                 row_dict = dict(row)
-                # 使用 payload_map (column -> widget_name) 转换
-                jdy_data = self._transform_row_to_jdy(row, payload_map)
-                pk_value = row_dict[task.pk_field_name]
-                existing_jdy_id = row_dict.get(id_field_in_source)
+                data_payload = self._transform_row_to_jdy(row_dict, payload_map)
+                if data_payload:
+                    batch_data.append(data_payload)
 
-                try:
-                    SOURCE_jdy_id = existing_jdy_id
-                    # 如果源表中没有 _id (例如，是视图，或回写失败)
-                    if not SOURCE_jdy_id:
-                        # (视图) 或 (非视图但回写失败) -> 尝试通过 PK 查找
-                        SOURCE_jdy_id = self._find_jdy_id_by_pk(task, jdy_pk_alias, pk_value)
+                if len(batch_data) >= 500:
+                    response = data_api_create.create_batch_data(task.jdy_app_id, task.jdy_entry_id, batch_data)
+                    # # 逻辑有问题，批量写的返回内容是：
+                    # # {
+                    # #     "status": "success",
+                    # #     "success_count": 3,
+                    # #     "success_ids": [
+                    # #         "200001181fe09728936510eb",
+                    # #         "200001181fe09728936510ec",
+                    # #         "200001181fe09728936510ed"
+                    # #     ]
+                    # # }
+                    # # 全覆盖同步模式，不需要回写 _id
+                    # # 回写 _id
+                    # for created_data in response.get('data', []):
+                    #     pk_value = created_data.get(payload_map.get(task.pk_field_name, ''))
+                    #     self._writeback_id_to_source(source_session, task, created_data['_id'], pk_value)
+                    # batch_data = []
 
-                    if SOURCE_jdy_id:
-                        # 更新
-                        single_update_api.update_single_data(task.jdy_app_id, task.jdy_entry_id, SOURCE_jdy_id,
-                                                             jdy_data)
-                        update_count += 1
-                        # 如果源表中没有，尝试回写 (对视图会无效)
-                        if not existing_jdy_id:
-                            self._writeback_id_to_source(task, pk_value, SOURCE_jdy_id)
-                    else:
-                        # 创建
-                        created_data = single_create_api.create_single_data(task.jdy_app_id, task.jdy_entry_id,
-                                                                            jdy_data)
-                        new_jdy_id = created_data.get('data', {}).get('_id')  # 返回 _id 在 data 嵌套中
-                        if new_jdy_id:
-                            create_count += 1
-                            # 尝试回写 (对视图会无效)
-                            self._writeback_id_to_source(task, pk_value, new_jdy_id)
-                        else:
-                            raise Exception(f"创建数据失败，未返回 _id: {created_data}")
+            if batch_data:
+                response = data_api_create.create_batch_data(task.jdy_app_id, task.jdy_entry_id, batch_data)
+                # for created_data in response.get('data', []):
+                #     pk_value = created_data.get(payload_map.get(task.pk_field_name, ''))
+                #     self._writeback_id_to_source(source_session, task, created_data['_id'], pk_value)
 
-                except Exception as e:
-                    fail_count += 1
-                    current_app.logger.error(f"[Task {task.task_id}] Failed to process row (PK: {pk_value}): {e}")
-                    log_sync_error(task.task_id, f"增量同步失败 (PK: {pk_value}): {e}", row_dict)
-
-            # 3. 更新任务状态
-            self._update_task_status(task.task_id, "running", last_sync_time=current_sync_time)
-            msg = f"增量同步完成。\n创建: {create_count}, 更新: {update_count}, 失败: {fail_count}"
-            current_app.logger.info(f"[Task {task.task_id}] {msg}")
-            send_wecom_notification(task.wecom_bot_key, f"同步完成: {task.task_name}", msg)
+            print(f"[{task.task_id}] FULL_REPLACE sync completed. Synced {len(rows)} rows.")
+            self._update_task_status(config_session, task, status='idle', last_sync_time=datetime.now(TZ_UTC_8))
 
         except Exception as e:
-            current_app.logger.error(f"[Task {task.task_id}] INCREMENTAL failed: {e}")
-            self._update_task_status(task.task_id, "error", message=str(e))
-            log_sync_error(task.task_id, f"INCREMENTAL 失败: {e}")
-            send_wecom_notification(task.wecom_bot_key, f"同步失败: {task.task_name}", f"错误: {e}")
+            config_session.rollback()  # 确保状态回滚
+            log_sync_error(task_config=task, error=e, extra_info=f"[{task.task_id}] FULL_REPLACE failed.")
+            self._update_task_status(config_session, task, status='error')
 
     @retry()
-    def run_binlog_listener(self, task: SyncTask, app):
+    def run_incremental(self, config_session: Session, source_session: Session, task: SyncTask):
         """
-        执行 BINLOG 监听
+        执行增量同步 (Upsert)
         """
-        current_app.logger.info(f"[Task {task.task_id}] Starting BINLOG listener thread...")
+        print(f"[{task.task_id}] Running INCREMENTAL sync...")
+        self._update_task_status(config_session, task, status='running')
 
-        # 1. 检查是否为视图
-        with app.app_context():
-            if self._is_view(task):
-                msg = "BINLOG mode is not allowed for VIEWs."
-                current_app.logger.error(f"[Task {task.task_id}] {msg}")
-                self._update_task_status(task.task_id, "error", message=msg)
+        try:
+            if not task.incremental_field:
+                raise ValueError("Incremental field (e.g., last_modified) is not configured.")
+
+            mapping_service = FieldMappingService()
+            payload_map = mapping_service.get_payload_mapping(config_session, task.task_id)
+            alias_map = mapping_service.get_alias_mapping(config_session, task.task_id)
+            if not payload_map or not alias_map:
+                raise ValueError("Field mapping is empty.")
+
+            # 1. 实例化
+            data_api_query = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=30)
+            data_api_create = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=20)  # Single create
+            data_api_update = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=20)  # Single update
+
+            # 2. 确定时间戳
+            last_sync = task.last_sync_time or datetime.datetime(1970, 1, 1, tzinfo=TZ_UTC_8)
+            current_sync_time = datetime.datetime.now(TZ_UTC_8)
+
+            # 3. 获取源数据
+            query = text(
+                f"SELECT * FROM `{task.source_table}` "
+                f"WHERE `{task.incremental_field}` >= :last_sync"
+            )
+            rows = source_session.execute(query, {"last_sync": last_sync}).mappings().all()
+
+            if not rows:
+                print(f"[{task.task_id}] No new data found since {last_sync}.")
+                self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
                 return
 
-        mysql_settings = app.config['BINLOG_MYSQL_SETTINGS']
-        start_file = task.last_binlog_file
-        start_pos = task.last_binlog_pos
+            # 4. 遍历并 Upsert
+            count_new, count_updated = 0, 0
+            for row in rows:
+                row_dict = dict(row)
+                pk_value = row_dict.get(task.pk_field_name)
+                if not pk_value:
+                    log_sync_error(task_config=task, extra_info=f"[{task.task_id}] Row missing PK value. Skipping.",
+                                   payload=row_dict)
+                    continue
+
+                data_payload = self._transform_row_to_jdy(row_dict, payload_map)
+                jdy_id = row_dict.get('_id') or self._find_jdy_id_by_pk(config_session, task, pk_value, data_api_query,
+                                                                        alias_map)
+
+                if jdy_id:
+                    # 更新
+                    data_api_update.update_single_data(task.jdy_app_id, task.jdy_entry_id, jdy_id, data_payload)
+                    count_updated += 1
+                else:
+                    # 新增
+                    response = data_api_create.create_single_data(task.jdy_app_id, task.jdy_entry_id, data_payload)
+                    new_jdy_id = response.get('data', {}).get('_id')
+                    if new_jdy_id:
+                        count_new += 1
+                        self._writeback_id_to_source(source_session, task, new_jdy_id, pk_value)
+
+            print(f"[{task.task_id}] INCREMENTAL sync completed. New: {count_new}, Updated: {count_updated}.")
+            self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
+
+        except Exception as e:
+            config_session.rollback()
+            log_sync_error(task_config=task, error=e, extra_info=f"[{task.task_id}] INCREMENTAL failed.")
+            self._update_task_status(config_session, task, status='error')
+
+    def run_binlog_listener(self, task: SyncTask):
+        """
+        运行一个长连接的 Binlog 监听器
+        """
+        if self._is_view(task):
+            log_sync_error(task_config=task,
+                           extra_info=f"[{task.task_id}] BINLOG mode is not allowed for VIEWS. Stopping listener.")
+            return
+
+        thread_name = f"BinlogListener-{task.task_id}"
+        current_thread().name = thread_name
+        print(f"[{thread_name}] Starting...")
+
+        # 1. 实例化
+        # 注意: 实例化一次, 在循环中使用
+        data_api_query = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=30)
+        data_api_create = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=20)
+        data_api_update = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=20)
+        data_api_delete = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=20)
 
         stream = None
         try:
+            # 2. 在线程启动时创建一次性的 ConfigSession 来更新状态
+            with ConfigSession() as session:
+                self._update_task_status(session, task, status='running')
+                # 重新加载 task 对象以获取最新状态
+                session.refresh(task)
+
+            # 3. 独立创建会话和映射 (在循环外)
+            # Binlog 线程需要自己的会话
+            with ConfigSession() as config_session:
+                mapping_service = FieldMappingService()
+                payload_map = mapping_service.get_payload_mapping(config_session, task.task_id)
+                alias_map = mapping_service.get_alias_mapping(config_session, task.task_id)
+
+            if not payload_map or not alias_map:
+                raise ValueError(f"[{thread_name}] Field mapping is empty. Stopping.")
+
             stream = BinLogStreamReader(
-                connection_settings=mysql_settings,
-                server_id=100 + task.task_id,  # 确保 server_id 唯一
+                connection_settings=Config.BINLOG_MYSQL_SETTINGS,
+                server_id=100 + task.task_id,  # 唯一的 server_id
                 only_events=[WriteRowsEvent, UpdateRowsEvent, DeleteRowsEvent],
-                only_schemas=[app.config['SOURCE_DB_NAME']],
                 only_tables=[task.source_table],
-                log_file=start_file,
-                log_pos=start_pos,
+                only_schemas=[Config.SOURCE_DB_NAME],
+                log_file=task.last_binlog_file,
+                log_pos=task.last_binlog_pos,
                 resume_stream=True,
-                blocking=True
+                blocking=True,
+                skip_to_timestamp=task.last_sync_time.timestamp() if task.last_sync_time else None
             )
 
-            host = app.config['JDY_API_HOST']
-            # 实例化 API 客户端 (QPS 20)
-            single_create_api = DataApi(task.jdy_api_key, host, qps=20)
-            single_update_api = DataApi(task.jdy_api_key, host, qps=20)
-            single_delete_api = DataApi(task.jdy_api_key, host, qps=20)
+            print(f"[{thread_name}] Listening for binlog events...")
 
-            # 在 app 上下文中获取字段映射
-            payload_map = {}
-            alias_map = {}
-            jdy_pk_alias = None
-            with app.app_context():
-                payload_map = self.mapping_service.get_payload_mapping(task.task_id)
-                # alias_map = self.mapping_service.get_alias_mapping(task.task_id)
-                if not payload_map or not alias_map:
-                    raise Exception("获取字段映射失败，Binlog 任务终止")
+            for binlog_event in stream:
+                log_file = stream.log_file
+                log_pos = stream.log_pos
 
-                # jdy_pk_alias = alias_map.get(task.pk_field_name)
-                jdy_pk_alias = task.pk_field_name
-                if not jdy_pk_alias:
-                    raise Exception(f"主键 '{task.pk_field_name}' (widget_alias) 未在字段映射中，无法执行 Binlog 同步。")
+                # 4. 在循环内部为 *每个事件* 创建短暂的会话
+                try:
+                    with ConfigSession() as config_session, SourceSession() as source_session:
 
-            id_field_in_source = '_id'
+                        # 重新加载 task 以检查 is_active
+                        current_task_state = config_session.query(SyncTask).get(task.task_id)
+                        if not current_task_state or not current_task_state.is_active:
+                            print(f"[{thread_name}] Task disabled. Stopping listener.")
+                            break  # 退出 for 循环
 
-            current_app.logger.info(f"[Task {task.task_id}] Binlog stream started at {start_file}:{start_pos}")
-
-            for binlogevent in stream:
-                # 核心：在循环内部的 *每次* 操作都使用 app_context
-                with app.app_context():
-                    try:
-                        current_file = stream.log_file
-                        current_pos = stream.log_pos
-
-                        for row in binlogevent.rows:
-                            if isinstance(binlogevent, WriteRowsEvent):
-                                # 插入
-                                values = row['values']
-                                # 使用 payload_map (column -> widget_name) 转换
-                                jdy_data = self._transform_row_to_jdy(values, payload_map)
-                                pk_value = values.get(task.pk_field_name)
-
-                                created_data = single_create_api.create_single_data(task.jdy_app_id, task.jdy_entry_id,
-                                                                                    jdy_data)
-                                new_jdy_id = created_data.get('data', {}).get('_id')
+                        for row in binlog_event.rows:
+                            if isinstance(binlog_event, WriteRowsEvent):
+                                data_payload = self._transform_row_to_jdy(row['values'], payload_map)
+                                response = data_api_create.create_single_data(task.jdy_app_id, task.jdy_entry_id,
+                                                                              data_payload)
+                                new_jdy_id = response.get('data', {}).get('_id')
                                 if new_jdy_id:
-                                    # 尝试回写
-                                    self._writeback_id_to_source(task, pk_value, new_jdy_id)
-                                current_app.logger.debug(f"[Task {task.task_id}] BINLOG Create: {pk_value}")
+                                    pk_value = row['values'].get(task.pk_field_name)
+                                    self._writeback_id_to_source(source_session, task, new_jdy_id, pk_value)
+                                print(f"[{thread_name}] Created data.")
 
-                            elif isinstance(binlogevent, UpdateRowsEvent):
-                                # 更新
-                                after_values = row['after_values']
-                                # 使用 payload_map (column -> widget_name) 转换
-                                jdy_data = self._transform_row_to_jdy(after_values, payload_map)
-                                pk_value = after_values.get(task.pk_field_name)
-                                jdy_id = after_values.get(id_field_in_source)
-
-                                if not jdy_id:
-                                    jdy_id = self._find_jdy_id_by_pk(task, jdy_pk_alias, pk_value)
+                            elif isinstance(binlog_event, UpdateRowsEvent):
+                                pk_value = row['after_values'].get(task.pk_field_name)
+                                jdy_id = row['after_values'].get('_id') or self._find_jdy_id_by_pk(config_session, task,
+                                                                                                   pk_value,
+                                                                                                   data_api_query,
+                                                                                                   alias_map)
 
                                 if jdy_id:
-                                    single_update_api.update_single_data(task.jdy_app_id, task.jdy_entry_id, jdy_id,
-                                                                         jdy_data)
-                                    current_app.logger.debug(f"[Task {task.task_id}] BINLOG Update: {pk_value}")
+                                    data_payload = self._transform_row_to_jdy(row['after_values'], payload_map)
+                                    data_api_update.update_single_data(task.jdy_app_id, task.jdy_entry_id, jdy_id,
+                                                                       data_payload)
+                                    print(f"[{thread_name}] Updated data.")
                                 else:
-                                    created_data = single_create_api.create_single_data(task.jdy_app_id,
-                                                                                        task.jdy_entry_id, jdy_data)
-                                    new_jdy_id = created_data.get('data', {}).get('_id')
-                                    if new_jdy_id:
-                                        self._writeback_id_to_source(task, pk_value, new_jdy_id)
-                                    current_app.logger.warning(
-                                        f"[Task {task.task_id}] BINLOG Update-to-Create: {pk_value}")
+                                    log_sync_error(task_config=task,
+                                                   extra_info=f"[{thread_name}] Update event skipped: Jdy ID not found for PK {pk_value}.",
+                                                   payload=row['after_values'])
 
-                            elif isinstance(binlogevent, DeleteRowsEvent):
-                                # 删除
-                                values = row['values']
-                                pk_value = values.get(task.pk_field_name)
-                                jdy_id = values.get(id_field_in_source)
-
-                                if not jdy_id:
-                                    jdy_id = self._find_jdy_id_by_pk(task, jdy_pk_alias, pk_value)
+                            elif isinstance(binlog_event, DeleteRowsEvent):
+                                pk_value = row['values'].get(task.pk_field_name)
+                                jdy_id = row['values'].get('_id') or self._find_jdy_id_by_pk(config_session, task,
+                                                                                             pk_value, data_api_query,
+                                                                                             alias_map)
 
                                 if jdy_id:
-                                    single_delete_api.delete_single_data(task.jdy_app_id, task.jdy_entry_id, jdy_id)
-                                    current_app.logger.debug(f"[Task {task.task_id}] BINLOG Delete: {pk_value}")
+                                    data_api_delete.delete_single_data(task.jdy_app_id, task.jdy_entry_id, jdy_id)
+                                    print(f"[{thread_name}] Deleted data.")
                                 else:
-                                    current_app.logger.warning(
-                                        f"[Task {task.task_id}] BINLOG Delete skipped (JDY ID not found): {pk_value}")
+                                    log_sync_error(task_config=task,
+                                                   extra_info=f"[{thread_name}] Delete event skipped: Jdy ID not found for PK {pk_value}.",
+                                                   payload=row['values'])
 
-                        # 处理完一个 event，更新位置
-                        self._update_task_status(task.task_id, "running", binlog_file=current_file,
-                                                 binlog_pos=current_pos)
+                        # 5. 事件处理完成后, 在会话内更新位置
+                        self._update_task_status(config_session, task, 'running', log_file, log_pos)
 
-                    # 3. 捕获 requests 异常
-                    except (RequestException, HTTPError) as e:
-                        current_app.logger.error(f"[Task {task.task_id}] BINLOG API Error: {e}")
-                        log_sync_error(task.task_id, f"BINLOG API 错误: {e}")
-                        time.sleep(5)
-                    except Exception as e:
-                        current_app.logger.error(f"[Task {task.task_id}] BINLOG processing error: {e}")
-                        log_sync_error(task.task_id, f"BINLOG 处理失败: {e}")
-                        # 其他错误可能较严重，也继续尝试
-                        time.sleep(5)
+                except (requests.exceptions.RequestException, requests.exceptions.HTTPError) as api_err:
+                    # API 错误 (例如 404, 500, QPS), 记录日志但不停止监听器
+                    log_sync_error(task_config=task, error=api_err,
+                                   extra_info=f"[{thread_name}] API error during binlog event processing (will retry).")
+                    time.sleep(10)  # 发生 API 错误时暂停
+                except OperationalError as db_err:
+                    # 数据库连接错误 (例如 'gone away'), 记录日志但不停止监听器
+                    log_sync_error(task_config=task, error=db_err,
+                                   extra_info=f"[{thread_name}] DB OperationalError (will retry).")
+                    time.sleep(10)  # 发生 DB 错误时暂停
+                except Exception as event_err:
+                    # 其他事件处理错误 (例如数据转换失败), 记录日志并跳过此事件
+                    log_sync_error(task_config=task, error=event_err,
+                                   extra_info=f"[{thread_name}] Error processing binlog event (skipping).")
+                    # 仍然在会话内更新位置, 以跳过错误事件
+                    with ConfigSession() as error_session:
+                        self._update_task_status(error_session, task, 'running', log_file, log_pos)
+
 
         except Exception as e:
-            # stream 启动失败或严重错误
-            with app.app_context():
-                current_app.logger.error(f"[Task {task.task_id}] BINLOG listener thread CRASHED: {e}")
-                self._update_task_status(task.task_id, "error", message=f"Binlog 监听器崩溃: {e}")
-                log_sync_error(task.task_id, f"Binlog 监听器崩溃: {e}")
-                send_wecom_notification(task.wecom_bot_key, f"同步失败: {task.task_name}", f"Binlog 监听器崩溃: {e}")
+            # 这是启动监听器时的严重错误 (例如连接失败)
+            log_sync_error(task_config=task, error=e, extra_info=f"[{thread_name}] CRITICAL error. Listener stopped.")
+            with ConfigSession() as session:
+                self._update_task_status(session, task, status='error')
 
         finally:
             if stream:
                 stream.close()
-            with app.app_context():
-                current_app.logger.info(f"[Task {task.task_id}] BINLOG listener thread stopped.")
-
-    @retry()
-    def update_id_from_webhook(self, task_id, business_pk_value, jdy_id):
-        """
-        Webhook 调用的回写服务
-        """
-        current_app.logger.info(f"[Webhook Task {task_id}] Received _id={jdy_id} for PK={business_pk_value}")
-        task = self.get_task(task_id)
-        if not task:
-            current_app.logger.error(f"[Webhook Task {task_id}] Task not found.")
-            return
-
-        if task.pk_field_name is None:
-            current_app.logger.error(f"[Webhook Task {task_id}] Task PK field not configured.")
-            return
-
-        try:
-            # 此方法内部有视图检查
-            self._writeback_id_to_source(task, business_pk_value, jdy_id)
-        except Exception as e:
-            current_app.logger.error(f"[Webhook Task {task_id}] Failed to writeback from webhook: {e}")
-            log_sync_error(task_id, f"Webhook 回写失败: {e}")
+            print(f"[{thread_name}] Listener shut down.")
+            with ConfigSession() as session:
+                task_status = session.query(SyncTask).get(task.task_id)
+                if task_status and task_status.status == 'running':
+                    self._update_task_status(session, task, status='idle')  # 正常关闭
