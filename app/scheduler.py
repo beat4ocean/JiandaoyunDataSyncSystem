@@ -273,7 +273,7 @@ def start_scheduler(app: Flask):
             scheduler.add_job(
                 check_and_start_new_binlog_listeners,
                 trigger='interval',
-                seconds=30,  # 每 30 秒检查一次是否有新/停止的 binlog 任务
+                minutes=Config.CHECK_INTERVAL_MINUTES,  # 每 CHECK_INTERVAL_MINUTES 检查一次是否有新/停止的 binlog 任务
                 id='binlog_manager',
                 replace_existing=True,
                 max_instances=1,  # (关键) 防止并发
