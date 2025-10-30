@@ -282,7 +282,7 @@ class SyncService:
             status: str,
             binlog_file: str = None,
             binlog_pos: int = None,
-            last_sync_time: datetime = None
+            last_sync_time: datetime.datetime = None
     ):
         """
         安全地更新任务状态 (使用传入的会话)
@@ -357,28 +357,29 @@ class SyncService:
 
                 if len(batch_data) >= 500:
                     response = data_api_create.create_batch_data(task.jdy_app_id, task.jdy_entry_id, batch_data)
-                    # # 逻辑有问题，批量写的返回内容是：
-                    # # {
-                    # #     "status": "success",
-                    # #     "success_count": 3,
-                    # #     "success_ids": [
-                    # #         "200001181fe09728936510eb",
-                    # #         "200001181fe09728936510ec",
-                    # #         "200001181fe09728936510ed"
-                    # #     ]
-                    # # }
-                    # # 全覆盖同步模式，不需要回写 _id
                     # # 回写 _id
                     # for created_data in response.get('data', []):
                     #     pk_value = created_data.get(payload_map.get(task.pk_field_name, ''))
                     #     self._writeback_id_to_source(source_session, task, created_data['_id'], pk_value)
                     # batch_data = []
+                    # 逻辑有问题，批量写的返回内容是：
+                    # {
+                    #     "status": "success",
+                    #     "success_count": 3,
+                    #     "success_ids": [
+                    #         "200001181fe09728936510eb",
+                    #         "200001181fe09728936510ec",
+                    #         "200001181fe09728936510ed"
+                    #     ]
+                    # }
+                    # 全覆盖同步模式，不需要回写 _id，需要记录成功条数是否与源数据一致
 
             if batch_data:
                 response = data_api_create.create_batch_data(task.jdy_app_id, task.jdy_entry_id, batch_data)
                 # for created_data in response.get('data', []):
                 #     pk_value = created_data.get(payload_map.get(task.pk_field_name, ''))
                 #     self._writeback_id_to_source(source_session, task, created_data['_id'], pk_value)
+                # 全覆盖同步模式，不需要回写 _id，需要记录成功条数是否与源数据一致
 
             print(f"[{task.task_id}] FULL_REPLACE sync completed. Synced {len(rows)} rows.")
             self._update_task_status(config_session, task, status='idle', last_sync_time=datetime.now(TZ_UTC_8))
@@ -443,6 +444,7 @@ class SyncService:
 
                 if jdy_id:
                     # 更新
+                    # 更新逻辑有问题，需要比较源数据和 JDY 数据，只更新有差异的字段
                     data_api_update.update_single_data(task.jdy_app_id, task.jdy_entry_id, jdy_id, data_payload)
                     count_updated += 1
                 else:
@@ -461,6 +463,7 @@ class SyncService:
             log_sync_error(task_config=task, error=e, extra_info=f"[{task.task_id}] INCREMENTAL failed.")
             self._update_task_status(config_session, task, status='error')
 
+    @retry()
     def run_binlog_listener(self, task: SyncTask):
         """
         运行一个长连接的 Binlog 监听器
