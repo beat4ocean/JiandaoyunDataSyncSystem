@@ -1,8 +1,9 @@
-from flask import Blueprint, request, jsonify, current_app, abort
+from flask import Blueprint, request, jsonify, current_app, g
 from sqlalchemy import text
 
+from app.models import SyncTask
 from app.services import SyncService
-from app.models import db, SyncTask
+from app.utils import log_sync_error
 
 # 1. 创建蓝图
 main_bp = Blueprint('main', __name__)
@@ -16,11 +17,11 @@ def handle_jdy_webhook(task_id):
     URL 示例: https://your-domain.com/webhook/jdy/1
     """
 
-    # (可选) 验证签名
-    # signature = request.headers.get('X-Jdy-Signature')
-    # if not validate_signature(signature, request.data):
-    #     abort(401)
+    # g.config_session 和 g.source_session 由 app/__init__.py 中的 @before_request 创建
+    config_session = g.config_session
+    source_session = g.source_session
 
+    task = None
     try:
         payload = request.json
         if not payload:
@@ -32,36 +33,51 @@ def handle_jdy_webhook(task_id):
         if not op or not data:
             return jsonify({"code": 400, "message": "Missing 'op' or 'data'"}), 400
 
-        # 我们只关心创建和更新操作，因为它们会返回 _id
+        # 从 g.config_session 获取任务
+        task = config_session.get(SyncTask, task_id)
+        if not task:
+            current_app.logger.error(f"[Webhook {task_id}] Task not found.")
+            return jsonify({"code": 404, "message": "Task not found"}), 404
+
+        # 我们只关心创建和更新操作
         if op in ('data_create', 'data_update'):
             jdy_id = data.get('_id')
             if not jdy_id:
-                current_app.logger.warning(f"[Webhook {task_id}] Received {op} but no _id found in payload.")
+                current_app.logger.warning(f"[Webhook {task_id}] Received {op} but no _id found.")
                 return jsonify({"code": 202, "message": "No _id, accepted."})
 
             # 实例化服务
             sync_service = SyncService()
 
-            # 获取任务配置
-            task = sync_service.get_task(task_id)
-            if not task:
-                current_app.logger.error(f"[Webhook {task_id}] Task not found.")
-                return jsonify({"code": 404, "message": "Task not found"}), 404
-
             pk_field_name = task.pk_field_name
 
-            # 从 data 中提取业务主键的值
-            # 我们假设简道云字段名 (jdy_field) 与源表字段名 (source_field/pk_field_name) 相同
-            # 这是一个强假设，在 FieldMappingService 中已体现
-            business_pk_value = data.get(pk_field_name)
+            # 字段映射服务现在需要会话
+            alias_map = sync_service.mapping_service.get_alias_mapping(config_session, task.task_id)
+            if pk_field_name not in alias_map:
+                msg = f"PK field '{pk_field_name}' not in alias_map for webhook."
+                current_app.logger.error(f"[Webhook {task_id}] {msg}")
+                # 使用新的 log_sync_error
+                log_sync_error(task_config=task, error=Exception(msg), payload=payload)
+                return jsonify({"code": 500, "message": msg}), 500
+
+            pk_field_alias = alias_map[pk_field_name]
+            # V5: 'value' 可能在也可能不在，取决于字段类型
+            business_pk_value_data = data.get(pk_field_alias)
+
+            # 检查 business_pk_value_data 是否为字典 (例如 { "value": "PK_001" } )
+            if isinstance(business_pk_value_data, dict):
+                business_pk_value = business_pk_value_data.get('value')
+            else:
+                # 否则直接取值 (例如简单的文本字段 "PK_001")
+                business_pk_value = business_pk_value_data
 
             if not business_pk_value:
                 current_app.logger.warning(
-                    f"[Webhook {task_id}] Received _id={jdy_id} but PK field '{pk_field_name}' not found in payload.")
+                    f"[Webhook {task_id}] Received _id={jdy_id} but PK alias '{pk_field_alias}' not found in payload.")
                 return jsonify({"code": 202, "message": "PK not found, accepted."})
 
-            # 执行回写
-            sync_service.update_id_from_webhook(task_id, business_pk_value, jdy_id)
+            # 执行回写 (服务内部会处理视图检查)
+            sync_service.update_id_from_webhook(task, business_pk_value, jdy_id)
 
             return jsonify({"code": 200, "message": "Webhook processed"})
 
@@ -71,13 +87,9 @@ def handle_jdy_webhook(task_id):
 
     except Exception as e:
         current_app.logger.error(f"[Webhook {task_id}] Error processing webhook: {e}")
-        # 在 app 上下文之外，我们不能调用 log_sync_error
-        # 但 Webhook 路由总是在 app 上下文中的
-        try:
-            from app.utils import log_sync_error
-            log_sync_error(task_id, f"Webhook 处理失败: {e}", request.json)
-        except:
-            pass  # 避免循环错误
+        # 使用新的 log_sync_error
+        # task 可能在 try 块中已成功获取
+        log_sync_error(task_config=task, error=e, payload=request.json)
 
         return jsonify({"code": 500, "message": "Internal Server Error"}), 500
 
@@ -89,9 +101,9 @@ def health_check():
     """
     try:
         # 检查配置数据库
-        db.session.execute(text("SELECT 1"))
-        # 检查源数据库
-        db.session.get_bind('source_db').connect().execute(text("SELECT 1"))
+        g.config_session.execute(text("SELECT 1"))
+        # 检查目标数据库
+        g.source_session.execute(text("SELECT 1"))
         return jsonify({"status": "ok", "databases": "connected"})
     except Exception as e:
         current_app.logger.error(f"Health check failed: {e}")

@@ -2,127 +2,152 @@ import atexit
 import time
 from threading import Thread
 from apscheduler.schedulers.background import BackgroundScheduler
-from flask import current_app
+from flask import Flask
 
-from app.models import db, SyncTask
+from app.models import ConfigSession, SyncTask
 from app.services import SyncService, FieldMappingService
 
 scheduler = BackgroundScheduler(daemon=True)
 running_binlog_tasks = set()  # 跟踪正在运行的 binlog 线程
 
 
-def scheduled_job_runner(app):
+def scheduled_job_runner():
     """
     运行 FULL_REPLACE 和 INCREMENTAL 任务
     """
-    with app.app_context():
-        current_app.logger.info("Scheduler: Running scheduled_job_runner...")
-        tasks = SyncTask.query.filter(
-            SyncTask.sync_mode.in_(['FULL_REPLACE', 'INCREMENTAL']),
-            SyncTask.status == 'running'  # 'running' 表示启用
-        ).all()
+    print("Scheduler: Running scheduled_job_runner...")
 
-        sync_service = SyncService()
+    with ConfigSession() as config_session:
+        try:
+            tasks = config_session.query(SyncTask).filter(
+                SyncTask.sync_mode.in_(['FULL_REPLACE', 'INCREMENTAL']),
+                SyncTask.is_active == True,
+                SyncTask.status != 'running'  # 假设 'running' 是 Binlog 专用
+            ).all()
 
-        for task in tasks:
-            current_app.logger.info(f"Scheduler: Executing task {task.task_id} ({task.sync_mode})")
-            try:
-                if task.sync_mode == 'FULL_REPLACE':
-                    sync_service.run_full_replace(task)
-                elif task.sync_mode == 'INCREMENTAL':
-                    sync_service.run_incremental(task)
-            except Exception as e:
-                current_app.logger.error(f"Scheduler: Error running task {task.task_id}: {e}")
-                # service 内部已经记录了错误
+            if not tasks:
+                print("Scheduler: No FULL_REPLACE/INCREMENTAL tasks scheduled to run.")
+                return
+
+            sync_service = SyncService()
+
+            for task in tasks:
+                print(f"Scheduler: Executing task {task.task_id} ({task.sync_mode})")
+                try:
+                    if task.sync_mode == 'FULL_REPLACE':
+                        sync_service.run_full_replace(config_session, task)
+                    elif task.sync_mode == 'INCREMENTAL':
+                        sync_service.run_incremental(config_session, task)
+                except Exception as e:
+                    print(f"Scheduler: Error running task {task.task_id}: {e}")
+                    # service 内部已使用新的 log_sync_error
+
+        except Exception as session_err:
+            print(f"Scheduler: Failed to query tasks: {session_err}")
 
 
-def check_and_start_new_binlog_listeners(app):
+def check_and_start_new_binlog_listeners():
     """
     检查并启动新的 (或崩溃的) BINLOG 任务
     """
-    with app.app_context():
-        current_app.logger.debug("Scheduler: Running check_and_start_new_binlog_listeners...")
-        tasks = SyncTask.query.filter_by(sync_mode='BINLOG', status='running').all()
+    print("Scheduler: Running check_and_start_new_binlog_listeners...")
 
-        sync_service = SyncService()  # 在上下文中创建
+    with ConfigSession() as config_session:
+        try:
+            tasks = config_session.query(SyncTask).filter_by(
+                sync_mode='BINLOG',
+                is_active=True
+            ).all()
 
-        for task in tasks:
-            if task.task_id not in running_binlog_tasks:
-                current_app.logger.info(f"Scheduler: Found new/stopped BINLOG task {task.task_id}. Starting thread...")
+            # 检查哪些任务应该在运行但不在 running_binlog_tasks
+            for task in tasks:
+                if task.task_id not in running_binlog_tasks:
+                    print(f"Scheduler: Found new/stopped BINLOG task {task.task_id}. Starting thread...")
 
-                # 必须将 app 实例传递给线程
-                thread = Thread(
-                    target=sync_service.run_binlog_listener,
-                    args=(task, app),
-                    daemon=True
-                )
-                thread.start()
-                running_binlog_tasks.add(task.task_id)
+                    sync_service = SyncService()
+                    thread = Thread(
+                        source=sync_service.run_binlog_listener,
+                        args=(task,),
+                        daemon=True
+                    )
+                    thread.start()
+                    running_binlog_tasks.add(task.task_id)
 
-        # (可选) 清理已停止的任务
-        # 实际中需要更复杂的线程监控，这里简化处理
-        # 假设 run_binlog_listener 崩溃时会更新状态为 'error'
-        stopped_tasks = SyncTask.query.filter(
-            SyncTask.sync_mode == 'BINLOG',
-            SyncTask.status != 'running'
-        ).all()
-        for task in stopped_tasks:
-            if task.task_id in running_binlog_tasks:
-                current_app.logger.info(f"Scheduler: Removing disabled/errored task {task.task_id} from running list.")
-                running_binlog_tasks.remove(task.task_id)
+            # 检查哪些任务在 running_binlog_tasks 但已不活跃
+            active_task_ids = {t.task_id for t in tasks}
+            tasks_to_remove = running_binlog_tasks - active_task_ids
+            for task_id in tasks_to_remove:
+                print(f"Scheduler: Removing disabled task {task_id} from running list.")
+                running_binlog_tasks.remove(task_id)
+
+            # 检查崩溃的线程
+            errored_tasks = config_session.query(SyncTask).filter_by(
+                sync_mode='BINLOG',
+                status='error'
+            ).all()
+            for task in errored_tasks:
+                if task.task_id in running_binlog_tasks:
+                    print(f"Scheduler: Removing errored task {task.task_id} from running list.")
+                    running_binlog_tasks.remove(task.task_id)
+
+        except Exception as session_err:
+            print(f"Scheduler: Failed to check binlog tasks: {session_err}")
 
 
-def update_all_field_mappings_job(app):
+def update_all_field_mappings_job():
     """
-    定时更新所有任务的字段映射（例如每天一次）
+    定时更新所有任务的字段映射（缓存刷新）
     """
-    with app.app_context():
-        current_app.logger.info("Scheduler: Running update_all_field_mappings_job...")
-        tasks = SyncTask.query.filter_by(status='running').all()
-        mapping_service = FieldMappingService()
+    print("Scheduler: Running update_all_field_mappings_job...")
 
-        for task in tasks:
-            try:
-                mapping_service.update_form_fields_mapping(task)
-                time.sleep(1)  # 避免 API 限制
-            except Exception as e:
-                current_app.logger.error(f"Scheduler: Failed to update mappings for task {task.task_id}: {e}")
+    with ConfigSession() as config_session:
+        try:
+            tasks = config_session.query(SyncTask).filter_by(is_active=True).all()
+            mapping_service = FieldMappingService()
+
+            for task in tasks:
+                try:
+                    mapping_service.update_form_fields_mapping(config_session, task)
+                    time.sleep(2)  # 适配 V5 QPS (30)
+                except Exception as e:
+                    print(f"Scheduler: Failed to update mappings for task {task.task_id}: {e}")
+                    # service 内部已记录日志
+        except Exception as session_err:
+            print(f"Scheduler: Failed to query tasks for mapping update: {session_err}")
 
 
-def start_scheduler(app):
+def start_scheduler(app: Flask):
     """
     由 run.py 调用以启动调度器
     """
-    current_app.logger.info("Starting APScheduler...")
 
-    # 添加 FULL_REPLACE 和 INCREMENTAL 任务运行器
-    # 假设每 5 分钟运行一次
+    # 从 app.config 读取间隔
+    check_interval = app.config.get('CHECK_INTERVAL_MINUTES', 1)
+    cache_refresh_interval = app.config.get('CACHE_REFRESH_INTERVAL_MINUTES', 5)
+
+    print(f"Starting APScheduler...")
+    print(f"  - Full/Incremental check interval: {check_interval} minutes")
+    print(f"  - Mapping cache refresh interval: {cache_refresh_interval} minutes")
+    print(f"  - Binlog listener check interval: 30 seconds")
+
     scheduler.add_job(
         func=scheduled_job_runner,
         trigger='interval',
-        minutes=5,
-        args=[app],
+        minutes=check_interval,  # 使用配置
         id='scheduled_job_runner'
     )
 
-    # 添加 BINLOG 任务检查器
-    # 每 30 秒检查一次是否有新任务或崩溃的任务
     scheduler.add_job(
         func=check_and_start_new_binlog_listeners,
         trigger='interval',
-        seconds=30,
-        args=[app],
+        seconds=30,  # 保持 Binlog 检查的高频率
         id='check_binlog_listeners'
     )
 
-    # 添加字段映射更新任务
-    # 每天凌晨 3 点运行
     scheduler.add_job(
         func=update_all_field_mappings_job,
-        trigger='cron',
-        hour=3,
-        minute=0,
-        args=[app],
+        trigger='interval',  # 触发器已从 cron 更改为 interval
+        minutes=cache_refresh_interval,  # 使用配置
         id='update_all_mappings'
     )
 

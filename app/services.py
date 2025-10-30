@@ -21,7 +21,7 @@ class FieldMappingService:
     处理字段映射的服务
     """
 
-    @retry(retries=3, delay=5)  # 为字段映射添加服务层重试
+    @retry()
     def _get_mappings(self, task_id):
         """
         从数据库缓存中获取所有字段映射
@@ -55,7 +55,7 @@ class FieldMappingService:
     #     mappings = self._get_mappings(task_id)
     #     return {m.widget_alias: m.widget_alias for m in mappings}
 
-    @retry(retries=3, delay=5)
+    @retry()
     def update_form_fields_mapping(self, task: SyncTask):
         """
         从简道云 API 获取最新字段，并更新到数据库缓存
@@ -196,6 +196,7 @@ class SyncService:
                 jdy_data[widget_name] = {"value": serialized_value}
         return jdy_data
 
+    @retry()
     def _update_task_status(self, task_id, status, message=None, last_sync_time=None, binlog_file=None,
                             binlog_pos=None):
         """
@@ -222,6 +223,7 @@ class SyncService:
             db.session.rollback()
             current_app.logger.error(f"[Task {task_id}] CRITICAL: Failed to update task status: {e}")
 
+    @retry()
     def _find_jdy_id_by_pk(self, task: SyncTask, pk_field_alias, pk_value):
         """
         通过业务主键在简道云中查找对应的 _id
@@ -253,6 +255,7 @@ class SyncService:
             current_app.logger.error(f"Failed to find JDY ID by PK ({pk_field_alias}={pk_value}): {e}")
         return None
 
+    @retry()
     def _writeback_id_to_source(self, task: SyncTask, pk_value, jdy_id):
         """
         将简道云 _id 回写到源数据库
@@ -282,7 +285,7 @@ class SyncService:
             log_sync_error(task.task_id, f"回写 _id 失败 (PK: {pk_value}): {e}")
 
     # --- 三种同步模式的实现 ---
-
+    @retry()
     def run_full_replace(self, task: SyncTask):
         """
         执行 FULL_REPLACE 同步
@@ -369,6 +372,7 @@ class SyncService:
             log_sync_error(task.task_id, f"FULL_REPLACE 失败: {e}")
             send_wecom_notification(task.wecom_bot_key, f"同步失败: {task.task_name}", f"错误: {e}")
 
+    @retry()
     def run_incremental(self, task: SyncTask):
         """
         执行 INCREMENTAL 同步
@@ -434,20 +438,20 @@ class SyncService:
                 existing_jdy_id = row_dict.get(id_field_in_source)
 
                 try:
-                    target_jdy_id = existing_jdy_id
+                    SOURCE_jdy_id = existing_jdy_id
                     # 如果源表中没有 _id (例如，是视图，或回写失败)
-                    if not target_jdy_id:
+                    if not SOURCE_jdy_id:
                         # (视图) 或 (非视图但回写失败) -> 尝试通过 PK 查找
-                        target_jdy_id = self._find_jdy_id_by_pk(task, jdy_pk_alias, pk_value)
+                        SOURCE_jdy_id = self._find_jdy_id_by_pk(task, jdy_pk_alias, pk_value)
 
-                    if target_jdy_id:
+                    if SOURCE_jdy_id:
                         # 更新
-                        single_update_api.update_single_data(task.jdy_app_id, task.jdy_entry_id, target_jdy_id,
+                        single_update_api.update_single_data(task.jdy_app_id, task.jdy_entry_id, SOURCE_jdy_id,
                                                              jdy_data)
                         update_count += 1
                         # 如果源表中没有，尝试回写 (对视图会无效)
                         if not existing_jdy_id:
-                            self._writeback_id_to_source(task, pk_value, target_jdy_id)
+                            self._writeback_id_to_source(task, pk_value, SOURCE_jdy_id)
                     else:
                         # 创建
                         created_data = single_create_api.create_single_data(task.jdy_app_id, task.jdy_entry_id,
@@ -477,6 +481,7 @@ class SyncService:
             log_sync_error(task.task_id, f"INCREMENTAL 失败: {e}")
             send_wecom_notification(task.wecom_bot_key, f"同步失败: {task.task_name}", f"错误: {e}")
 
+    @retry()
     def run_binlog_listener(self, task: SyncTask, app):
         """
         执行 BINLOG 监听
@@ -626,6 +631,7 @@ class SyncService:
             with app.app_context():
                 current_app.logger.info(f"[Task {task.task_id}] BINLOG listener thread stopped.")
 
+    @retry()
     def update_id_from_webhook(self, task_id, business_pk_value, jdy_id):
         """
         Webhook 调用的回写服务

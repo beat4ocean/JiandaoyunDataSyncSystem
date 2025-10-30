@@ -1,14 +1,40 @@
-from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import Column, Integer, String, DateTime, Text, Index, UniqueConstraint
-import datetime
+from datetime import datetime
 
-# 1. 实例化 SQLAlchemy
-db = SQLAlchemy()
+from sqlalchemy import Index, Boolean
+from sqlalchemy import (create_engine, MetaData, Column, Integer, String,
+                        DateTime, Text, UniqueConstraint)
+from sqlalchemy.dialects.mysql import LONGTEXT
+from sqlalchemy.orm import sessionmaker, DeclarativeBase
 
+from app.config import CONFIG_DB_URL, SOURCE_DB_URL, DB_CONNECT_ARGS
+
+# --- 数据库引擎和会话 ---
+
+# 配置数据库 (存储租户、任务配置、日志)
+config_engine = create_engine(CONFIG_DB_URL, pool_recycle=3600, connect_args=DB_CONNECT_ARGS)
+ConfigSession = sessionmaker(bind=config_engine)
+config_metadata = MetaData()
+
+# 源数据库 (存储需要被同步的业务数据)
+source_engine = create_engine(SOURCE_DB_URL, pool_recycle=3600, connect_args=DB_CONNECT_ARGS)
+SourceSession = sessionmaker(bind=source_engine)
+source_metadata = MetaData()
+
+
+# --- 声明式基类 ---
+class ConfigBase(DeclarativeBase):
+    metadata = config_metadata
+
+
+class SourceBase(DeclarativeBase):
+    metadata = source_metadata
+
+
+# --- 配置数据库模型 ---
 
 # 2. 将 Table() 定义重写为 ORM 模型类
 
-class SyncTask(db.Model):
+class SyncTask(ConfigBase):
     """
     同步任务配置表
     """
@@ -27,17 +53,21 @@ class SyncTask(db.Model):
     jdy_app_id = Column(String(100), nullable=False, comment="简道云应用ID")
     jdy_entry_id = Column(String(100), nullable=False, comment="简道云表单ID")
     jdy_api_key = Column(String(255), nullable=False, comment="简道云 API Key")
-    wecom_bot_key = Column(String(255), comment="企业微信 Bot Key (可选)")
 
     # 状态与日志
     status = Column(String(20), default='idle', comment="任务状态 (idle, running, error, disabled)")
     last_sync_time = Column(DateTime, comment="上次同步时间 (用于 INCREMENTAL)")
     last_binlog_file = Column(String(255), comment="上次同步的 binlog 文件 (用于 BINLOG)")
     last_binlog_pos = Column(Integer, comment="上次同步的 binlog 位置 (用于 BINLOG)")
-    last_error_message = Column(Text, comment="最新错误信息")
 
-    created_at = Column(DateTime, default=datetime.datetime.utcnow, comment="创建时间")
-    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow,
+    is_active = Column(Boolean, default=True)
+    is_full_sync_first = Column(Boolean, default=True)
+
+    send_error_log_to_wecom = Column(Boolean, default=False, nullable=False, comment="是否发送错误日志到企微")
+    wecom_robot_webhook_url = Column(String(500), nullable=True, comment="企业微信机器人 Webhook URL")
+
+    created_at = Column(DateTime, default=datetime.utcnow, comment="创建时间")
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow,
                         comment="更新时间")
 
     __table_args__ = (
@@ -45,7 +75,7 @@ class SyncTask(db.Model):
     )
 
 
-class FormFieldMapping(db.Model):
+class FormFieldMapping(ConfigBase):
     """
     表单字段映射缓存表
     """
@@ -72,17 +102,20 @@ class FormFieldMapping(db.Model):
     )
 
 
-class SyncErrLog(db.Model):
+class SyncErrLog(ConfigBase):
     """
-    同步错误日志表
+    存储同步过程中的*错误*日志
     """
     __tablename__ = 'sync_err_log'
-
     id = Column(Integer, primary_key=True, autoincrement=True)
-    task_id = Column(Integer, nullable=False, comment="关联的任务ID")
-    error_time = Column(DateTime, default=datetime.datetime.utcnow, comment="错误发生时间")
-    error_message = Column(Text, nullable=False, comment="错误详情")
-    data_content = Column(Text, comment="导致错误的原始数据 (JSON)")
+    app_id = Column(String(50), nullable=True)
+    entry_id = Column(String(50), nullable=True)
+    table_name = Column(String(255), nullable=True)
+    department_name = Column(String(100), nullable=True, comment="关联的租户")
+    error_message = Column(Text, nullable=False)
+    traceback = Column(Text, nullable=True)
+    payload = Column(LONGTEXT, nullable=True)
+    timestamp = Column(DateTime, default=datetime.now)
 
     __table_args__ = (
         Index('idx_task_time', 'task_id', 'error_time'),

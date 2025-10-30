@@ -1,113 +1,238 @@
-import json
-import requests
-import time
-from decimal import Decimal
 import datetime
-import functools
-from flask import current_app
-from app.models import db, SyncErrLog
+import json
+import time
+import time as time_module
+import traceback
+from datetime import datetime, time as time_obj, date, timezone, timedelta
+from decimal import Decimal
+from functools import wraps
+
+import requests
+from sqlalchemy.exc import OperationalError
+
+TZ_UTC_8 = timezone(timedelta(hours=8))
 
 
 def json_serializer(obj):
     """
-    自定义 JSON 序列化器
-    处理 Decimal 和 datetime 对象
+    自定义JSON序列化器，处理日期、时间和Decimal对象。
+    核心逻辑：将所有 date 和 datetime 对象从东八区（UTC+8）转换为标准的UTC时间，
+    并格式化为带 'Z' 的ISO 8601字符串，以满足简道云API的要求。
+    同时，将 Decimal 对象转换为 float 类型。
     """
+    # 如果是 datetime 对象
+    if isinstance(obj, datetime):
+        # 假设从数据库获取的 naive datetime 是东八区时间，为其附加时区信息
+        aware_obj = obj.replace(tzinfo=TZ_UTC_8)
+        # 转换为 UTC 时间
+        utc_obj = aware_obj.astimezone(timezone.utc)
+        # 格式化为带 'Z' 的 ISO 8601 格式 (例如: '2025-09-13T08:09:07Z')
+        return utc_obj.isoformat().replace('+00:00', 'Z')
+
+    # 如果是 date 对象
+    if isinstance(obj, date):
+        # 将 date 视为东八区当天的午夜
+        aware_obj = datetime.combine(obj, time_obj.min).replace(tzinfo=TZ_UTC_8)
+        # 转换为 UTC 时间
+        utc_obj = aware_obj.astimezone(timezone.utc)
+        # 格式化为带 'Z' 的 ISO 8601 格式 (例如: '2025-09-12T16:00:00Z')
+        return utc_obj.isoformat().replace('+00:00', 'Z')
+
+    # 如果是 time 对象，通常不带时区，保持原样
+    if isinstance(obj, time_obj):
+        return obj.strftime('%H:%M:%S')
+
+    # 新增：如果是 Decimal 对象，将其转换为 float
     if isinstance(obj, Decimal):
-        # 将 Decimal 转换为 float 或 string
-        # 注意：转为 float 可能有精度损失，但对于简道云通常是可接受的
-        # 如果需要高精度，应考虑转为字符串
         return float(obj)
-    if isinstance(obj, (datetime.datetime, datetime.date)):
-        # 严格转换为 UTC 时间，并使用 'Z' 结尾的 ISO 格式
-        # 简道云要求此格式
-        if isinstance(obj, datetime.datetime):
-            # 假设本地时间是 UTC（如果不是，需要更复杂的时区转换）
-            # 或者，如果它是 naive datetime，我们假设它是本地时间并转为 UTC
-            # 一个更健壮的方法是确保所有 datetime 都是 aware 的
-            # 简单处理：
-            dt_utc = obj.astimezone(datetime.timezone.utc)
-        else:  # date 对象
-            dt_utc = datetime.datetime(obj.year, obj.month, obj.day, tzinfo=datetime.timezone.utc)
 
-        return dt_utc.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
-
-    raise TypeError(f"Type {type(obj)} not serializable")
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
-def retry(retries=3, delay=5, backoff=2):
+# --- 失败重试装饰器 ---
+def retry(max_retries=3, delay=5, backoff=2, exceptions=(OperationalError, requests.exceptions.RequestException)):
     """
-    重试装饰器
+    一个装饰器，用于在函数引发特定异常时进行重试。
+    :param max_retries: 最大重试次数。
+    :param delay: 初始延迟时间（秒）。
+    :param backoff: 每次重试后延迟时间的倍增因子。
+    :param exceptions: 一个包含需要重试的异常类型的元组。
     """
 
     def decorator(func):
-        @functools.wraps(func)
+        @wraps(func)
         def wrapper(*args, **kwargs):
-            _retries, _delay = retries, delay
-            while _retries > 0:
+            # 延迟导入以避免循环依赖
+            from app.models import SyncTask
+
+            _max_retries, _delay = max_retries, delay
+            while _max_retries >= 0:  # 改为 >= 0 以允许最后一次尝试
                 try:
                     return func(*args, **kwargs)
-                except Exception as e:
-                    _retries -= 1
-                    if _retries == 0:
-                        current_app.logger.error(f"Function {func.__name__} failed after {retries} retries: {e}")
-                        raise
-                    msg = f"Function {func.__name__} failed with {e}, retrying in {_delay}s... ({_retries} retries left)"
-                    current_app.logger.warning(msg)
-                    time.sleep(_delay)
-                    _delay *= backoff
+                except exceptions as e:
+                    _max_retries -= 1
+                    if _max_retries < 0:  # 所有重试次数已用完
+                        print(f"函数 {func.__name__} 在 {max_retries} 次重试后失败。最后错误: {e}")
+                        # 尝试从 kwargs 或 args 中获取 task_config
+                        task_config = kwargs.get('task_config')
+                        if not task_config and args:
+                            for arg in args:
+                                if isinstance(arg, SyncTask):
+                                    task_config = arg
+                                    break
+                        # 调用修复后的 log_sync_error
+                        log_sync_error(
+                            task_config=task_config,
+                            error=e,
+                            extra_info=f"Function {func.__name__} failed after {max_retries} retries."
+                        )
+                        raise e  # 将原始异常抛出
+
+                    current_delay = delay * (
+                            backoff ** (max_retries - _max_retries))  # Correct exponential backoff calculation
+                    print(
+                        f"函数 {func.__name__} 因 {type(e).__name__} 失败。将在 {current_delay:.2f} 秒后重试 ({_max_retries} 次剩余)...")
+                    time_module.sleep(current_delay)
+            # This part should not be reached if max_retries >= 0
+            # Add a fallback raise in case logic above fails
+            raise RuntimeError(f"函数 {func.__name__} 意外退出重试循环。")
 
         return wrapper
 
     return decorator
 
 
-def send_wecom_notification(title, message):
+# --- 错误处理与日志 ---
+
+def send_wecom_notification(wecom_url: str, content: str):
     """
-    发送企业微信通知
+    发送格式化的错误消息到企业微信机器人。
+    :param wecom_url: 动态获取的企微机器人 URL
+    :param content: 格式化后的 Markdown 内容
     """
-    bot_key = current_app.config.get('WECOM_BOT_KEY')
-    if not bot_key:
-        current_app.logger.warning("WECOM_BOT_KEY not set, skipping notification.")
+    if not wecom_url:
         return
-
-    url = f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={bot_key}"
-    headers = {"Content-Type": "application/json"}
-    payload = {
-        "msgtype": "markdown",
-        "markdown": {
-            "content": f"### {title}\n> {message}"
-        }
-    }
     try:
-        response = requests.post(url, data=json.dumps(payload), headers=headers, timeout=5)
-        if response.json().get("errcode") != 0:
-            current_app.logger.error(f"Failed to send WeCom notification: {response.text}")
+        data = {"msgtype": "markdown", "markdown": {"content": content}}
+        headers = {'Content-Type': 'application/json'}
+        response = requests.post(wecom_url, headers=headers, data=json.dumps(data), timeout=10)
+        response.raise_for_status()
+        print("已成功发送错误日志到企业微信。")
     except Exception as e:
-        current_app.logger.error(f"Error sending WeCom notification: {e}")
+        print(f"发送企业微信通知失败: {e}")
 
 
-def log_sync_error(task_id, error_message, data=None):
+# --- 使用字符串类型提示 'SyncTask' ---
+def log_sync_error(task_config: 'SyncTask' = None, app_id: str = None, entry_id: str = None,
+                   table_name: str = None, department_name: str = None,
+                   error: Exception = None, payload: dict = None, extra_info: str = None):
     """
-    重构后的错误日志记录函数
-    使用 db.session 和 SyncErrLog ORM 模型
-    **必须在 Flask App 上下文中调用**
+    将同步错误记录到数据库，并触发企微通知。
+    此函数现在可以在 Flask 应用上下文之外安全运行。
+    :param task_config: (可选) 动态的任务配置对象
     """
+    # --- 延迟导入 ---
+    from app.models import ConfigSession, SyncErrLog
+    # 同样延迟导入 flask.g 用于上下文检查
+    from flask import g
+
+    session = None
+    session_created = False
     try:
-        data_content = json.dumps(data, default=str) if data else None
+        # --- 安全地尝试获取会话 ---
+        try:
+            # 只有在有应用上下文且 g 对象包含 config_session 时才使用它
+            if g and hasattr(g, 'config_session') and g.config_session.is_active:
+                session = g.config_session
+                print("log_sync_error: 使用来自 g 对象的现有会话。")
+            else:
+                raise RuntimeError("No active session in g")  # 跳到 except 块
+        except (RuntimeError, AttributeError):
+            # 如果发生 RuntimeError (Working outside...) 或 g 不存在/没有 config_session
+            print("log_sync_error: 不在请求上下文中或 g 中无会话，创建新会话。")
+            session = ConfigSession()
+            session_created = True
 
-        err_log = SyncErrLog(
-            task_id=task_id,
-            error_message=str(error_message),
-            data_content=data_content
+        # 1. 准备日志数据
+        if task_config:
+            app_id = app_id or task_config.app_id
+            entry_id = entry_id or task_config.entry_id
+            table_name = table_name or task_config.table_name
+            department_name = department_name or task_config.department_name
+
+        error_message = f"{extra_info}\n{str(error)}" if extra_info and error else (
+            str(error) if error else extra_info or "未知错误")
+        traceback_str = traceback.format_exc() if error and isinstance(error, Exception) else None  # 仅在有异常时记录堆栈
+
+        def json_serializer_default(obj):
+            if isinstance(obj, (datetime, date, time)):
+                return obj.isoformat()
+            try:
+                # 添加对 bytes 的处理
+                if isinstance(obj, bytes):
+                    return obj.decode('utf-8', errors='replace')  # 尝试解码，失败则替换
+                return str(obj)  # 更通用的回退
+            except Exception:
+                return f"<Not Serializable: {type(obj).__name__}>"
+
+        payload_str = json.dumps(payload, ensure_ascii=False, indent=2,
+                                 default=json_serializer_default) if payload else "{}"
+
+        # 2. 插入数据库
+        new_log = SyncErrLog(
+            app_id=app_id,
+            entry_id=entry_id,
+            table_name=table_name,
+            department_name=department_name,
+            error_message=error_message,
+            traceback=traceback_str,  # 使用格式化后的字符串
+            payload=payload_str,
+            timestamp=datetime.now(TZ_UTC_8)
         )
+        session.add(new_log)
+        session.commit()
+        print(f"错误日志已成功写入数据库: {table_name or app_id or 'N/A'}")
 
-        db.session.add(err_log)
-        db.session.commit()
+        # 3. 动态发送企微通知 (确保 task_config 存在且配置了发送)
+        # 检查 task_config 是否存在并且是 SyncTask 实例 (以防传入 None)
+        from app.models import SyncTask  # 再次导入用于类型检查
+        if isinstance(task_config,
+                      SyncTask) and task_config.send_error_log_to_wecom and task_config.wecom_robot_webhook_url:
+            payload_snippet = (payload_str[:1000] + '...') if len(payload_str) > 1000 else payload_str
+            content = f"""
+            **简道云数据同步错误告警**
+            > **租户**: {department_name or 'N/A'}
+            > **时间**: {datetime.now(TZ_UTC_8).strftime('%Y-%m-%d %H:%M:%S')}
+            > **表单/表名**: {table_name or 'N/A'}
+            > **App ID**: {app_id or 'N/A'}
+            > **Entry ID**: {entry_id or 'N/A'}
 
-        current_app.logger.error(f"[Task {task_id}] Error logged: {error_message} | Data: {data_content}")
+            **错误信息**:
+            <font color="warning">{error_message}</font>
 
-    except Exception as e:
-        db.session.rollback()
-        current_app.logger.error(
-            f"CRITICAL: Failed to write to SyncErrLog! Original error: {error_message}. Logging error: {e}")
+            **数据片段**:
+            `{payload_snippet}`
+
+            请及时处理！
+            """
+            send_wecom_notification(task_config.wecom_robot_webhook_url, content)
+
+    except Exception as db_err:
+        print(f"!!! 写入错误日志到数据库时发生严重错误: {db_err}")
+        print(f"原始错误信息: {error_message}")
+        # 如果连日志会话都有问题，尝试回滚并打印更详细的错误
+        if session:
+            try:
+                session.rollback()
+            except Exception as rb_err:
+                print(f"!!! 回滚日志会话失败: {rb_err}")
+        # 打印数据库错误的堆栈信息
+        print("--- Database Error Traceback ---")
+        traceback.print_exc()
+        print("-------------------------------")
+
+    finally:
+        # 仅当此函数自己创建了会话时才关闭它
+        if session and session_created:
+            print("log_sync_error: 关闭独立创建的会话。")
+            session.close()

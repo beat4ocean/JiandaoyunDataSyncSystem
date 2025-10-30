@@ -1,8 +1,13 @@
 import os
 from dotenv import load_dotenv
 
-# 加载 .env 文件 (如果存在)
-load_dotenv()
+# 加载 .env 文件
+basedir = os.path.abspath(os.path.dirname(__file__))
+env_path = os.path.join(basedir, '..', '.env')
+if os.path.exists(env_path):
+    load_dotenv(env_path)
+else:
+    print(f"Warning: .env file not found at {env_path}")
 
 
 class Config:
@@ -11,59 +16,51 @@ class Config:
     从环境变量中加载配置
     """
 
-    # 密钥，用于 session 等
-    SECRET_KEY = os.getenv('SECRET_KEY', 'a_very_secret_key_fallback')
-
-    # --- 配置数据库 (Config DB - 用于存储任务、日志) ---
-    CONFIG_DB_TYPE = os.getenv('CONFIG_DB_TYPE', 'mysql+pymysql')
+    # --- 数据库 URL (由 models.py 直接使用) ---
     CONFIG_DB_USER = os.getenv('CONFIG_DB_USER', 'root')
     CONFIG_DB_PASS = os.getenv('CONFIG_DB_PASS', 'password')
     CONFIG_DB_HOST = os.getenv('CONFIG_DB_HOST', 'localhost')
     CONFIG_DB_PORT = os.getenv('CONFIG_DB_PORT', '3306')
     CONFIG_DB_NAME = os.getenv('CONFIG_DB_NAME', 'jdy_sync_config_db')
+    CONFIG_DB_TYPE = os.getenv('CONFIG_DB_TYPE', 'mysql+pymysql')
 
-    # SQLAlchemy 主数据库 URI
-    SQLALCHEMY_DATABASE_URI = (
-        f"{CONFIG_DB_TYPE}://"
-        f"{CONFIG_DB_USER}:{CONFIG_DB_PASS}@"
-        f"{CONFIG_DB_HOST}:{CONFIG_DB_PORT}/{CONFIG_DB_NAME}"
+    CONFIG_DB_URL = (
+        f"{CONFIG_DB_TYPE}://{CONFIG_DB_USER}:{CONFIG_DB_PASS}@"
+        f"{CONFIG_DB_HOST}:{CONFIG_DB_PORT}/{CONFIG_DB_NAME}?charset=utf8mb4"
     )
 
-    # --- 源数据库 (Source DB - 业务数据来源) ---
-    SOURCE_DB_TYPE = os.getenv('SOURCE_DB_TYPE', 'mysql+pymysql')
+    # --- 目标数据库 (Source DB) ---
     SOURCE_DB_USER = os.getenv('SOURCE_DB_USER', 'root')
     SOURCE_DB_PASS = os.getenv('SOURCE_DB_PASS', 'password')
     SOURCE_DB_HOST = os.getenv('SOURCE_DB_HOST', 'localhost')
     SOURCE_DB_PORT = os.getenv('SOURCE_DB_PORT', '3306')
     SOURCE_DB_NAME = os.getenv('SOURCE_DB_NAME', 'source_business_db')
+    SOURCE_DB_TYPE = os.getenv('SOURCE_DB_TYPE', 'mysql+pymysql')
 
-    # 使用 SQLALCHEMY_BINDS 来配置多个数据库
-    # 'source_db' 是我们给源数据库绑定的键
-    SQLALCHEMY_BINDS = {
-        'source_db': (
-            f"{SOURCE_DB_TYPE}://"
-            f"{SOURCE_DB_USER}:{SOURCE_DB_PASS}@"
-            f"{CONFIG_DB_HOST}:{SOURCE_DB_PORT}/{SOURCE_DB_NAME}"
-        )
+    SOURCE_DB_URL = (
+        f"{SOURCE_DB_TYPE}://{SOURCE_DB_USER}:{SOURCE_DB_PASS}@"
+        f"{SOURCE_DB_HOST}:{SOURCE_DB_PORT}/{SOURCE_DB_NAME}?charset=utf8mb4"
+    )
+
+    # 数据库连接参数
+    DB_CONNECT_ARGS = {
+        'connect_timeout': 10
     }
 
     # --- 简道云 API 配置 ---
-    JDY_APP_ID = os.getenv('JDY_APP_ID', '')
-    JDY_ENTRY_ID = os.getenv('JDY_ENTRY_ID', '')
-    JDY_API_KEY = os.getenv('JDY_API_KEY', '')
+    JDY_API_HOST = os.getenv('JDY_API_HOST', 'https://api.jiandaoyun.com')
 
-    # --- 企微通知 (可选) ---
-    WECOM_BOT_KEY = os.getenv('WECOM_BOT_KEY', '')
-
-    # --- Binlog 配置 ---
-    # Binlog 连接设置 (与源数据库相同)
+    # --- Binlog 配置 (与目标/源数据库相同) ---
     BINLOG_MYSQL_SETTINGS = {
         'host': SOURCE_DB_HOST,
         'port': int(SOURCE_DB_PORT),
         'user': SOURCE_DB_USER,
-        'passwd': SOURCE_DB_PASS
+        'passwd': SOURCE_DB_PASS,
+        'charset': 'utf8'
     }
 
-    # --- SQLAlchemy 配置 ---
-    SQLALCHEMY_TRACK_MODIFICATIONS = False
-    SQLALCHEMY_ECHO = False  # 设为 True 可查看所有 SQL 查询
+
+# 导出实例 (方便 models.py 等文件导入)
+CONFIG_DB_URL = Config.CONFIG_DB_URL
+SOURCE_DB_URL = Config.SOURCE_DB_URL
+DB_CONNECT_ARGS = Config.DB_CONNECT_ARGS
