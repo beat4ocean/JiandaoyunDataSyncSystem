@@ -7,6 +7,7 @@ db = SQLAlchemy()
 
 
 # 2. 将 Table() 定义重写为 ORM 模型类
+
 class SyncTask(db.Model):
     """
     同步任务配置表
@@ -25,6 +26,8 @@ class SyncTask(db.Model):
     # 简道云配置
     jdy_app_id = Column(String(100), nullable=False, comment="简道云应用ID")
     jdy_entry_id = Column(String(100), nullable=False, comment="简道云表单ID")
+    jdy_api_key = Column(String(255), nullable=False, comment="简道云 API Key")
+    wecom_bot_key = Column(String(255), comment="企业微信 Bot Key (可选)")
 
     # 状态与日志
     status = Column(String(20), default='idle', comment="任务状态 (idle, running, error, disabled)")
@@ -49,13 +52,23 @@ class FormFieldMapping(db.Model):
     __tablename__ = 'form_fields_mapping'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    task_id = Column(Integer, nullable=False, comment="关联的任务ID")
-    source_field = Column(String(255), nullable=False, comment="源表字段名")
-    jdy_field = Column(String(255), nullable=False, comment="简道云字段名 (API 字段名)")
-    jdy_field_type = Column(String(100), comment="简道云字段类型 (如 text, number, datetime)")
+    task_id = Column(Integer, nullable=False, comment="关联的任务ID (替换了 app_id 和 entry_id)")
+
+    form_name = Column(String(255), nullable=True, comment="简道云表单名")
+    widget_name = Column(String(255), nullable=False, comment="字段ID (e.g., _widget_xxx, 用于 API 提交)")
+    widget_alias = Column(String(255), nullable=False, comment="字段后端别名 (name, 用于 API 查询/匹配)")
+    label = Column(String(255), nullable=False, comment="字段前端别名 (label)")
+    widget_type = Column(String(255), nullable=False, comment="字段类型 (type)")
+    column_name = Column(String(255), nullable=False, comment="源数据库中的列名 (用于匹配)")
+
+    last_updated = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
     __table_args__ = (
-        UniqueConstraint('task_id', 'source_field', name='uq_task_source'),
+        # 确保每个任务中，MySQL 的列名是唯一的
+        UniqueConstraint('task_id', 'column_name', name='uq_task_column'),
+        # 确保 widget_name 和 widget_alias 也是唯一的
+        UniqueConstraint('task_id', 'widget_name', name='uq_task_widget_name'),
+        UniqueConstraint('task_id', 'widget_alias', name='uq_task_widget_alias'),
         Index('idx_task_id', 'task_id'),
     )
 
