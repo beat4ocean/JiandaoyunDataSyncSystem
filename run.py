@@ -5,11 +5,10 @@ from sqlalchemy import text, inspect
 from sqlalchemy.exc import OperationalError, NoSuchTableError
 from sqlalchemy.orm import scoped_session
 
-# 导入 app, models, scheduler
 from app import create_app
+from app.config import Config
 from app.models import (
-    ConfigSession, config_engine, source_engine,
-    config_metadata, SyncTask
+    ConfigSession, config_engine, source_engine, config_metadata, SyncTask
 )
 from app.scheduler import scheduler, start_scheduler
 
@@ -19,6 +18,7 @@ def initialize_databases(app: Flask):
     初始化数据库：
     1. 创建配置库中的所有表 (如 sync_tasks)。
     2. 检查源库中的业务表，并按需添加 `_id` 字段。
+    (增加对 'BASE TABLE' 的检查, 修复视图问题)
     """
     with app.app_context():
         print("Initializing databases...")
@@ -38,6 +38,7 @@ def initialize_databases(app: Flask):
         config_session = scoped_session(ConfigSession)
         try:
             tasks = config_session.query(SyncTask).all()
+            db_name = Config.SOURCE_DB_NAME  # (已修复: 使用 SOURCE_DB_NAME)
 
             with source_engine.connect() as source_conn:
                 for task in tasks:
@@ -52,6 +53,25 @@ def initialize_databases(app: Flask):
                                 f"Warning: Table '{task.source_table}' for task {task.task_id} not found in source DB.")
                             continue
 
+                        # 检查是否为物理表 (BASE TABLE), 而不是视图 (VIEW)
+                        table_type_query = text(
+                            "SELECT table_type FROM information_schema.tables "
+                            "WHERE table_schema = :db_name AND table_name = :table_name"
+                        )
+                        result = source_conn.execute(table_type_query,
+                                                     {"db_name": db_name, "table_name": task.source_table}).fetchone()
+
+                        table_type = result[0] if result else None
+
+                        if table_type == 'VIEW':
+                            print(f"Skipping `_id` check for VIEW: '{task.source_table}'")
+                            continue
+
+                        if table_type != 'BASE TABLE':
+                            print(
+                                f"Warning: Skipping `_id` check for unknown table type '{table_type}': '{task.source_table}'")
+                            continue
+
                         # 检查 `_id` 列是否存在
                         columns = [col['name'] for col in inspector.get_columns(task.source_table)]
                         if '_id' not in columns:
@@ -62,10 +82,10 @@ def initialize_databases(app: Flask):
                                     f"ALTER TABLE `{task.source_table}` ADD COLUMN `_id` VARCHAR(50) NULL DEFAULT NULL"))
                                 source_conn.execute(
                                     text(f"ALTER TABLE `{task.source_table}` ADD INDEX `idx__id` (`_id`)"))
-                                source_conn.commit()
+                                source_conn.commit()  # 提交 DDL
                                 print(f"Successfully added `_id` column and index to '{task.source_table}'.")
                             except Exception as alter_e:
-                                source_conn.rollback()
+                                source_conn.rollback()  # 回滚 DDL
                                 print(f"ERROR: Failed to add `_id` column to '{task.source_table}': {alter_e}")
 
                     except NoSuchTableError:
