@@ -1,17 +1,18 @@
-import time
 import datetime
-from decimal import Decimal
+import time
+
 from flask import current_app
-from sqlalchemy import text, update
 from pymysqlreplication import BinLogStreamReader
 from pymysqlreplication.row_event import (
     WriteRowsEvent,
     UpdateRowsEvent,
     DeleteRowsEvent,
 )
+from requests import RequestException, HTTPError
+from sqlalchemy import text
 
-from app.models import db, SyncTask, FormFieldMapping
 from app.jdy_api import DataApi, FormApi
+from app.models import db, SyncTask, FormFieldMapping
 from app.utils import log_sync_error, send_wecom_notification, json_serializer, retry
 
 
@@ -41,19 +42,20 @@ class FieldMappingService:
     def get_payload_mapping(self, task_id):
         """
         获取用于构建 API 负载 (data) 的映射
-        :return: dict {column_name: widget_name} (e.g., {'dept_name': '_widget_123'})
+        :return: dict {widget_alias: widget_name} (e.g., {'dept_name': '_widget_123'})
         """
         mappings = self._get_mappings(task_id)
-        return {m.column_name: m.widget_name for m in mappings}
+        return {m.widget_alias: m.widget_name for m in mappings}
 
-    def get_alias_mapping(self, task_id):
-        """
-        获取用于 API 查询 (filter) 的映射
-        :return: dict {column_name: widget_alias} (e.g., {'dept_name': 'name_field_1'})
-        """
-        mappings = self._get_mappings(task_id)
-        return {m.column_name: m.widget_alias for m in mappings}
+    # def get_alias_mapping(self, task_id):
+    #     """
+    #     获取用于 API 查询 (filter) 和 PK 验证的映射
+    #     :return: dict {widget_alias: widget_alias} (e.g., {'dept_name': 'dept_name'})
+    #     """
+    #     mappings = self._get_mappings(task_id)
+    #     return {m.widget_alias: m.widget_alias for m in mappings}
 
+    @retry(retries=3, delay=5)
     def update_form_fields_mapping(self, task: SyncTask):
         """
         从简道云 API 获取最新字段，并更新到数据库缓存
@@ -101,7 +103,6 @@ class FieldMappingService:
                 #         f"[Task {task.task_id}] Field '{widget_alias}' missing 'widget_name' key, falling back to 'name'.")
 
                 # 核心逻辑：MySQL 列名 (column_name) 与 简道云后端别名 (widget_alias/name) 一致
-                column_name = widget_alias
 
                 new_map = FormFieldMapping(
                     task_id=task.task_id,
@@ -109,8 +110,7 @@ class FieldMappingService:
                     widget_name=widget_name,
                     widget_alias=widget_alias,
                     label=widget_label,
-                    widget_type=widget_type,
-                    column_name=column_name
+                    widget_type=widget_type
                 )
                 new_mappings.append(new_map)
 
@@ -143,7 +143,7 @@ class SyncService:
 
     def _is_view(self, task: SyncTask):
         """
-        检查源表是否为视图 (实现 main.py 逻辑)
+        检查源表是否为视图
         """
         if task.task_id in self.view_cache:
             return self.view_cache[task.task_id]
@@ -183,6 +183,7 @@ class SyncService:
             # 根据列名 (column_name) 查找对应的 API 提交键 (widget_name)
             widget_name = payload_map.get(mysql_col)
 
+            # 如果找到了映射关系
             if widget_name and value is not None:
                 try:
                     # 主动序列化 Decimal, datetime 等
@@ -191,6 +192,7 @@ class SyncService:
                     # 对于其他类型，转为字符串
                     serialized_value = str(value)
 
+                # jdy_data['_widget_123'] = {"value": ...}
                 jdy_data[widget_name] = {"value": serialized_value}
         return jdy_data
 
@@ -319,7 +321,7 @@ class SyncService:
                     chunk = jdy_ids[i:i + chunk_size]
                     deleted_count = batch_delete_api.delete_batch_data(task.jdy_app_id, task.jdy_entry_id, chunk)
                     current_app.logger.info(f"[Task {task.task_id}] Deleted {deleted_count} entries...")
-                    time.sleep(1)  # V5 QPS 10
+                    time.sleep(1)
 
             # 3. 获取源数据库全量数据
             current_app.logger.info(f"[Task {task.task_id}] Fetching all data from source DB...")
@@ -352,7 +354,7 @@ class SyncService:
                     for fail in fail_list:
                         log_sync_error(task.task_id, f"批量创建失败: {fail.get('error_msg') or fail.get('msg')}",
                                        fail.get('data'))
-                time.sleep(1)  # V5 QPS 10
+                time.sleep(1)
 
             self._update_task_status(task.task_id, "running", message="Full replace completed.",
                                      last_sync_time=datetime.datetime.utcnow())
@@ -385,16 +387,19 @@ class SyncService:
             single_create_api = DataApi(task.jdy_api_key, host, qps=20)
 
             payload_map = self.mapping_service.get_payload_mapping(task.task_id)
-            alias_map = self.mapping_service.get_alias_mapping(task.task_id)
+            # alias_map = self.mapping_service.get_alias_mapping(task.task_id)
 
-            if not payload_map or not alias_map:
+            # if not payload_map or not alias_map:
+            if not payload_map:
                 raise Exception("获取字段映射失败，任务终止")
 
-            if task.pk_field_name not in alias_map:
-                raise Exception(f"主键 '{task.pk_field_name}' 未在字段映射中 (无法找到 widget_alias)，无法执行增量同步。")
+            ## task.pk_field_name (e.g., 'dept_name')
+            ## alias_map 是 {'dept_name': 'dept_name'}
+            # if task.pk_field_name not in alias_map:
+            #    raise Exception(f"主键 '{task.pk_field_name}' (widget_alias) 未在字段映射中，无法执行增量同步。")
 
-            # 获取用于 API 查询的 PK 字段别名
-            jdy_pk_alias = alias_map[task.pk_field_name]
+            # jdy_pk_alias = alias_map[task.pk_field_name]
+            jdy_pk_alias = task.pk_field_name
             id_field_in_source = '_id'
 
             start_time = task.last_sync_time
@@ -440,17 +445,17 @@ class SyncService:
                         single_update_api.update_single_data(task.jdy_app_id, task.jdy_entry_id, target_jdy_id,
                                                              jdy_data)
                         update_count += 1
-                        # 如果源表中没有，尝试回写 (对视图会失败)
+                        # 如果源表中没有，尝试回写 (对视图会无效)
                         if not existing_jdy_id:
                             self._writeback_id_to_source(task, pk_value, target_jdy_id)
                     else:
                         # 创建
                         created_data = single_create_api.create_single_data(task.jdy_app_id, task.jdy_entry_id,
                                                                             jdy_data)
-                        new_jdy_id = created_data.get('data', {}).get('_id')  # V5 返回 _id 在 data 嵌套中
+                        new_jdy_id = created_data.get('data', {}).get('_id')  # 返回 _id 在 data 嵌套中
                         if new_jdy_id:
                             create_count += 1
-                            # 尝试回写 (对视图会失败)
+                            # 尝试回写 (对视图会无效)
                             self._writeback_id_to_source(task, pk_value, new_jdy_id)
                         else:
                             raise Exception(f"创建数据失败，未返回 _id: {created_data}")
@@ -516,14 +521,14 @@ class SyncService:
             jdy_pk_alias = None
             with app.app_context():
                 payload_map = self.mapping_service.get_payload_mapping(task.task_id)
-                alias_map = self.mapping_service.get_alias_mapping(task.task_id)
+                # alias_map = self.mapping_service.get_alias_mapping(task.task_id)
                 if not payload_map or not alias_map:
                     raise Exception("获取字段映射失败，Binlog 任务终止")
 
-                jdy_pk_alias = alias_map.get(task.pk_field_name)
+                # jdy_pk_alias = alias_map.get(task.pk_field_name)
+                jdy_pk_alias = task.pk_field_name
                 if not jdy_pk_alias:
-                    raise Exception(
-                        f"主键 '{task.pk_field_name}' 未在字段映射中 (无法找到 widget_alias)，无法执行 Binlog 同步。")
+                    raise Exception(f"主键 '{task.pk_field_name}' (widget_alias) 未在字段映射中，无法执行 Binlog 同步。")
 
             id_field_in_source = '_id'
 
@@ -546,7 +551,7 @@ class SyncService:
 
                                 created_data = single_create_api.create_single_data(task.jdy_app_id, task.jdy_entry_id,
                                                                                     jdy_data)
-                                new_jdy_id = created_data.get('data', {}).get('_id')  # V5
+                                new_jdy_id = created_data.get('data', {}).get('_id')
                                 if new_jdy_id:
                                     # 尝试回写
                                     self._writeback_id_to_source(task, pk_value, new_jdy_id)
@@ -570,7 +575,7 @@ class SyncService:
                                 else:
                                     created_data = single_create_api.create_single_data(task.jdy_app_id,
                                                                                         task.jdy_entry_id, jdy_data)
-                                    new_jdy_id = created_data.get('data', {}).get('_id')  # V5
+                                    new_jdy_id = created_data.get('data', {}).get('_id')
                                     if new_jdy_id:
                                         self._writeback_id_to_source(task, pk_value, new_jdy_id)
                                     current_app.logger.warning(
@@ -596,6 +601,11 @@ class SyncService:
                         self._update_task_status(task.task_id, "running", binlog_file=current_file,
                                                  binlog_pos=current_pos)
 
+                    # 3. 捕获 requests 异常
+                    except (RequestException, HTTPError) as e:
+                        current_app.logger.error(f"[Task {task.task_id}] BINLOG API Error: {e}")
+                        log_sync_error(task.task_id, f"BINLOG API 错误: {e}")
+                        time.sleep(5)
                     except Exception as e:
                         current_app.logger.error(f"[Task {task.task_id}] BINLOG processing error: {e}")
                         log_sync_error(task.task_id, f"BINLOG 处理失败: {e}")
@@ -618,7 +628,7 @@ class SyncService:
 
     def update_id_from_webhook(self, task_id, business_pk_value, jdy_id):
         """
-        (新功能) Webhook 调用的回写服务
+        Webhook 调用的回写服务
         """
         current_app.logger.info(f"[Webhook Task {task_id}] Received _id={jdy_id} for PK={business_pk_value}")
         task = self.get_task(task_id)
