@@ -13,7 +13,7 @@ from pymysqlreplication.row_event import (
     DeleteRowsEvent,
 )
 from sqlalchemy import text, inspect
-from sqlalchemy.exc import OperationalError, IntegrityError
+from sqlalchemy.exc import OperationalError, IntegrityError, NoSuchTableError
 from sqlalchemy.orm import Session
 
 from app.config import Config
@@ -138,6 +138,66 @@ class SyncService:
 
     def __init__(self):
         self._view_status_cache = {}  # 实例级别的缓存
+
+    def _prepare_source_table(self, task: SyncTask):
+        """
+        检查源表, 如果是物理表 (BASE TABLE) 则添加 _id 字段和索引。
+        此方法在任务首次运行前调用。
+        """
+        print(f"[{task.task_id}] Preparing source table: {task.source_table}...")
+
+        db_name = Config.SOURCE_DB_NAME
+
+        try:
+            with source_engine.connect() as source_conn:
+                # 1. 检查表是否存在
+                inspector = inspect(source_engine)
+                if not inspector.has_table(task.source_table):
+                    log_sync_error(task_config=task,
+                                   extra_info=f"Source table '{task.source_table}' not found in source DB.")
+                    return
+
+                # 2. 检查是否为物理表 (BASE TABLE)
+                table_type_query = text(
+                    "SELECT table_type FROM information_schema.tables "
+                    "WHERE table_schema = :db_name AND table_name = :table_name"
+                )
+                result = source_conn.execute(table_type_query,
+                                             {"db_name": db_name, "table_name": task.source_table}).fetchone()
+
+                table_type = result[0] if result else None
+
+                if table_type == 'VIEW':
+                    print(f"[{task.task_id}] Source is a VIEW. Skipping _id column check.")
+                    return  # 视图, 正常退出
+
+                if table_type != 'BASE TABLE':
+                    log_sync_error(task_config=task,
+                                   extra_info=f"Source is not a BASE TABLE (type: {table_type}). Skipping _id column check.")
+                    return
+
+                # 3. 检查 `_id` 列是否存在
+                columns = [col['name'] for col in inspector.get_columns(task.source_table)]
+                if '_id' not in columns:
+                    print(f"[{task.task_id}] Adding `_id` column to table '{task.source_table}'...")
+                    try:
+                        source_conn.execute(
+                            text(f"ALTER TABLE `{task.source_table}` ADD COLUMN `_id` VARCHAR(50) NULL DEFAULT NULL"))
+                        source_conn.execute(text(f"ALTER TABLE `{task.source_table}` ADD INDEX `idx__id` (`_id`)"))
+                        source_conn.commit()
+                        print(f"[{task.task_id}] Successfully added `_id` column and index.")
+                    except Exception as alter_e:
+                        source_conn.rollback()
+                        log_sync_error(task_config=task, error=alter_e,
+                                       extra_info=f"Failed to add `_id` column to '{task.source_table}'.")
+                else:
+                    print(f"[{task.task_id}] `_id` column already exists.")
+
+        except NoSuchTableError:
+            log_sync_error(task_config=task,
+                           extra_info=f"Source table '{task.source_table}' not found (NoSuchTableError).")
+        except Exception as e:
+            log_sync_error(task_config=task, error=e, extra_info=f"Error preparing source table '{task.source_table}'.")
 
     def _is_view(self, task: SyncTask) -> bool:
         """

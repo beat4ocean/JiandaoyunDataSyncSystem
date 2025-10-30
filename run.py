@@ -16,9 +16,7 @@ from app.scheduler import scheduler, start_scheduler
 def initialize_databases(app: Flask):
     """
     初始化数据库：
-    1. 创建配置库中的所有表 (如 sync_tasks)。
-    2. 检查源库中的业务表，并按需添加 `_id` 字段。
-    (增加对 'BASE TABLE' 的检查, 修复视图问题)
+    创建配置库中的所有表 (如 sync_tasks)。
     """
     with app.app_context():
         print("Initializing databases...")
@@ -31,77 +29,78 @@ def initialize_databases(app: Flask):
             print(f"CRITICAL: Failed to create config database tables: {e}")
             raise
 
-        # 2. 检查并修改源库表
-        print("Checking source tables for `_id` column...")
-
-        # 需要一个 config session 来读取任务
-        config_session = scoped_session(ConfigSession)
-        try:
-            tasks = config_session.query(SyncTask).all()
-            db_name = Config.SOURCE_DB_NAME  # (已修复: 使用 SOURCE_DB_NAME)
-
-            with source_engine.connect() as source_conn:
-                for task in tasks:
-                    if not task.source_table:
-                        continue
-
-                    try:
-                        # 检查表是否存在
-                        inspector = inspect(source_engine)
-                        if not inspector.has_table(task.source_table):
-                            print(
-                                f"Warning: Table '{task.source_table}' for task {task.task_id} not found in source DB.")
-                            continue
-
-                        # 检查是否为物理表 (BASE TABLE), 而不是视图 (VIEW)
-                        table_type_query = text(
-                            "SELECT table_type FROM information_schema.tables "
-                            "WHERE table_schema = :db_name AND table_name = :table_name"
-                        )
-                        result = source_conn.execute(table_type_query,
-                                                     {"db_name": db_name, "table_name": task.source_table}).fetchone()
-
-                        table_type = result[0] if result else None
-
-                        if table_type == 'VIEW':
-                            print(f"Skipping `_id` check for VIEW: '{task.source_table}'")
-                            continue
-
-                        if table_type != 'BASE TABLE':
-                            print(
-                                f"Warning: Skipping `_id` check for unknown table type '{table_type}': '{task.source_table}'")
-                            continue
-
-                        # 检查 `_id` 列是否存在
-                        columns = [col['name'] for col in inspector.get_columns(task.source_table)]
-                        if '_id' not in columns:
-                            print(f"Adding `_id` column to table '{task.source_table}'...")
-                            try:
-                                # 为 _id 添加 varchar(50) 和索引
-                                source_conn.execute(text(
-                                    f"ALTER TABLE `{task.source_table}` ADD COLUMN `_id` VARCHAR(50) NULL DEFAULT NULL"))
-                                source_conn.execute(
-                                    text(f"ALTER TABLE `{task.source_table}` ADD INDEX `idx__id` (`_id`)"))
-                                source_conn.commit()  # 提交 DDL
-                                print(f"Successfully added `_id` column and index to '{task.source_table}'.")
-                            except Exception as alter_e:
-                                source_conn.rollback()  # 回滚 DDL
-                                print(f"ERROR: Failed to add `_id` column to '{task.source_table}': {alter_e}")
-
-                    except NoSuchTableError:
-                        print(
-                            f"Warning: Table '{task.source_table}' for task {task.task_id} not found (NoSuchTableError).")
-                    except Exception as task_e:
-                        print(f"Error processing table for task {task.task_id} ('{task.source_table}'): {task_e}")
-
-        except OperationalError as e:
-            print(f"ERROR: Cannot connect to databases during initialization: {e}")
-        except Exception as e:
-            print(f"ERROR: Failed during database initialization: {e}")
-        finally:
-            config_session.remove()
-
-        print("Database initialization complete.")
+        # # 2. 检查并修改源库表
+        # print("Checking source tables for `_id` column...")
+        #
+        # # 需要一个 config session 来读取任务
+        # config_session = scoped_session(ConfigSession)
+        # try:
+        #     tasks = config_session.query(SyncTask).all()
+        #     db_name = Config.SOURCE_DB_NAME  # (已修复: 使用 SOURCE_DB_NAME)
+        #
+        #     with source_engine.connect() as source_conn:
+        #         for task in tasks:
+        #             if not task.source_table:
+        #                 continue
+        #
+        #             try:
+        #                 # 检查表是否存在
+        #                 inspector = inspect(source_engine)
+        #                 if not inspector.has_table(task.source_table):
+        #                     print(
+        #                         f"Warning: Table '{task.source_table}' for task {task.task_id} not found in source DB.")
+        #                     continue
+        #
+        #                 # 检查是否为物理表 (BASE TABLE), 而不是视图 (VIEW)
+        #                 table_type_query = text(
+        #                     "SELECT table_type FROM information_schema.tables "
+        #                     "WHERE table_schema = :db_name AND table_name = :table_name"
+        #                 )
+        #                 result = source_conn.execute(table_type_query,
+        #                                              {"db_name": db_name, "table_name": task.source_table}).fetchone()
+        #
+        #                 table_type = result[0] if result else None
+        #
+        #                 if table_type == 'VIEW':
+        #                     print(f"Skipping `_id` check for VIEW: '{task.source_table}'")
+        #                     continue
+        #
+        #                 if table_type != 'BASE TABLE':
+        #                     print(
+        #                         f"Warning: Skipping `_id` check for unknown table type '{table_type}': '{task.source_table}'")
+        #                     continue
+        #
+        #                 # 检查 `_id` 列是否存在
+        #                 columns = [col['name'] for col in inspector.get_columns(task.source_table)]
+        #                 if '_id' not in columns:
+        #                     print(f"Adding `_id` column to table '{task.source_table}'...")
+        #                     try:
+        #                         # 为 _id 添加 varchar(50) 和索引
+        #                         source_conn.execute(text(
+        #                             f"ALTER TABLE `{task.source_table}` ADD COLUMN `_id` VARCHAR(50) NULL DEFAULT NULL"))
+        #                         source_conn.execute(
+        #                             text(f"ALTER TABLE `{task.source_table}` ADD INDEX `idx__id` (`_id`)"))
+        #                         source_conn.commit()  # 提交 DDL
+        #                         print(f"Successfully added `_id` column and index to '{task.source_table}'.")
+        #                     except Exception as alter_e:
+        #                         source_conn.rollback()  # 回滚 DDL
+        #                         print(f"ERROR: Failed to add `_id` column to '{task.source_table}': {alter_e}")
+        #
+        #             except NoSuchTableError:
+        #                 print(
+        #                     f"Warning: Table '{task.source_table}' for task {task.task_id} not found (NoSuchTableError).")
+        #             except Exception as task_e:
+        #                 print(f"Error processing table for task {task.task_id} ('{task.source_table}'): {task_e}")
+        #
+        # except OperationalError as e:
+        #     print(f"ERROR: Cannot connect to databases during initialization: {e}")
+        # except Exception as e:
+        #     print(f"ERROR: Failed during database initialization: {e}")
+        # finally:
+        #     config_session.remove()
+        #
+        # print("Database initialization complete.")
+        print("Database initialization complete. Source table checks will run with each task.")
 
 
 def shutdown_scheduler():
@@ -116,7 +115,7 @@ def shutdown_scheduler():
 if __name__ == "__main__":
     app = create_app()
 
-    # 1. 初始化数据库 (建表, 添加 _id 字段)
+    # 1. 初始化数据库
     initialize_databases(app)
 
     # 2. 注册退出时关闭调度器的钩子
