@@ -1,0 +1,7 @@
+apscheduler
+Flask
+Flask-SQLAlchemy
+mysql-replication
+pymysql
+python-dotenv
+requests
