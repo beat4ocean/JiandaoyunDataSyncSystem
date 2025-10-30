@@ -57,7 +57,7 @@ class Config:
         'host': SOURCE_DB_HOST,
         'port': int(SOURCE_DB_PORT),
         'user': SOURCE_DB_USER,
-        'passwd': SOURCE_DB_PASSWORD,
+        'passwd': os.getenv('SOURCE_DB_PASSWORD', 'password'),  # 不能使用 quote_plus()，否则可能会导致 binlog 配置错误
         'charset': 'utf8'
     }
 
