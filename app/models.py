@@ -86,20 +86,21 @@ class FormFieldMapping(ConfigBase):
     task_id = Column(Integer, nullable=False, comment="关联的任务ID (替换了 app_id 和 entry_id)")
 
     form_name = Column(String(255), nullable=True, comment="简道云表单名")
-    widget_name = Column(String(255), nullable=False, comment="字段ID (e.g., _widget_xxx, 用于 API 提交)")
+    widget_name = Column(String(255), nullable=False, comment="字段ID (e.g., _widget_xxx_, 用于 API 提交)")
     widget_alias = Column(String(255), nullable=False, comment="字段后端别名 (name, 用于 API 查询/匹配)")
     label = Column(String(255), nullable=False, comment="字段前端别名 (label)")
     widget_type = Column(String(255), nullable=False, comment="字段类型 (type)")
-    data_modify_time = Column(DateTime, nullable=True, comment="字段修改时间")
+
+    # 存储表单数据的最新修改时间
+    data_modify_time = Column(DateTime, nullable=True, comment="表单数据修改时间")
 
     last_updated = Column(DateTime, default=datetime.now(TZ_UTC_8), onupdate=datetime.now(TZ_UTC_8))
 
     __table_args__ = (
-        # 确保每个任务中，MySQL 的列名是唯一的
-        UniqueConstraint('task_id', 'column_name', name='uq_task_column'),
-        # 确保 widget_name 和 widget_alias 也是唯一的
-        UniqueConstraint('task_id', 'widget_name', name='uq_task_widget_name'),
+        # 确保每个任务中，widget_alias (MySQL 的列名) 是唯一的
         UniqueConstraint('task_id', 'widget_alias', name='uq_task_widget_alias'),
+        # 确保 widget_name 也是唯一的
+        UniqueConstraint('task_id', 'widget_name', name='uq_task_widget_name'),
         Index('idx_task_id', 'task_id'),
     )
 
@@ -110,15 +111,18 @@ class SyncErrLog(ConfigBase):
     """
     __tablename__ = 'sync_err_log'
     id = Column(Integer, primary_key=True, autoincrement=True)
-    app_id = Column(String(50), nullable=True)
-    entry_id = Column(String(50), nullable=True)
+
+    # 允许 task_id 为空, 以防 task_config 未传入
+    task_id = Column(Integer, nullable=True, comment="关联的任务ID")
+    app_id = Column(String(100), nullable=True)
+    entry_id = Column(String(100), nullable=True)
     table_name = Column(String(255), nullable=True)
-    department_name = Column(String(100), nullable=True, comment="关联的租户")
+
     error_message = Column(Text, nullable=False)
     traceback = Column(Text, nullable=True)
     payload = Column(LONGTEXT, nullable=True)
-    timestamp = Column(DateTime, default=datetime.now)
+    timestamp = Column(DateTime, default=datetime.now(TZ_UTC_8), comment="发生错误时间")
 
     __table_args__ = (
-        Index('idx_task_time', 'task_id', 'error_time'),
+        Index('idx_task_time', 'task_id', 'timestamp'),
     )

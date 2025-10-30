@@ -1,6 +1,7 @@
 import datetime
 import json
 import time
+import uuid
 from threading import current_thread
 
 import requests
@@ -16,7 +17,6 @@ from sqlalchemy.orm import Session
 
 from app.config import Config
 from app.jdy_api import FormApi, DataApi
-
 from app.models import (
     ConfigSession, SourceSession, source_engine,
     SyncTask, FormFieldMapping
@@ -84,7 +84,7 @@ class FieldMappingService:
             for field in widgets:
                 # 假设 V5 API 结构
                 widget_alias = field.get('name')  # 'name' 字段 (用于查询/匹配)
-                widget_name = field.get('widgetName')  # '_widget_xxx' (用于提交)
+                widget_name = field.get('widgetName')  # '_widget_xxx_' (用于提交)
                 label = field.get('label')
                 widget_type = field.get('type')
 
@@ -179,11 +179,26 @@ class SyncService:
             if col_name in payload_map:
                 widget_name = payload_map[col_name]
 
-                # 关键: 使用 json_serializer 预处理 V5 API 不支持的类型
+                processed_value = value
+
+                # 1. 尝试解析是否为 JSON 字符串 (用于子表单, 地址, 成员等)
+                if isinstance(value, str) \
+                        and value.strip().startswith(('{', '[')) and value.strip().endswith(('}', ']')):
+                    try:
+                        processed_value = json.loads(value)
+                    except json.JSONDecodeError:
+                        # 不是有效的 JSON，保持为原始字符串
+                        processed_value = value
+
+                # 2. 序列化简单类型 (datetime, decimal)
+                #    如果 processed_value 是 list/dict (来自上一步), json_serializer 不会被调用
+                #    如果 processed_value 是 简单类型, 它将被正确序列化
                 try:
-                    processed_value = json.loads(json.dumps(value, default=json_serializer))
+                    # 此步骤确保 datetime, Decimal 等被正确转换为 str/float
+                    processed_value = json.loads(json.dumps(processed_value, default=json_serializer))
                 except TypeError:
-                    processed_value = str(value)  # 回退
+                    # 回退: 适用于不由 json_serializer 处理的复杂对象
+                    processed_value = str(processed_value)
 
                 data_payload[widget_name] = {"value": processed_value}
 
@@ -191,10 +206,10 @@ class SyncService:
 
     def _find_jdy_id_by_pk(
             self,
-            config_session: Session,
             task: SyncTask,
             pk_value,
-            data_api: DataApi,
+            data_api_query: DataApi,
+            data_api_delete: DataApi,
             alias_map: dict
     ) -> str | None:
         """
@@ -220,18 +235,44 @@ class SyncService:
                     }
                 ]
             }
-            # V5 API (QPS 30)
-            response = data_api.query_list_data(
+            # V5 API (QPS 30) - 查找所有重复项
+            response = data_api_query.query_list_data(
                 app_id=task.jdy_app_id,
                 entry_id=task.jdy_entry_id,
-                limit=1,
+                limit=100,  # 查找所有重复项 (最多100个)
                 fields=["_id"],
                 filter=filter_payload
             )
 
-            if response and response.get('data'):
-                return response['data'][0].get('_id')
-            return None
+            jdy_data = response.get('data', [])
+
+            if not jdy_data:
+                return None  # 未找到
+
+            # --- 主键去重逻辑 ---
+            if len(jdy_data) > 1:
+                id_to_keep = jdy_data[0].get('_id')
+                ids_to_delete = [d.get('_id') for d in jdy_data[1:] if d.get('_id')]
+
+                log_sync_error(
+                    task_config=task,
+                    extra_info=f"[{task.task_id}] Found {len(jdy_data)} duplicate entries for PK {pk_value}. Keeping {id_to_keep}, deleting {len(ids_to_delete)}."
+                )
+
+                try:
+                    # 调用批量删除 (QPS 10)
+                    data_api_delete.delete_batch_data(task.jdy_app_id, task.jdy_entry_id, ids_to_delete)
+                except Exception as e:
+                    log_sync_error(
+                        task_config=task,
+                        error=e,
+                        extra_info=f"[{task.task_id}] Failed to delete duplicate entries for PK {pk_value}."
+                    )
+
+                return id_to_keep  # 返回保留的 ID
+
+            # --- 正常情况 ---
+            return jdy_data[0].get('_id')  # 只有一个, 正常返回
 
         except (requests.exceptions.RequestException, requests.exceptions.HTTPError) as e:
             log_sync_error(
@@ -306,6 +347,7 @@ class SyncService:
     def run_full_replace(self, config_session: Session, source_session: Session, task: SyncTask):
         """
         执行全量替换同步
+        (视图检查, 事务 ID, 修复响应逻辑)
         """
         if self._is_view(task):
             log_sync_error(task_config=task,
@@ -314,6 +356,9 @@ class SyncService:
 
         print(f"[{task.task_id}] Running FULL_REPLACE sync...")
         self._update_task_status(config_session, task, status='running')
+
+        total_deleted = 0
+        total_created = 0
 
         try:
             mapping_service = FieldMappingService()
@@ -339,10 +384,18 @@ class SyncService:
                     break
 
                 data_ids = [d['_id'] for d in jdy_data]
-                data_api_delete.delete_batch_data(task.jdy_app_id, task.jdy_entry_id, data_ids)
+                delete_response = data_api_delete.delete_batch_data(task.jdy_app_id, task.jdy_entry_id, data_ids)
+
+                # 修复: 检查 success_count
+                success_count = delete_response.get('success_count', 0)
+                total_deleted += success_count
+                if success_count != len(data_ids):
+                    log_sync_error(task_config=task,
+                                   extra_info=f"[{task.task_id}] Delete mismatch. Requested: {len(data_ids)}, Deleted: {success_count}.")
+
                 data_id = jdy_data[-1]['_id']
 
-            print(f"[{task.task_id}] Jdy data deleted. Fetching from source DB...")
+            print(f"[{task.task_id}] Jdy data deleted ({total_deleted} items). Fetching from source DB...")
 
             # 3. 获取源数据
             rows = source_session.execute(text(f"SELECT * FROM `{task.source_table}`")).mappings().all()
@@ -355,33 +408,41 @@ class SyncService:
                 if data_payload:
                     batch_data.append(data_payload)
 
-                if len(batch_data) >= 500:
-                    response = data_api_create.create_batch_data(task.jdy_app_id, task.jdy_entry_id, batch_data)
-                    # # 回写 _id
-                    # for created_data in response.get('data', []):
-                    #     pk_value = created_data.get(payload_map.get(task.pk_field_name, ''))
-                    #     self._writeback_id_to_source(source_session, task, created_data['_id'], pk_value)
-                    # batch_data = []
-                    # 逻辑有问题，批量写的返回内容是：
-                    # {
-                    #     "status": "success",
-                    #     "success_count": 3,
-                    #     "success_ids": [
-                    #         "200001181fe09728936510eb",
-                    #         "200001181fe09728936510ec",
-                    #         "200001181fe09728936510ed"
-                    #     ]
-                    # }
-                    # 全覆盖同步模式，不需要回写 _id，需要记录成功条数是否与源数据一致
+                if len(batch_data) >= 100:  # API 限制 100
+                    trans_id = str(uuid.uuid4())
+                    response = data_api_create.create_batch_data(
+                        task.jdy_app_id, task.jdy_entry_id,
+                        data_list=batch_data, transaction_id=trans_id
+                    )
+
+                    # 检查 success_count
+                    success_count = response.get('success_count', 0)
+                    total_created += success_count
+                    if success_count != len(batch_data):
+                        log_sync_error(task_config=task,
+                                       extra_info=f"[{task.task_id}] Create mismatch. Requested: {len(batch_data)}, Created: {success_count}. TransID: {trans_id}")
+
+                    batch_data = []
 
             if batch_data:
-                response = data_api_create.create_batch_data(task.jdy_app_id, task.jdy_entry_id, batch_data)
-                # for created_data in response.get('data', []):
-                #     pk_value = created_data.get(payload_map.get(task.pk_field_name, ''))
-                #     self._writeback_id_to_source(source_session, task, created_data['_id'], pk_value)
-                # 全覆盖同步模式，不需要回写 _id，需要记录成功条数是否与源数据一致
+                trans_id = str(uuid.uuid4())
+                response = data_api_create.create_batch_data(
+                    task.jdy_app_id, task.jdy_entry_id,
+                    data_list=batch_data, transaction_id=trans_id
+                )
+                # 检查 success_count
+                success_count = response.get('success_count', 0)
+                total_created += success_count
+                if success_count != len(batch_data):
+                    log_sync_error(task_config=task,
+                                   extra_info=f"[{task.task_id}] Create mismatch. Requested: {len(batch_data)}, Created: {success_count}. TransID: {trans_id}")
 
-            print(f"[{task.task_id}] FULL_REPLACE sync completed. Synced {len(rows)} rows.")
+            print(
+                f"[{task.task_id}] FULL_REPLACE sync completed. Source rows: {len(rows)}, Created in Jdy: {total_created}.")
+            if len(rows) != total_created:
+                log_sync_error(task_config=task,
+                               extra_info=f"[{task.task_id}] FINAL COUNT MISMATCH. Source: {len(rows)}, Created: {total_created}.")
+
             self._update_task_status(config_session, task, status='idle', last_sync_time=datetime.now(TZ_UTC_8))
 
         except Exception as e:
@@ -393,6 +454,7 @@ class SyncService:
     def run_incremental(self, config_session: Session, source_session: Session, task: SyncTask):
         """
         执行增量同步 (Upsert)
+        (接受会话, 事务 ID, 去重)
         """
         print(f"[{task.task_id}] Running INCREMENTAL sync...")
         self._update_task_status(config_session, task, status='running')
@@ -409,6 +471,7 @@ class SyncService:
 
             # 1. 实例化
             data_api_query = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=30)
+            data_api_delete = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=10)  # 用于去重
             data_api_create = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=20)  # Single create
             data_api_update = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=20)  # Single update
 
@@ -439,17 +502,27 @@ class SyncService:
                     continue
 
                 data_payload = self._transform_row_to_jdy(row_dict, payload_map)
-                jdy_id = row_dict.get('_id') or self._find_jdy_id_by_pk(config_session, task, pk_value, data_api_query,
-                                                                        alias_map)
 
+                # 传入 data_api_delete 以进行去重
+                jdy_id = row_dict.get('_id') or self._find_jdy_id_by_pk(
+                    task, pk_value,
+                    data_api_query, data_api_delete, alias_map
+                )
+
+                trans_id = str(uuid.uuid4())
                 if jdy_id:
                     # 更新
-                    # 更新逻辑有问题，需要比较源数据和 JDY 数据，只更新有差异的字段
-                    data_api_update.update_single_data(task.jdy_app_id, task.jdy_entry_id, jdy_id, data_payload)
+                    data_api_update.update_single_data(
+                        task.jdy_app_id, task.jdy_entry_id, jdy_id,
+                        data_payload, transaction_id=trans_id
+                    )
                     count_updated += 1
                 else:
                     # 新增
-                    response = data_api_create.create_single_data(task.jdy_app_id, task.jdy_entry_id, data_payload)
+                    response = data_api_create.create_single_data(
+                        task.jdy_app_id, task.jdy_entry_id,
+                        data_payload, transaction_id=trans_id
+                    )
                     new_jdy_id = response.get('data', {}).get('_id')
                     if new_jdy_id:
                         count_new += 1
@@ -467,6 +540,7 @@ class SyncService:
     def run_binlog_listener(self, task: SyncTask):
         """
         运行一个长连接的 Binlog 监听器
+        (独立创建会话, 事务 ID, 去重)
         """
         if self._is_view(task):
             log_sync_error(task_config=task,
@@ -480,9 +554,9 @@ class SyncService:
         # 1. 实例化
         # 注意: 实例化一次, 在循环中使用
         data_api_query = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=30)
+        data_api_delete = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=10)  # 用于去重和删除
         data_api_create = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=20)
         data_api_update = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=20)
-        data_api_delete = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=20)
 
         stream = None
         try:
@@ -532,10 +606,14 @@ class SyncService:
                             break  # 退出 for 循环
 
                         for row in binlog_event.rows:
+                            trans_id = str(uuid.uuid4())  # 每个 row 操作都是一个事务
+
                             if isinstance(binlog_event, WriteRowsEvent):
                                 data_payload = self._transform_row_to_jdy(row['values'], payload_map)
-                                response = data_api_create.create_single_data(task.jdy_app_id, task.jdy_entry_id,
-                                                                              data_payload)
+                                response = data_api_create.create_single_data(
+                                    task.jdy_app_id, task.jdy_entry_id,
+                                    data_payload, transaction_id=trans_id
+                                )
                                 new_jdy_id = response.get('data', {}).get('_id')
                                 if new_jdy_id:
                                     pk_value = row['values'].get(task.pk_field_name)
@@ -544,15 +622,17 @@ class SyncService:
 
                             elif isinstance(binlog_event, UpdateRowsEvent):
                                 pk_value = row['after_values'].get(task.pk_field_name)
-                                jdy_id = row['after_values'].get('_id') or self._find_jdy_id_by_pk(config_session, task,
-                                                                                                   pk_value,
-                                                                                                   data_api_query,
-                                                                                                   alias_map)
+                                jdy_id = row['after_values'].get('_id') or self._find_jdy_id_by_pk(
+                                    task, pk_value,
+                                    data_api_query, data_api_delete, alias_map
+                                )
 
                                 if jdy_id:
                                     data_payload = self._transform_row_to_jdy(row['after_values'], payload_map)
-                                    data_api_update.update_single_data(task.jdy_app_id, task.jdy_entry_id, jdy_id,
-                                                                       data_payload)
+                                    data_api_update.update_single_data(
+                                        task.jdy_app_id, task.jdy_entry_id, jdy_id,
+                                        data_payload, transaction_id=trans_id
+                                    )
                                     print(f"[{thread_name}] Updated data.")
                                 else:
                                     log_sync_error(task_config=task,
@@ -561,11 +641,13 @@ class SyncService:
 
                             elif isinstance(binlog_event, DeleteRowsEvent):
                                 pk_value = row['values'].get(task.pk_field_name)
-                                jdy_id = row['values'].get('_id') or self._find_jdy_id_by_pk(config_session, task,
-                                                                                             pk_value, data_api_query,
-                                                                                             alias_map)
+                                jdy_id = row['values'].get('_id') or self._find_jdy_id_by_pk(
+                                    task, pk_value,
+                                    data_api_query, data_api_delete, alias_map
+                                )
 
                                 if jdy_id:
+                                    # Delete single 没有 transaction_id
                                     data_api_delete.delete_single_data(task.jdy_app_id, task.jdy_entry_id, jdy_id)
                                     print(f"[{thread_name}] Deleted data.")
                                 else:
