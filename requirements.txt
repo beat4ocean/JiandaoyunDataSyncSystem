@@ -1,8 +1,9 @@
 sqlalchemy
 apscheduler
 Flask
-Flask-SQLAlchemy
+#Flask-SQLAlchemy
 mysql-replication
 pymysql
 python-dotenv
 requests
+cryptography
