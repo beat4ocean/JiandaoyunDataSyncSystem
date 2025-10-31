@@ -142,6 +142,7 @@ def log_sync_error(task_config: 'SyncTask' = None,
     app_id = None
     entry_id = None
     table_name = None
+    department_name = None
 
     if task_config:
         # 延迟导入 SyncTask 以进行类型检查
@@ -151,6 +152,7 @@ def log_sync_error(task_config: 'SyncTask' = None,
             app_id = task_config.jdy_app_id
             entry_id = task_config.jdy_entry_id
             table_name = task_config.source_table
+            department_name = task_config.department_name
 
     try:
         # --- 安全地尝试获取会话 ---
@@ -192,6 +194,7 @@ def log_sync_error(task_config: 'SyncTask' = None,
             app_id=app_id,
             entry_id=entry_id,
             table_name=table_name,
+            department_name=department_name,
             error_message=error_message,
             traceback=traceback_str,  # 使用格式化后的字符串
             payload=payload_str,
@@ -209,6 +212,7 @@ def log_sync_error(task_config: 'SyncTask' = None,
             content = f"""
             **简道云数据同步错误告警**
             > **任务ID**: {task_id or 'N/A'}
+            > **部门**: {department_name or 'N/A'}
             > **时间**: {datetime.now(TZ_UTC_8).strftime('%Y-%m-%d %H:%M:%S')}
             > **表单/表名**: {table_name or 'N/A'}
             > **App ID**: {app_id or 'N/A'}

@@ -1,8 +1,12 @@
 import time
+import os
+from datetime import timedelta
 
-from flask import Flask, g, abort
+from flask import Flask, g, abort, send_from_directory
 from sqlalchemy.orm import scoped_session
 from sqlalchemy.exc import OperationalError
+from flask_jwt_extended import JWTManager
+from flask_cors import CORS
 
 from app.config import Config
 from app.models import ConfigSession, SourceSession
@@ -12,14 +16,38 @@ def create_app():
     """
     应用工厂函数
     """
-    app = Flask(__name__)
+    # static_folder 指向新的 frontend 目录
+    app = Flask(__name__, static_folder='../frontend', static_url_path='/')
 
     # 1. 加载配置
     app.config.from_object(Config)
 
+    # --- JWT 配置 ---
+    app.config["JWT_SECRET_KEY"] = os.environ.get("JWT_SECRET_KEY", "super-secret-dev-key")
+    app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
+    app.config["JWT_ACCESS_COOKIE_PATH"] = "/"
+    app.config["JWT_REFRESH_COOKIE_PATH"] = "/auth/refresh"
+    app.config["JWT_COOKIE_CSRF_PROTECT"] = True
+    app.config["JWT_COOKIE_SECURE"] = False  # 在生产中使用 HTTPS 时设为 True
+    app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=1)
+    app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(days=30)
+    jwt = JWTManager(app)
+
+    # --- CORS 配置 ---
+    CORS(app, supports_credentials=True, origins=[
+        "http://localhost:5173", "http://127.0.0.1:5173",  # 常见的 Vite/Vue 开发端口
+        "http://localhost:5000", "http://127.0.0.1:5000"  # 后端服务端口
+    ])
+
     # 2. 注册蓝图
     from app.routes import main_bp
     app.register_blueprint(main_bp)
+
+    # 注册认证和 API 蓝图
+    from app.auth import auth_bp
+    app.register_blueprint(auth_bp)
+    from app.api import api_bp
+    app.register_blueprint(api_bp)
 
     # 3. (关键) 设置请求生命周期内的会话管理
     # 使用 scoped_session 确保线程安全
@@ -73,6 +101,18 @@ def create_app():
         source_session = g.pop('source_session', None)
         if source_session is not None:
             source_session_scoped.remove()
+
+    # --- Serve Frontend ---
+    # 用于服务 Vue SPA 的路由
+    @app.route('/', defaults={'path': ''})
+    @app.route('/<path:path>')
+    def serve_frontend(path):
+        if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
+            # 服务静态文件 (js, css, etc.)
+            return send_from_directory(app.static_folder, path)
+        else:
+            # 其他所有路径都返回 index.html，交由 Vue Router 处理
+            return send_from_directory(app.static_folder, 'index.html')
 
     print("Flask App created with manual session management and connection retry.")
     return app

@@ -7,6 +7,7 @@ from threading import current_thread
 from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import joinedload
 
 from app.config import Config
 from app.models import ConfigSession, SourceSession, SyncTask
@@ -33,7 +34,10 @@ def run_task_wrapper(task_id: int):
 
     with ConfigSession() as config_session:
         try:
-            task = config_session.query(SyncTask).get(task_id)
+            # 使用 joinedload 预加载 department (JdyKeyInfo) 关系
+            task = config_session.query(SyncTask).options(
+                joinedload(SyncTask.department)
+            ).get(task_id)
 
             # 1. 检查任务是否有效
             if not task:
@@ -43,6 +47,12 @@ def run_task_wrapper(task_id: int):
 
             if not task.is_active:
                 print(f"[{thread_name}] Task {task_id} is disabled. Skipping.")
+                return
+
+            # 检查 API Key
+            if not task.department or not task.department.api_key:
+                print(f"[{thread_name}] Task {task_id} missing API Key. Skipping.")
+                log_sync_error(task_config=task, extra_info="Task skipped: Missing API Key.")
                 return
 
             # 2. (关键) 并发检查: 如果任务已在运行, 则丢弃本次执行
@@ -90,9 +100,19 @@ def run_binlog_listener_in_thread(task_id: int):
 
         # 获取任务对象 (binlog 监听器需要它)
         with ConfigSession() as session:
-            task = session.query(SyncTask).get(task_id)
+            # 使用 joinedload 预加载 department
+            task = session.query(SyncTask).options(
+                joinedload(SyncTask.department)
+            ).get(task_id)
+
             if not task:
                 print(f"[BinlogListener-{task_id}] Task not found. Exiting thread.")
+                return
+
+            # 检查 API Key
+            if not task.department or not task.department.api_key:
+                print(f"[BinlogListener-{task_id}] Task missing API Key. Exiting thread.")
+                log_sync_error(task_config=task, extra_info="Binlog listener stopped: Missing API Key.")
                 return
 
         # 运行长连接监听器
@@ -128,7 +148,10 @@ def check_and_start_new_binlog_listeners():
     with ConfigSession() as config_session:
         try:
             # 1. 查找所有激活的 BINLOG 任务
-            active_binlog_tasks = config_session.query(SyncTask).filter(
+            # 预加载 department
+            active_binlog_tasks = config_session.query(SyncTask).options(
+                joinedload(SyncTask.department)
+            ).filter(
                 SyncTask.is_active == True,
                 SyncTask.sync_mode == 'BINLOG'
             ).all()
@@ -148,13 +171,18 @@ def check_and_start_new_binlog_listeners():
                 print(f"[{thread_name}] Found {len(tasks_to_start)} new BINLOG tasks to start.")
                 sync_service = SyncService()  # 实例化
 
-                for task_id in tasks_to_start:
-                    task = config_session.query(SyncTask).get(task_id)  # 获取任务对象
-                    if not task:
+                for task in active_binlog_tasks:
+                    if task.task_id not in tasks_to_start:
                         continue
 
                     # (关键) 检查是否已在运行 (以防万一)
-                    if task.status == 'running' and task_id in running_binlog_listeners:
+                    if task.status == 'running' and task.task_id in running_binlog_listeners:
+                        continue
+
+                    # 检查 API Key
+                    if not task.department or not task.department.api_key:
+                        print(f"[{thread_name}] Task {task.task_id} missing API Key. Cannot start listener.")
+                        log_sync_error(task_config=task, extra_info="Binlog listener cannot start: Missing API Key.")
                         continue
 
                     print(f"[{thread_name}] Starting listener for task: {task.task_id}...")
@@ -164,11 +192,11 @@ def check_and_start_new_binlog_listeners():
 
                     listener_thread = threading.Thread(
                         target=run_binlog_listener_in_thread,
-                        args=(task_id,),
+                        args=(task.task_id,),
                         daemon=True  # 守护线程随主程序退出
                     )
                     listener_thread.start()
-                    running_binlog_listeners.add(task_id)
+                    running_binlog_listeners.add(task.task_id)
                     time.sleep(1)  # 错开启动
 
         except OperationalError as e:
@@ -188,7 +216,10 @@ def update_all_field_mappings_job():
 
     with ConfigSession() as config_session:
         try:
-            tasks_to_update = config_session.query(SyncTask).filter(
+            # 预加载 department
+            tasks_to_update = config_session.query(SyncTask).options(
+                joinedload(SyncTask.department)
+            ).filter(
                 SyncTask.is_active == True
             ).all()
 
@@ -199,6 +230,12 @@ def update_all_field_mappings_job():
             mapping_service = FieldMappingService()
             for task in tasks_to_update:
                 try:
+                    # 检查 API Key
+                    if not task.department or not task.department.api_key:
+                        print(f"[{thread_name}] Task {task.task_id} missing API Key. Skipping mapping update.")
+                        log_sync_error(task_config=task, extra_info="Mapping update skipped: Missing API Key.")
+                        continue
+
                     mapping_service.update_form_fields_mapping(config_session, task)
                 except Exception as task_err:
                     print(f"[{thread_name}] Failed to update mappings for task {task.task_id}: {task_err}")

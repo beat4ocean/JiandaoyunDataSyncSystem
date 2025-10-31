@@ -49,13 +49,15 @@ class User(ConfigBase):
         return sha256.verify(password, self.password_hash)
 
 
+# --- 密钥/部门模型 ---
+
 class JdyKeyInfo(ConfigBase):
     """
     存储部门（租户）与简道云项目API Key的映射关系
     """
     __tablename__ = 'jdy_key_info'
     id = Column(Integer, primary_key=True, autoincrement=True)
-    department_name = Column(String(100), nullable=False, unique=True, comment="部门英文简称, 例如: 'dpt_a'")
+    department_name = Column(String(100), nullable=False, unique=True, comment="部门英文简称, e.g., 'dpt_a'")
     api_key = Column(String(255), nullable=False, comment="该项目专属的 API Key")
 
     # 与任务的关联
@@ -150,6 +152,8 @@ class FormFieldMapping(ConfigBase):
         Index('idx_task_id', 'task_id'),
     )
 
+
+# --- 错误日志模型 ---
 
 class SyncErrLog(ConfigBase):
     """

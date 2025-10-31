@@ -14,13 +14,13 @@ from pymysqlreplication.row_event import (
 )
 from sqlalchemy import text, inspect
 from sqlalchemy.exc import OperationalError, IntegrityError, NoSuchTableError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.config import Config
 from app.jdy_api import FormApi, DataApi
 from app.models import (
     ConfigSession, SourceSession, source_engine,
-    SyncTask, FormFieldMapping
+    SyncTask, FormFieldMapping, JdyKeyInfo
 )
 from app.utils import log_sync_error, json_serializer, TZ_UTC_8, retry
 
@@ -62,8 +62,18 @@ class FieldMappingService:
         """
         print(f"[{task.task_id}] Updating field mappings for task...")
         try:
+            # 1. 动态获取 API Key
+            if not task.department:
+                # 如果 task 对象没有预加载 department, 手动查询
+                key_info = config_session.query(JdyKeyInfo).filter_by(department_name=task.department_name).first()
+                if not key_info:
+                    raise ValueError(f"Task {task.task_id} missing valid department/api_key configuration.")
+                api_key = key_info.api_key
+            else:
+                api_key = task.department.api_key
+
             # 1. 实例化
-            form_api = FormApi(api_key=task.jdy_api_key, host=Config.JDY_API_HOST, qps=30)
+            form_api = FormApi(api_key=api_key, host=Config.JDY_API_HOST, qps=30)
 
             # 2. 调用
             response = form_api.get_form_widgets(task.jdy_app_id, task.jdy_entry_id)
@@ -469,15 +479,20 @@ class SyncService:
         total_created = 0
 
         try:
+            # 1. 动态获取 API Key
+            if not task.department:
+                raise ValueError(f"Task {task.task_id} missing department/api_key configuration for _run_full_sync.")
+            api_key = task.department.api_key
+
             mapping_service = FieldMappingService()
             payload_map = mapping_service.get_payload_mapping(config_session, task.task_id)
             if not payload_map:
                 raise ValueError("Field mapping is empty.")
 
             # 1. 实例化
-            data_api_query = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=30)
-            data_api_delete = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=10)
-            data_api_create = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=10)
+            data_api_query = DataApi(api_key, Config.JDY_API_HOST, qps=30)
+            data_api_delete = DataApi(api_key, Config.JDY_API_HOST, qps=10)
+            data_api_create = DataApi(api_key, Config.JDY_API_HOST, qps=10)
 
             # 2. 仅在 delete_first=True 时删除
             if delete_first:
@@ -624,6 +639,11 @@ class SyncService:
             if not task.incremental_field:
                 raise ValueError("Incremental field (e.g., last_modified) is not configured.")
 
+            # 2a. 动态获取 API Key
+            if not task.department:
+                raise ValueError(f"Task {task.task_id} missing department/api_key configuration for run_incremental.")
+            api_key = task.department.api_key
+
             mapping_service = FieldMappingService()
             payload_map = mapping_service.get_payload_mapping(config_session, task.task_id)
             alias_map = mapping_service.get_alias_mapping(config_session, task.task_id)
@@ -631,10 +651,10 @@ class SyncService:
                 raise ValueError("Field mapping is empty.")
 
             # 3. 实例化
-            data_api_query = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=30)
-            data_api_delete = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=10)  # 用于去重
-            data_api_create = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=20)  # Single create
-            data_api_update = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=20)  # Single update
+            data_api_query = DataApi(api_key, Config.JDY_API_HOST, qps=30)
+            data_api_delete = DataApi(api_key, Config.JDY_API_HOST, qps=10)  # 用于去重
+            data_api_create = DataApi(api_key, Config.JDY_API_HOST, qps=20)  # Single create
+            data_api_update = DataApi(api_key, Config.JDY_API_HOST, qps=20)  # Single update
 
             # 4. 确定时间戳
             last_sync_time = task.last_sync_time or datetime(1970, 1, 1, tzinfo=TZ_UTC_8)
@@ -720,11 +740,18 @@ class SyncService:
         current_thread().name = thread_name
         print(f"[{thread_name}] Starting...")
 
+        # 1. 动态获取 API Key
+        if not task.department:
+            log_sync_error(task_config=task, error=ValueError("Task missing department"),
+                           extra_info=f"[{thread_name}] CRITICAL: Task missing department/api_key config.")
+            return
+        api_key = task.department.api_key
+
         # 1. 实例化 API 客户端
-        data_api_query = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=30)
-        data_api_delete = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=10)  # 用于去重和删除
-        data_api_create = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=20)
-        data_api_update = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=20)
+        data_api_query = DataApi(api_key, Config.JDY_API_HOST, qps=30)
+        data_api_delete = DataApi(api_key, Config.JDY_API_HOST, qps=10)  # 用于去重和删除
+        data_api_create = DataApi(api_key, Config.JDY_API_HOST, qps=20)
+        data_api_update = DataApi(api_key, Config.JDY_API_HOST, qps=20)
 
         stream = None
         try:
