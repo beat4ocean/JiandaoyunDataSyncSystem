@@ -1,3 +1,4 @@
+import re
 import time
 import os
 from datetime import timedelta
@@ -36,7 +37,14 @@ def create_app():
     # --- CORS 配置 ---
     CORS(app, supports_credentials=True, origins=[
         "http://localhost:5173", "http://127.0.0.1:5173",  # 常见的 Vite/Vue 开发端口
-        "http://localhost:5000", "http://127.0.0.1:5000"  # 后端服务端口
+        "http://localhost:5000", "http://127.0.0.1:5000",  # 后端服务端口
+
+        # 保留服务器配置
+        "http://0.0.0.0:5173",
+        "http://0.0.0.0:5000",
+
+        # 密码允许所有 10.x.x.x 网段的 IP (http 或 https)
+        re.compile(r"^https?://10\..*")
     ])
 
     # 2. 注册蓝图
