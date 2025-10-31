@@ -569,10 +569,11 @@ class SyncService:
         执行全量替换同步
         (视图检查, 事务 ID, 修复响应逻辑)
         """
-        if self._is_view(task):
-            log_sync_error(task_config=task,
-                           extra_info=f"[{task.task_id}] FULL_REPLACE mode is not allowed for VIEWS. Skipping task.")
-            return
+        # 视图支持全量覆盖
+        # if self._is_view(task):
+        #     log_sync_error(task_config=task,
+        #                    extra_info=f"[{task.task_id}] FULL_REPLACE mode is not allowed for VIEWS. Skipping task.")
+        #     return
 
         print(f"[{task.task_id}] Running FULL_REPLACE sync (Scheduled)...")
         self._update_task_status(config_session, task, status='running')
