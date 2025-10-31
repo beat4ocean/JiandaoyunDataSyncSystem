@@ -7,6 +7,8 @@ import json
 import time
 from datetime import datetime, timedelta
 
+from requests import RequestException, HTTPError
+
 from app.utils import TZ_UTC_8
 
 
@@ -104,7 +106,7 @@ class ApiClient:
                         res.raise_for_status()
 
 
-            except (requests.exceptions.RequestException, requests.exceptions.HTTPError) as e:
+            except (RequestException, HTTPError) as e:
                 last_exception = e
                 print(f"API 请求到 '{endpoint}' 失败 (尝试 {attempt + 1}/{self.retry_count + 1}): {e}")
                 if attempt < self.retry_count:
