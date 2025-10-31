@@ -6,9 +6,11 @@ from flask import Blueprint, jsonify, request, g
 from flask_jwt_extended import jwt_required
 from sqlalchemy import select, update, delete, desc
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import joinedload
 
 from app.models import ConfigSession, JdyKeyInfo, SyncTask, SyncErrLog, FormFieldMapping
 from app.utils import TZ_UTC_8
+from app.scheduler import scheduler, add_or_update_task_in_scheduler, remove_task_from_scheduler
 
 api_bp = Blueprint('api', __name__, url_prefix='/api')
 
@@ -164,8 +166,18 @@ def add_sync_task():
             status='idle'  # Initial status
         )
         session.add(new_task)
-        session.commit()
-        return jsonify(row_to_dict(new_task)), 201
+        session.commit()  # 提交以获取 task_id
+
+        # --- 通知调度器 ---
+        # 重新查询更新后的任务，以确保所有字段 (包括 .department) 都是最新的
+        final_task = session.query(SyncTask).options(
+            joinedload(SyncTask.department)
+        ).get(new_task.task_id)
+
+        if final_task:
+            add_or_update_task_in_scheduler(final_task)
+
+        return jsonify(row_to_dict(final_task)), 201
     except IntegrityError as e:
         session.rollback()
         if "uq_app_entry" in str(e).lower():
@@ -211,7 +223,16 @@ def update_sync_task(task_id):
 
         if result.rowcount == 0:
             return jsonify({"error": "SyncTask not found"}), 404
-        updated_task = session.get(SyncTask, task_id)
+
+        # --- 通知调度器 ---
+        # 重新查询更新后的任务，以确保所有字段 (包括 .department) 都是最新的
+        updated_task = session.query(SyncTask).options(
+            joinedload(SyncTask.department)
+        ).get(task_id)
+
+        if updated_task:
+            add_or_update_task_in_scheduler(updated_task)
+
         return jsonify(row_to_dict(updated_task))
     except IntegrityError as e:
         session.rollback()
@@ -231,6 +252,10 @@ def update_sync_task(task_id):
 def delete_sync_task(task_id):
     session = g.config_session
     try:
+        # --- 通知调度器 ---
+        # 在删除数据库记录之前，先从调度器中移除
+        remove_task_from_scheduler(task_id)
+
         # 使用 task_id
         stmt = delete(SyncTask).where(SyncTask.task_id == task_id)
         result = session.execute(stmt)
@@ -273,7 +298,7 @@ def get_sync_logs():
 def get_field_mappings():
     session = g.config_session
     try:
-        # (修改) 使用 task_id 过滤
+        # 使用 task_id 过滤
         task_id = request.args.get('task_id')
 
         query = select(FormFieldMapping)

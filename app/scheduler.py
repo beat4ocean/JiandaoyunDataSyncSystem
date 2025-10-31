@@ -4,6 +4,7 @@ import traceback
 from datetime import datetime, timedelta
 from threading import current_thread
 
+from apscheduler.jobstores.base import JobLookupError
 from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask
 from sqlalchemy.exc import OperationalError
@@ -254,6 +255,82 @@ def update_all_field_mappings_job():
             traceback.print_exc()
 
 
+# --- 调度器辅助函数 ---
+
+def remove_task_from_scheduler(task_id: int):
+    """从调度器中移除一个作业 (FULL_REPLACE 或 INCREMENTAL)"""
+    job_id = f"task_{task_id}"
+    try:
+        scheduler.remove_job(job_id)
+        print(f"[{job_id}] Removed job from scheduler.")
+    except JobLookupError:
+        # 作业不存在，这没问题
+        print(f"[{job_id}] Job not found in scheduler, nothing to remove.")
+    except Exception as e:
+        # 记录其他潜在错误
+        print(f"[{job_id}] Error removing job: {e}")
+
+
+def add_or_update_task_in_scheduler(task: SyncTask):
+    """
+    根据 SyncTask 对象在调度器中添加或更新一个作业。
+    注意: BINLOG 任务由 binlog_manager 自动管理，此处跳过。
+    """
+    job_id = f"task_{task.task_id}"
+
+    # 如果任务被禁用，确保它被移除
+    if not task.is_active:
+        remove_task_from_scheduler(task.task_id)
+        print(f"[{job_id}] Task is inactive, removing from schedule.")
+        return
+
+    if task.sync_mode == 'FULL_REPLACE':
+        if task.full_replace_time:
+            print(f"Scheduling {job_id} (FULL_REPLACE) at {task.full_replace_time}")
+            scheduler.add_job(
+                run_task_wrapper,
+                trigger='cron',
+                hour=task.full_replace_time.hour,
+                minute=task.full_replace_time.minute,
+                args=[task.task_id],
+                id=job_id,
+                replace_existing=True,
+                max_instances=1  # (关键) 防止并发
+            )
+        else:
+            # 任务激活但没有时间，应移除
+            print(
+                f"Warning: Task {task.task_id} (FULL_REPLACE) is active but has no time. Removing from schedule.")
+            remove_task_from_scheduler(task.task_id)
+
+    elif task.sync_mode == 'INCREMENTAL':
+        if task.incremental_interval and task.incremental_interval > 0:
+            print(f"Scheduling {job_id} (INCREMENTAL) every {task.incremental_interval} minutes.")
+            scheduler.add_job(
+                run_task_wrapper,
+                trigger='interval',
+                minutes=task.incremental_interval,
+                args=[task.task_id],
+                id=job_id,
+                replace_existing=True,
+                max_instances=1,  # (关键) 防止并发
+                next_run_time=datetime.now(TZ_UTC_8) + timedelta(seconds=10)  # 10秒后启动
+            )
+        else:
+            # 任务激活但没有间隔，应移除
+            print(
+                f"Warning: Task {task.task_id} (INCREMENTAL) is active but has no interval. Removing from schedule.")
+            remove_task_from_scheduler(task.task_id)
+
+    elif task.sync_mode == 'BINLOG':
+        # BINLOG 任务由 binlog_manager 自动处理。
+        # 但如果任务 *从* 另一种模式 *切换到* BINLOG，我们需要移除旧的作业。
+        print(f"Task {job_id} (BINLOG) is active. Ensuring no old CRON/INTERVAL job exists.")
+        remove_task_from_scheduler(task.task_id)
+
+
+# --- 启动调度器 ---
+
 def start_scheduler(app: Flask):
     """
     添加作业并启动调度器。
@@ -270,45 +347,8 @@ def start_scheduler(app: Flask):
                 print(f"Found {len(tasks)} active tasks to schedule.")
 
                 for task in tasks:
-                    job_id = f"task_{task.task_id}"
-
-                    if task.sync_mode == 'FULL_REPLACE':
-                        if task.full_replace_time:
-                            print(f"Scheduling {job_id} (FULL_REPLACE) at {task.full_replace_time}")
-                            scheduler.add_job(
-                                run_task_wrapper,
-                                trigger='cron',
-                                hour=task.full_replace_time.hour,
-                                minute=task.full_replace_time.minute,
-                                args=[task.task_id],
-                                id=job_id,
-                                replace_existing=True,
-                                max_instances=1  # (关键) 防止并发
-                            )
-                        else:
-                            print(
-                                f"Warning: Task {task.task_id} (FULL_REPLACE) is active but has no full_replace_time. It will not run.")
-
-                    elif task.sync_mode == 'INCREMENTAL':
-                        if task.incremental_interval and task.incremental_interval > 0:
-                            print(f"Scheduling {job_id} (INCREMENTAL) every {task.incremental_interval} minutes.")
-                            scheduler.add_job(
-                                run_task_wrapper,
-                                trigger='interval',
-                                minutes=task.incremental_interval,
-                                args=[task.task_id],
-                                id=job_id,
-                                replace_existing=True,
-                                max_instances=1,  # (关键) 防止并发
-                                next_run_time=datetime.now(TZ_UTC_8) + timedelta(seconds=10)  # 10秒后启动
-                            )
-                        else:
-                            print(
-                                f"Warning: Task {task.task_id} (INCREMENTAL) is active but has no incremental_interval. It will not run.")
-
-                    elif task.sync_mode == 'BINLOG':
-                        # BINLOG 任务由 check_and_start_new_binlog_listeners 自动处理
-                        print(f"Task {job_id} (BINLOG) will be managed by BinlogManager.")
+                    # 调用新的可重用函数来添加每个作业
+                    add_or_update_task_in_scheduler(task)
 
             # 2. 添加 BINLOG 监听器管理器
             scheduler.add_job(
