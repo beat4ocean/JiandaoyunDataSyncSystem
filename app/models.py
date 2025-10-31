@@ -1,17 +1,17 @@
 from datetime import datetime
 
-from sqlalchemy import Index, Boolean, Time
-from sqlalchemy import (create_engine, MetaData, Column, Integer, String,
-                        DateTime, Text, UniqueConstraint)
+from sqlalchemy import (Index, Boolean, Time, create_engine, MetaData, Column, Integer, String,
+                        DateTime, Text, UniqueConstraint, ForeignKey)
 from sqlalchemy.dialects.mysql import LONGTEXT
-from sqlalchemy.orm import sessionmaker, DeclarativeBase
+from sqlalchemy.orm import sessionmaker, DeclarativeBase, relationship
+from passlib.hash import pbkdf2_sha256 as sha256
 
 from app.config import CONFIG_DB_URL, SOURCE_DB_URL, DB_CONNECT_ARGS
 from app.utils import TZ_UTC_8
 
 # --- 数据库引擎和会话 ---
 
-# 配置数据库 (存储租户、任务配置、日志)
+# 配置数据库 (存储任务、日志、用户)
 config_engine = create_engine(CONFIG_DB_URL, pool_recycle=3600, connect_args=DB_CONNECT_ARGS)
 ConfigSession = sessionmaker(bind=config_engine)
 config_metadata = MetaData()
@@ -31,13 +31,42 @@ class SourceBase(DeclarativeBase):
     metadata = source_metadata
 
 
-# --- 配置数据库模型 ---
+# --- 新增模型 ---
 
-# 2. 将 Table() 定义重写为 ORM 模型类
+class User(ConfigBase):
+    """存储用户信息"""
+    __tablename__ = 'users'
+    id = Column(Integer, primary_key=True)
+    username = Column(String(120), unique=True, nullable=False, comment="用户名")
+    password_hash = Column(String(128), comment="密码哈希")  # 存储密码哈希
+
+    def set_password(self, password):
+        """设置密码 (加密)"""
+        self.password_hash = sha256.hash(password)
+
+    def check_password(self, password):
+        """校验密码"""
+        return sha256.verify(password, self.password_hash)
+
+
+class JdyKeyInfo(ConfigBase):
+    """
+    存储部门（租户）与简道云项目API Key的映射关系
+    """
+    __tablename__ = 'jdy_key_info'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    department_name = Column(String(100), nullable=False, unique=True, comment="部门英文简称, 例如: 'dpt_a'")
+    api_key = Column(String(255), nullable=False, comment="该项目专属的 API Key")
+
+    # 与任务的关联
+    tasks = relationship("SyncTask", back_populates="department")
+
+
+# --- 更新的现有模型 ---
 
 class SyncTask(ConfigBase):
     """
-    同步任务配置表
+    存储同步任务的配置信息
     """
     __tablename__ = 'sync_tasks'
 
@@ -52,7 +81,11 @@ class SyncTask(ConfigBase):
     # 简道云配置
     jdy_app_id = Column(String(100), nullable=False, comment="简道云应用ID")
     jdy_entry_id = Column(String(100), nullable=False, comment="简道云表单ID")
-    jdy_api_key = Column(String(255), nullable=False, comment="简道云 API Key")
+
+    # 删除 jdy_api_key，替换为与部门的关联
+    department_name = Column(String(100), ForeignKey('jdy_key_info.department_name'), nullable=False,
+                             comment="关联的部门 (用于获取 API Key)")
+    department = relationship("JdyKeyInfo", back_populates="tasks")
 
     # 同步模式
     sync_mode = Column(String(50), nullable=False, default='INCREMENTAL',
@@ -63,9 +96,10 @@ class SyncTask(ConfigBase):
     incremental_interval = Column(Integer, comment="增量同步间隔 (分钟) (仅 INCREMENTAL 模式)")
     # 全量同步定时时间
     full_replace_time = Column(Time, nullable=True, comment="全量同步时间 (仅 FULL_REPLACE 模式)")
-    # 源数据库过滤
+    # 源数据 SQL 过滤器
     source_filter_sql = Column(Text, nullable=True, comment="源数据库过滤 SQL (用于 INCREMENTAL 和 FULL_REPLACE模式)")
-    # 状态与日志
+
+    # 状态和日志
     status = Column(String(20), default='idle', comment="任务状态 (idle, running, error, disabled)")
     # 上次同步时间
     last_sync_time = Column(DateTime, comment="上次同步时间 (用于 INCREMENTAL 和 FULL_REPLACE模式)")
@@ -78,12 +112,13 @@ class SyncTask(ConfigBase):
     send_error_log_to_wecom = Column(Boolean, default=False, nullable=False, comment="是否发送错误日志到企微")
     wecom_robot_webhook_url = Column(String(500), nullable=True, comment="企业微信机器人 Webhook URL")
 
-    created_at = Column(DateTime, default=datetime.now(TZ_UTC_8), comment="创建时间")
-    updated_at = Column(DateTime, default=datetime.now(TZ_UTC_8), onupdate=datetime.now(TZ_UTC_8),
+    created_at = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), comment="创建时间")
+    updated_at = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), onupdate=lambda: datetime.now(TZ_UTC_8),
                         comment="更新时间")
 
     __table_args__ = (
         Index('idx_mode_status', 'sync_mode', 'status'),
+        UniqueConstraint('jdy_app_id', 'jdy_entry_id', name='uq_app_entry'),
     )
 
 
@@ -94,7 +129,7 @@ class FormFieldMapping(ConfigBase):
     __tablename__ = 'form_fields_mapping'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    task_id = Column(Integer, nullable=False, comment="关联的任务ID (替换了 app_id 和 entry_id)")
+    task_id = Column(Integer, nullable=False, comment="关联的任务ID")  # 已经使用 task_id
 
     form_name = Column(String(255), nullable=True, comment="简道云表单名")
     widget_name = Column(String(255), nullable=False, comment="字段ID (e.g., _widget_xxx_, 用于 API 提交)")
@@ -129,10 +164,13 @@ class SyncErrLog(ConfigBase):
     entry_id = Column(String(100), nullable=True)
     table_name = Column(String(255), nullable=True)
 
+    # 为符合 UI 要求添加
+    department_name = Column(String(100), nullable=True, comment="关联的部门")
+
     error_message = Column(Text, nullable=False)
     traceback = Column(Text, nullable=True)
     payload = Column(LONGTEXT, nullable=True)
-    timestamp = Column(DateTime, default=datetime.now(TZ_UTC_8), comment="发生错误时间")
+    timestamp = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), comment="发生错误时间")
 
     __table_args__ = (
         Index('idx_task_time', 'task_id', 'timestamp'),

@@ -7,3 +7,9 @@ pymysql
 python-dotenv
 requests
 cryptography
+
+# auth
+passlib[bcrypt]>=1.7 # For password hashing
+Flask-JWT-Extended>=4.0 # For authentication tokens
+Flask-Cors>=3.0 # For Cross-Origin Resource Sharing
+cryptography
