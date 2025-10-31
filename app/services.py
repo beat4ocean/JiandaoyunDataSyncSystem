@@ -1,7 +1,7 @@
-from datetime import datetime
 import json
 import time
 import uuid
+from datetime import datetime
 from threading import current_thread
 from typing import Tuple, List, Any
 
@@ -14,13 +14,13 @@ from pymysqlreplication.row_event import (
 )
 from sqlalchemy import text, inspect
 from sqlalchemy.exc import OperationalError, IntegrityError, NoSuchTableError
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from app.config import Config
 from app.jdy_api import FormApi, DataApi
 from app.models import (
     ConfigSession, SourceSession, source_engine,
-    SyncTask, FormFieldMapping, JdyKeyInfo
+    SyncTask, FormFieldMapping
 )
 from app.utils import log_sync_error, json_serializer, TZ_UTC_8, retry
 
@@ -61,17 +61,17 @@ class FieldMappingService:
         从简道云 API 更新指定任务的字段映射缓存
         """
         print(f"[{task.task_id}] Updating field mappings for task...")
-        try:
-            # 1. 动态获取 API Key
-            if not task.department:
-                # 如果 task 对象没有预加载 department, 手动查询
-                key_info = config_session.query(JdyKeyInfo).filter_by(department_name=task.department_name).first()
-                if not key_info:
-                    raise ValueError(f"Task {task.task_id} missing valid department/api_key configuration.")
-                api_key = key_info.api_key
-            else:
-                api_key = task.department.api_key
 
+        if not task.department or not task.department.api_key:
+            log_sync_error(
+                task_config=task,
+                error=ValueError(f"Task {task.task_id} missing department or API key."),
+                extra_info="Failed to update field mappings."
+            )
+            return
+        api_key = task.department.api_key
+
+        try:
             # 1. 实例化
             form_api = FormApi(api_key=api_key, host=Config.JDY_API_HOST, qps=30)
 
@@ -478,12 +478,11 @@ class SyncService:
         total_deleted = 0
         total_created = 0
 
-        try:
-            # 1. 动态获取 API Key
-            if not task.department:
-                raise ValueError(f"Task {task.task_id} missing department/api_key configuration for _run_full_sync.")
-            api_key = task.department.api_key
+        if not task.department or not task.department.api_key:
+            raise ValueError(f"Task {task.task_id} missing department or API key for {mode}.")
+        api_key = task.department.api_key
 
+        try:
             mapping_service = FieldMappingService()
             payload_map = mapping_service.get_payload_mapping(config_session, task.task_id)
             if not payload_map:
@@ -613,6 +612,16 @@ class SyncService:
         print(f"[{task.task_id}] Running INCREMENTAL sync...")
         self._update_task_status(config_session, task, status='running')
 
+        if not task.department or not task.department.api_key:
+            log_sync_error(
+                task_config=task,
+                error=ValueError(f"Task {task.task_id} missing department or API key for INCREMENTAL."),
+                extra_info="INCREMENTAL failed."
+            )
+            self._update_task_status(config_session, task, status='error')
+            return
+        api_key = task.department.api_key
+
         try:
             current_sync_time = datetime.now(TZ_UTC_8)
 
@@ -639,10 +648,10 @@ class SyncService:
             if not task.incremental_field:
                 raise ValueError("Incremental field (e.g., last_modified) is not configured.")
 
-            # 2a. 动态获取 API Key
-            if not task.department:
-                raise ValueError(f"Task {task.task_id} missing department/api_key configuration for run_incremental.")
-            api_key = task.department.api_key
+            # # 2a. 动态获取 API Key
+            # if not task.department:
+            #     raise ValueError(f"Task {task.task_id} missing department/api_key configuration for run_incremental.")
+            # api_key = task.department.api_key
 
             mapping_service = FieldMappingService()
             payload_map = mapping_service.get_payload_mapping(config_session, task.task_id)
@@ -740,10 +749,13 @@ class SyncService:
         current_thread().name = thread_name
         print(f"[{thread_name}] Starting...")
 
-        # 1. 动态获取 API Key
-        if not task.department:
-            log_sync_error(task_config=task, error=ValueError("Task missing department"),
-                           extra_info=f"[{thread_name}] CRITICAL: Task missing department/api_key config.")
+        if not task.department or not task.department.api_key:
+            log_sync_error(
+                task_config=task,
+                error=ValueError(f"Task {task.task_id} missing department or API key for BINLOG."),
+                extra_info="BINLOG listener stopped."
+            )
+            # 状态将在 run_binlog_listener_in_thread 的 finally 块中被设置为 error
             return
         api_key = task.department.api_key
 

@@ -38,15 +38,15 @@ class User(ConfigBase):
     __tablename__ = 'users'
     id = Column(Integer, primary_key=True)
     username = Column(String(120), unique=True, nullable=False, comment="用户名")
-    password_hash = Column(String(128), comment="密码哈希")  # 存储密码哈希
+    password = Column(String(128), comment="密码")  # 存储密码哈希
 
     def set_password(self, password):
         """设置密码 (加密)"""
-        self.password_hash = sha256.hash(password)
+        self.password = sha256.hash(password)
 
     def check_password(self, password):
         """校验密码"""
-        return sha256.verify(password, self.password_hash)
+        return sha256.verify(password, self.password)
 
 
 # --- 密钥/部门模型 ---
@@ -87,7 +87,6 @@ class SyncTask(ConfigBase):
     # 删除 jdy_api_key，替换为与部门的关联
     department_name = Column(String(100), ForeignKey('jdy_key_info.department_name'), nullable=False,
                              comment="关联的部门 (用于获取 API Key)")
-    department = relationship("JdyKeyInfo", back_populates="tasks")
 
     # 同步模式
     sync_mode = Column(String(50), nullable=False, default='INCREMENTAL',
@@ -117,6 +116,8 @@ class SyncTask(ConfigBase):
     created_at = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), comment="创建时间")
     updated_at = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), onupdate=lambda: datetime.now(TZ_UTC_8),
                         comment="更新时间")
+
+    department = relationship("JdyKeyInfo", back_populates="tasks")
 
     __table_args__ = (
         Index('idx_mode_status', 'sync_mode', 'status'),

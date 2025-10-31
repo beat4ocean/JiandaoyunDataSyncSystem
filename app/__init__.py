@@ -114,5 +114,5 @@ def create_app():
             # 其他所有路径都返回 index.html，交由 Vue Router 处理
             return send_from_directory(app.static_folder, 'index.html')
 
-    print("Flask App created with manual session management and connection retry.")
+    print("Flask App created with JWT, CORS, and SPA frontend serving.")
     return app

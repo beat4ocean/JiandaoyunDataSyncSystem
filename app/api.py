@@ -189,11 +189,11 @@ def update_sync_task(task_id):
 
         update_values = {
             'task_name': data.get('task_name'),
-            'department_name': data.get('department_name'),
             'source_table': data.get('source_table'),
             'pk_field_names': data.get('pk_field_names'),
             'jdy_app_id': data.get('jdy_app_id'),
             'jdy_entry_id': data.get('jdy_entry_id'),
+            'department_name': data.get('department_name'),
             'sync_mode': data.get('sync_mode'),
             'incremental_field': data.get('incremental_field'),
             'incremental_interval': data.get('incremental_interval'),

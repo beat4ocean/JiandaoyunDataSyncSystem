@@ -8,17 +8,13 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
 from waitress import serve
 
+from app.config import CONFIG_DB_URL, DB_CONNECT_ARGS, CONFIG_DB_NAME, SOURCE_DB_NAME, CONFIG_DB_USER
+
 # 确保 app 目录在 sys.path 中
 sys.path.append(os.path.join(os.path.dirname(__file__), 'app'))
 
 try:
     from app import create_app
-    from app.config import (
-        Config, CONFIG_DB_URL, CONFIG_DB_NAME, SOURCE_DB_NAME,
-        CONFIG_DB_USER, CONFIG_DB_PASSWORD, CONFIG_DB_HOST, CONFIG_DB_PORT,
-        SOURCE_DB_USER, SOURCE_DB_PASSWORD, SOURCE_DB_HOST, SOURCE_DB_PORT,
-        DB_CONNECT_ARGS
-    )
     from app.models import (
         config_engine, source_engine, config_metadata, source_metadata,
         ConfigSession, User
@@ -42,13 +38,7 @@ def initialize_databases(app: Flask):
 
         # 1. 创建一个"根"连接（不指定数据库名称），用于创建数据库
         try:
-            # (Config.CONFIG_DB_PASSWORD 已经是 URL 编码的)
-            admin_db_url = (
-                f"mysql+pymysql://{Config.CONFIG_DB_USER}:{Config.CONFIG_DB_PASSWORD}@"
-                f"{Config.CONFIG_DB_HOST}:{Config.CONFIG_DB_PORT}?charset=utf8mb4"
-            )
-            # 使用 DB_CONNECT_ARGS
-            admin_engine = create_engine(admin_db_url, connect_args=DB_CONNECT_ARGS)
+            admin_engine = create_engine(CONFIG_DB_URL, connect_args=DB_CONNECT_ARGS)
 
             with admin_engine.connect() as connection:
                 # 检查并创建配置数据库

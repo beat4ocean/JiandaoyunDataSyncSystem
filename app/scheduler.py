@@ -171,8 +171,10 @@ def check_and_start_new_binlog_listeners():
                 print(f"[{thread_name}] Found {len(tasks_to_start)} new BINLOG tasks to start.")
                 sync_service = SyncService()  # 实例化
 
-                for task in active_binlog_tasks:
-                    if task.task_id not in tasks_to_start:
+                for task_id in tasks_to_start:
+                    # 从已加载的列表中获取任务，而不是重新查询
+                    task = next((t for t in active_binlog_tasks if t.task_id == task_id), None)
+                    if not task:
                         continue
 
                     # (关键) 检查是否已在运行 (以防万一)
@@ -192,11 +194,11 @@ def check_and_start_new_binlog_listeners():
 
                     listener_thread = threading.Thread(
                         target=run_binlog_listener_in_thread,
-                        args=(task.task_id,),
+                        args=(task_id,),
                         daemon=True  # 守护线程随主程序退出
                     )
                     listener_thread.start()
-                    running_binlog_listeners.add(task.task_id)
+                    running_binlog_listeners.add(task_id)
                     time.sleep(1)  # 错开启动
 
         except OperationalError as e:
@@ -262,7 +264,9 @@ def start_scheduler(app: Flask):
         try:
             with ConfigSession() as config_session:
                 # 1. 遍历所有激活的任务并动态添加作业
-                tasks = config_session.query(SyncTask).filter_by(is_active=True).all()
+                tasks = config_session.query(SyncTask).options(
+                    joinedload(SyncTask.department)
+                ).filter_by(is_active=True).all()
                 print(f"Found {len(tasks)} active tasks to schedule.")
 
                 for task in tasks:

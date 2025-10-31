@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MySQL 同步至简道云配置</title>
+    <title>MySQL数据同步至简道云配置</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css"/>
     <script src="//unpkg.com/@element-plus/icons-vue"></script>
@@ -49,7 +49,7 @@
         <template v-else>
             <div class="app-container">
                 <el-header height="60px">
-                    <h2>MySQL 同步至简道云配置</h2>
+                    <h2>MySQL同步至简道云配置</h2>
                     <div>
                         <span>你好, {{ username }}</span>
                         <el-button type="danger" link @click="logout" style="margin-left: 15px;">退出登录</el-button>
@@ -224,7 +224,7 @@
     const LoginView = {
         template: `
           <el-card class="login-card">
-            <h1 class="login-title">MySQL 数据同步系统</h1>
+            <h1 class="login-title">MySQL -> 简道云 数据同步系统</h1>
             <h2>登录</h2>
             <el-form @submit.prevent="submitLogin" ref="loginFormRef" :model="loginForm" :rules="loginRules" label-position="top">
               <el-form-item label="用户名" prop="username">
@@ -396,7 +396,7 @@
                   </el-col>
                   <el-col :span="12">
                     <el-form-item label="源表主键" prop="pk_field_names">
-                      <el-input v-model="currentItem.pk_field_names" placeholder="e.g., id (复合主键用逗号分隔)"></el-input>
+                      <el-input v-model="currentItem.pk_field_names" placeholder="e.g., id (复合主键用英文逗号分隔)"></el-input>
                     </el-form-item>
                   </el-col>
                 </el-row>
@@ -442,7 +442,7 @@
                     </el-col>
                     <el-col :span="12">
                       <el-form-item label="增量间隔 (分钟)" prop="incremental_interval">
-                        <el-input-number v-model="currentItem.incremental_interval" :min="1" style="width: 100%;"></el-input-number>
+                        <el-input-number v-model="currentItem.incremental_interval" :min="5" style="width: 100%;"></el-input-number>
                       </el-form-item>
                     </el-col>
                   </el-row>
@@ -480,7 +480,7 @@
                      </el-form-item>
                    </el-col>
                  </el-row>
-                 <el-form-item label="企微机器人 Webhook URL (可选)" prop="wecom_robot_webhook_url"
+                 <el-form-item label="企微机器人 Webhook URL" prop="wecom_robot_webhook_url"
                                v-if="currentItem.send_error_log_to_wecom">
                    <el-input type="textarea" v-model="currentItem.wecom_robot_webhook_url"
                              placeholder="如果打开了企微错误通知，请粘贴机器人 URL"></el-input>
