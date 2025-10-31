@@ -166,6 +166,9 @@ class DataApi(ApiClient):
     封装了与简道云「表单数据」相关的增删改查接口。
     """
 
+    # 定义批处理上限
+    BATCH_LIMIT = 100
+
     def __init__(self, api_key, host, qps, **kwargs):
         """
         :param qps: 必须为特定操作指定QPS, e.g., 30 for list, 10 for batch_create.
@@ -213,11 +216,24 @@ class DataApi(ApiClient):
         return self._send_request(endpoint, data)
 
     def create_batch_data(self, app_id, entry_id, data_list, **kwargs):
-        """新建多条数据 (V5, QPS: 10)"""
+        """
+        新建多条数据 (V5, QPS: 10)
+        自动按100条/批次分割。
+        """
         if self.qps > 10: print("警告: QPS可能设置错误，新建多条数据应为 10")
         endpoint = "api/v5/app/entry/data/batch_create"
-        data = {"app_id": app_id, "entry_id": entry_id, "data_list": data_list, **kwargs}
-        return self._send_request(endpoint, data)
+
+        results = []
+        # 按 BATCH_LIMIT (100) 切分 data_list
+        for i in range(0, len(data_list), self.BATCH_LIMIT):
+            chunk = data_list[i:i + self.BATCH_LIMIT]
+            data = {"app_id": app_id, "entry_id": entry_id, "data_list": chunk, **kwargs}
+
+            print(f"INFO: [CreateBatch] 正在发送批次 {i // self.BATCH_LIMIT + 1}，包含 {len(chunk)} 条数据...")
+            result = self._send_request(endpoint, data)
+            results.append(result)
+
+        return results
 
     def update_single_data(self, app_id, entry_id, data_id, data_payload, **kwargs):
         """修改单条数据 (V5, QPS: 20)"""
@@ -227,14 +243,28 @@ class DataApi(ApiClient):
         return self._send_request(endpoint, data)
 
     def update_batch_data(self, app_id, entry_id, data_ids, data_payload, **kwargs):
-        """修改多条数据 (V5, QPS: 10)"""
+        """
+        修改多条数据 (V5, QPS: 10)
+        自动按100条/批次分割。
+        """
         if self.qps > 10: print("警告: QPS可能设置错误，修改多条数据应为 10")
         endpoint = "api/v5/app/entry/data/batch_update"
-        # Ensure data_ids is a list
+
+        # 确保 data_ids 是列表
         if isinstance(data_ids, str):
             data_ids = [data_ids]
-        data = {"app_id": app_id, "entry_id": entry_id, "data_ids": data_ids, "data": data_payload, **kwargs}
-        return self._send_request(endpoint, data)
+
+        results = []
+        # 按 BATCH_LIMIT (100) 切分 data_ids
+        for i in range(0, len(data_ids), self.BATCH_LIMIT):
+            chunk = data_ids[i:i + self.BATCH_LIMIT]
+            data = {"app_id": app_id, "entry_id": entry_id, "data_ids": chunk, "data": data_payload, **kwargs}
+
+            print(f"INFO: [UpdateBatch] 正在更新批次 {i // self.BATCH_LIMIT + 1}，包含 {len(chunk)} 条数据...")
+            result = self._send_request(endpoint, data)
+            results.append(result)
+
+        return results
 
     def delete_single_data(self, app_id, entry_id, data_id, **kwargs):
         """删除单条数据 (V5, QPS: 20)"""
@@ -244,11 +274,25 @@ class DataApi(ApiClient):
         return self._send_request(endpoint, data)
 
     def delete_batch_data(self, app_id, entry_id, data_ids):
-        """删除多条数据 (V5, QPS: 10)"""
+        """
+        删除多条数据 (V5, QPS: 10)
+        自动按100条/批次分割。
+        """
         if self.qps > 10: print("警告: QPS可能设置错误，删除多条数据应为 10")
         endpoint = "api/v5/app/entry/data/batch_delete"
-        # Ensure data_ids is a list
+
+        # 确保 data_ids 是列表
         if isinstance(data_ids, str):
             data_ids = [data_ids]
-        data = {"app_id": app_id, "entry_id": entry_id, "data_ids": data_ids}
-        return self._send_request(endpoint, data)
+
+        results = []
+        # 按 BATCH_LIMIT (100) 切分 data_ids
+        for i in range(0, len(data_ids), self.BATCH_LIMIT):
+            chunk = data_ids[i:i + self.BATCH_LIMIT]
+            data = {"app_id": app_id, "entry_id": entry_id, "data_ids": chunk}
+
+            print(f"INFO: [DeleteBatch] 正在删除批次 {i // self.BATCH_LIMIT + 1}，包含 {len(chunk)} 条数据...")
+            result = self._send_request(endpoint, data)
+            results.append(result)
+
+        return results
