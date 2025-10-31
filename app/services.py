@@ -41,8 +41,21 @@ class FieldMappingService:
                (e.g., { 'name': '_widget_123' })
         """
         mappings = config_session.query(FormFieldMapping).filter_by(task_id=task_id).all()
-        # widget_alias 现在是 MySQL 的列名
-        return {m.widget_alias: m.widget_name for m in mappings}
+
+        result = {}
+        for m in mappings:
+            # 判断 widget_alias 是否是 _widget_数字 的格式
+            if m.widget_alias and m.widget_alias.startswith('_widget_') and m.widget_alias[8:].isdigit():
+                # 如果是 _widget_数字 格式，使用 m.label 作为 表字段名
+                key, value = m.label, m.widget_name
+            else:
+                # 如果不是，使用 m.widget_alias 作为 表字段名
+                # key, value = m.widget_alias, m.widget_alias
+                key, value = m.widget_alias, m.widget_name
+
+            result[key] = value
+
+        return result
 
     @retry()
     def get_alias_mapping(self, config_session: Session, task_id: int) -> dict:
@@ -52,8 +65,21 @@ class FieldMappingService:
                (e.g., { 'name': 'name' })
         """
         mappings = config_session.query(FormFieldMapping).filter_by(task_id=task_id).all()
-        # widget_alias 既是 MySQL 列名, 也是 Jdy API filter 的 'name'
-        return {m.widget_alias: m.widget_alias for m in mappings}
+
+        result = {}
+        for m in mappings:
+            # 判断 widget_alias 是否是 _widget_数字 的格式
+            if m.widget_alias and m.widget_alias.startswith('_widget_') and m.widget_alias[8:].isdigit():
+                # 如果是 _widget_数字 格式，使用 m.label
+                key, value = m.label, m.widget_name
+            else:
+                # 如果不是，使用 m.widget_alias
+                # key, value = m.widget_alias, m.widget_alias
+                key, value = m.widget_alias, m.widget_name
+
+            result[key] = value
+
+        return result
 
     @retry()
     def update_form_fields_mapping(self, config_session: Session, task: SyncTask):
