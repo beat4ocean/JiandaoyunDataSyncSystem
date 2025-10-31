@@ -1,7 +1,7 @@
 import json
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, time as time_obj
 from threading import current_thread
 from typing import Tuple, List, Any
 
@@ -694,12 +694,76 @@ class SyncService:
             # 4. 确定时间戳
             last_sync_time = task.last_sync_time or datetime(1970, 1, 1, tzinfo=TZ_UTC_8)
 
+            # --- 数据探测逻辑 ---
+            inspector = inspect(source_engine)
+            col_info = None
+            try:
+                columns = inspector.get_columns(task.source_table)
+                col_info = next((col for col in columns if col['name'] == task.incremental_field), None)
+            except NoSuchTableError:
+                raise ValueError(f"Incremental field's table '{task.source_table}' not found.")
+
+            if not col_info:
+                raise ValueError(
+                    f"Incremental field '{task.incremental_field}' not found in table '{task.source_table}'.")
+
+            col_type_name = str(col_info['type']).upper()
+
+            last_sync_time_for_query = None
+
+            if col_type_name == 'DATE':
+                # 1. 如果是 DATE 类型，总是截断
+                last_sync_time_for_query = last_sync_time.replace(hour=0, minute=0, second=0, microsecond=0)
+                print(f"[{task.task_id}] Detected DATE type. Querying >= {last_sync_time_for_query} (Truncated)")
+
+            elif col_type_name.startswith('DATETIME'):
+                # 2. 如果是 DATETIME，执行数据探测
+                print(f"[{task.task_id}] Detected DATETIME type. Probing data ...")
+                is_fake_datetime = False
+
+                # 探测查询，限制1000条
+                probe_query = text(
+                    f"SELECT `{task.incremental_field}` FROM `{task.source_table}` "
+                    f"WHERE `{task.incremental_field}` IS NOT NULL LIMIT 1000"
+                )
+                probe_results = source_session.execute(probe_query).fetchall()
+
+                if not probe_results:
+                    # 没有数据，无法判断。为安全起见，使用截断（防止丢失数据）
+                    print(f"[{task.task_id}] No data found for probing.")
+                    is_fake_datetime = True
+                else:
+                    # 检查是否所有时间戳都是 00:00:00
+                    min_time = time_obj(0, 0, 0)
+
+                    all_are_midnight = True
+                    for row in probe_results:
+                        dt_val = row[0]
+                        if dt_val is not None and dt_val.time() != min_time:
+                            # print(f"[{task.task_id}] Detected DATETIME type is yyyy-MM-dd HH:mm:ss.")
+                            all_are_midnight = False
+                            break
+                    is_fake_datetime = all_are_midnight
+
+                if is_fake_datetime:
+                    print(f"[{task.task_id}] Probe confirms yyyy-MM-dd 00:00:00 DATETIME format. Using truncated timestamp.")
+                    last_sync_time_for_query = last_sync_time.replace(hour=0, minute=0, second=0, microsecond=0)
+                else:
+                    print(f"[{task.task_id}] Probe found yyyy-MM-dd HH:mm:ss DATETIME format. Using exact timestamp.")
+                    last_sync_time_for_query = last_sync_time
+
+            else:
+                # 3. 如果是 TIMESTAMP 或其他类型，使用精确时间
+                last_sync_time_for_query = last_sync_time
+                print(f"[{task.task_id}] Detected {col_type_name} type. Querying >= {last_sync_time_for_query}")
+
             # 5. 获取源数据 (带 SQL 过滤)
             base_query = (
                 f"SELECT * FROM `{task.source_table}` "
                 f"WHERE `{task.incremental_field}` >= :last_sync_time"
             )
-            params = {"last_sync_time": last_sync_time}
+            # 使用动态确定的时间戳
+            params = {"last_sync_time": last_sync_time_for_query}
 
             if task.source_filter_sql:
                 base_query += f" AND ({task.source_filter_sql})"
@@ -707,7 +771,7 @@ class SyncService:
             rows = source_session.execute(text(base_query), params).mappings().all()
 
             if not rows:
-                print(f"[{task.task_id}] No new data found since {last_sync_time}.")
+                print(f"[{task.task_id}] No new data found since {last_sync_time_for_query}.")
                 self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
                 return
 
