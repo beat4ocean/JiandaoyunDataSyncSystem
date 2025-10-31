@@ -533,9 +533,10 @@ class SyncService:
                         break
 
                     data_ids = [d['_id'] for d in jdy_data]
-                    delete_response = data_api_delete.delete_batch_data(task.jdy_app_id, task.jdy_entry_id, data_ids)
+                    delete_responses = data_api_delete.delete_batch_data(task.jdy_app_id, task.jdy_entry_id, data_ids)
 
-                    success_count = delete_response.get('success_count', 0)
+                    # 密码delete_batch_data 返回一个列表，需要对列表中的每个响应求和
+                    success_count = sum(resp.get('success_count', 0) for resp in delete_responses)
                     total_deleted += success_count
                     if success_count != len(data_ids):
                         log_sync_error(task_config=task,
@@ -564,11 +565,12 @@ class SyncService:
 
                 if len(batch_data) >= 100:  # API 限制 100
                     trans_id = str(uuid.uuid4())
-                    response = data_api_create.create_batch_data(
+                    responses = data_api_create.create_batch_data(
                         task.jdy_app_id, task.jdy_entry_id,
                         data_list=batch_data, transaction_id=trans_id
                     )
-                    success_count = response.get('success_count', 0)
+                    # 密码create_batch_data 返回一个列表，需要对列表中的每个响应求和
+                    success_count = sum(resp.get('success_count', 0) for resp in responses)
                     total_created += success_count
                     if success_count != len(batch_data):
                         log_sync_error(task_config=task,
@@ -577,11 +579,12 @@ class SyncService:
 
             if batch_data:
                 trans_id = str(uuid.uuid4())
-                response = data_api_create.create_batch_data(
+                responses = data_api_create.create_batch_data(
                     task.jdy_app_id, task.jdy_entry_id,
                     data_list=batch_data, transaction_id=trans_id
                 )
-                success_count = response.get('success_count', 0)
+                # 密码create_batch_data 返回一个列表，需要对列表中的每个响应求和
+                success_count = sum(resp.get('success_count', 0) for resp in responses)
                 total_created += success_count
                 if success_count != len(batch_data):
                     log_sync_error(task_config=task,
