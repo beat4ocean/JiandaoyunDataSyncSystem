@@ -71,9 +71,9 @@ class SyncTask(ConfigBase):
     last_sync_time = Column(DateTime, comment="上次同步时间 (用于 INCREMENTAL 和 FULL_REPLACE模式)")
     last_binlog_file = Column(String(255), comment="上次同步的 binlog 文件 (用于 BINLOG)")
     last_binlog_pos = Column(Integer, comment="上次同步的 binlog 位置 (用于 BINLOG)")
-    # 是否首次同步执行全量同步
-    is_full_sync_first = Column(Boolean, default=True,
-                                comment="是否首次同步执行全量同步 (用于 INCREMENTAL 和 BINLOG 模式)")
+    # 是否首次同步执行全量覆盖同步
+    is_full_replace_first = Column(Boolean, default=True,
+                                   comment="是否首次同步执行全量覆盖同步 (用于 INCREMENTAL 和 BINLOG 模式)")
     is_active = Column(Boolean, default=True, comment="任务是否启用")
     send_error_log_to_wecom = Column(Boolean, default=False, nullable=False, comment="是否发送错误日志到企微")
     wecom_robot_webhook_url = Column(String(500), nullable=True, comment="企业微信机器人 Webhook URL")

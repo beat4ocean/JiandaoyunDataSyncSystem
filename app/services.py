@@ -434,7 +434,7 @@ class SyncService:
             binlog_file: str = None,
             binlog_pos: int = None,
             last_sync_time: datetime = None,
-            is_full_sync_first: bool = None
+            is_full_replace_first: bool = None
     ):
         """
         安全地更新任务状态 (使用传入的会话)
@@ -447,8 +447,8 @@ class SyncService:
                 task.last_binlog_pos = binlog_pos
             if last_sync_time:
                 task.last_sync_time = last_sync_time
-            if is_full_sync_first is not None:
-                task.is_full_sync_first = is_full_sync_first
+            if is_full_replace_first is not None:
+                task.is_full_replace_first = is_full_replace_first
 
             config_session.commit()
         except Exception as e:
@@ -602,20 +602,20 @@ class SyncService:
             current_sync_time = datetime.now(TZ_UTC_8)
 
             # 1. 检查是否需要首次全量同步
-            if task.is_full_sync_first:
-                print(f"[{task.task_id}] First run: Executing initial full sync (no delete)...")
+            if task.is_full_replace_first:
+                print(f"[{task.task_id}] First run: Executing initial full replace...")
                 try:
-                    # 调用全量同步 (不删除)
-                    self._run_full_sync(config_session, source_session, task, delete_first=False)
+                    # 调用全量同步
+                    self._run_full_sync(config_session, source_session, task, delete_first=True)
                     # 成功后, 更新状态并退出
                     self._update_task_status(config_session, task,
                                              status='idle',
                                              last_sync_time=current_sync_time,
-                                             is_full_sync_first=False)
+                                             is_full_replace_first=False)
                     print(f"[{task.task_id}] Initial full sync complete.")
                     return  # 本次运行结束
                 except Exception as e:
-                    # 首次全量同步失败, 保持 is_full_sync_first=True, 设为 error
+                    # 首次全量同步失败, 保持 is_full_replace_first=True, 设为 error
                     config_session.rollback()
                     self._update_task_status(config_session, task, status='error')
                     return  # 退出
@@ -637,14 +637,14 @@ class SyncService:
             data_api_update = DataApi(task.jdy_api_key, Config.JDY_API_HOST, qps=20)  # Single update
 
             # 4. 确定时间戳
-            last_sync = task.last_sync_time or datetime(1970, 1, 1, tzinfo=TZ_UTC_8)
+            last_sync_time = task.last_sync_time or datetime(1970, 1, 1, tzinfo=TZ_UTC_8)
 
             # 5. 获取源数据 (带 SQL 过滤)
             base_query = (
                 f"SELECT * FROM `{task.source_table}` "
-                f"WHERE `{task.incremental_field}` >= :last_sync"
+                f"WHERE `{task.incremental_field}` >= :last_sync_time"
             )
-            params = {"last_sync": last_sync}
+            params = {"last_sync_time": last_sync_time}
 
             if task.source_filter_sql:
                 base_query += f" AND ({task.source_filter_sql})"
@@ -652,7 +652,7 @@ class SyncService:
             rows = source_session.execute(text(base_query), params).mappings().all()
 
             if not rows:
-                print(f"[{task.task_id}] No new data found since {last_sync}.")
+                print(f"[{task.task_id}] No new data found since {last_sync_time}.")
                 self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
                 return
 
@@ -729,17 +729,17 @@ class SyncService:
         stream = None
         try:
             # 2. 检查是否需要首次全量同步 (在启动监听器之前)
-            if task.is_full_sync_first:
-                print(f"[{thread_name}] First run: Executing initial full sync (no delete)...")
+            if task.is_full_replace_first:
+                print(f"[{thread_name}] First run: Executing initial full replace...")
                 try:
                     with ConfigSession() as config_session, SourceSession() as source_session:
-                        self._run_full_sync(config_session, source_session, task, delete_first=False)
+                        self._run_full_sync(config_session, source_session, task, delete_first=True)
 
                         # 成功后, 更新状态
                         self._update_task_status(config_session, task,
                                                  status='running',  # 保持 running, 因为我们要继续启动 binlog
                                                  last_sync_time=datetime.now(TZ_UTC_8),
-                                                 is_full_sync_first=False)
+                                                 is_full_replace_first=False)
                         print(f"[{thread_name}] Initial full sync complete. Proceeding to binlog...")
                 except Exception as e:
                     # 首次全量同步失败, 记录日志, 将任务设为 error 并退出线程
@@ -750,7 +750,7 @@ class SyncService:
                     return  # 退出线程
 
             # 3. 在线程启动时创建一次性的 ConfigSession 来更新状态 (如果上面没运行)
-            if not task.is_full_sync_first:  # 仅在非首次运行时
+            if not task.is_full_replace_first:  # 仅在非首次运行时
                 with ConfigSession() as session:
                     self._update_task_status(session, task, status='running')
                     session.refresh(task)  # 确保 task 对象是最新的
