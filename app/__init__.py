@@ -13,6 +13,10 @@ from app.config import Config
 from app.models import ConfigSession, Department, User
 
 
+# --- 将 Scoped Session 移至顶层，以修复回调函数中的引用错误 ---
+config_session_scoped = scoped_session(ConfigSession)
+
+
 def create_app():
     """
     应用工厂函数
@@ -27,7 +31,9 @@ def create_app():
     app.config["JWT_SECRET_KEY"] = os.environ.get("JWT_SECRET_KEY", "super-secret-dev-key")
     # 使用 Bearer 令牌, 而不是 cookies
     app.config["JWT_TOKEN_LOCATION"] = ["headers"]
-    app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=24)  # 延长 token 时间
+    app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=24) # 缩短 Access Token
+    app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(hours=24)  # 添加 Refresh Token
+
     # (移除) Cookie 相关配置
     # app.config["JWT_TOKEN_LOCATION"] = ["cookies"]
     # app.config["JWT_ACCESS_COOKIE_PATH"] = "/"
@@ -128,8 +134,9 @@ def create_app():
             session.close()
 
     # 3. (关键) 设置请求生命周期内的会话管理
+    # --- 移除此处的 config_session_scoped 定义，因为它已移至顶层 ---
     # 使用 scoped_session 确保线程安全
-    config_session_scoped = scoped_session(ConfigSession)
+    # config_session_scoped = scoped_session(ConfigSession)
     # source_session_scoped = scoped_session(SourceSession)
 
     @app.before_request

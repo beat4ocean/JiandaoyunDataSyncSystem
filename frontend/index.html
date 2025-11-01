@@ -696,8 +696,12 @@
     let departmentsCache = []; // 用于填充部门下拉框
     let tenantDatabasesCache = []; // 用于填充数据库下拉框
 
+    // --- 新增：用于跟踪刷新状态 ---
+    let isRefreshingToken = false;
+    let failedRequestQueue = []; // 存储因 token 失效而失败的请求
+
     /**
-     * 封装的 fetch API, 自动添加 JWT
+     * --- 封装的 fetch API, 自动添加 JWT 并处理刷新 ---
      */
     async function apiFetch(url, options = {}) {
         const token = localStorage.getItem('access_token');
@@ -717,11 +721,50 @@
 
             if (response.status === 401) {
                 // Token 失效
-                console.error('Auth error:', response.status);
-                alert("会话已过期，请重新登录。");
-                logout(); // Token 失效，强制退出
+                console.warn('Auth error (401): Access Token expired or invalid.');
+
+                // 如果是 /api/refresh 本身失败了，直接登出
+                if (url.endsWith('/api/refresh')) {
+                    console.error("Refresh token failed. Logging out.");
+                    logout();
+                    throw new Error("会话已过期，请重新登录。");
+                }
+
+                // 尝试刷新 Token
+                try {
+                    // 使用 refreshToken() 函数处理并发
+                    const newAccessToken = await refreshToken();
+
+                    // 刷新成功，更新 header 并重试原始请求
+                    options.headers['Authorization'] = `Bearer ${newAccessToken}`;
+                    console.log("Token refreshed. Retrying original request to:", url);
+                    // (重要) 直接返回重试的 fetch，而不是 apiFetch 避免无限循环
+                    const retryResponse = await fetch(url, options);
+
+                    if (!retryResponse.ok) {
+                         const errorData = await retryResponse.json();
+                         throw new Error(errorData.msg || `HTTP error! status: ${retryResponse.status}`);
+                    }
+                    // 根据重试的响应返回 JSON 或 Text
+                    const contentType = retryResponse.headers.get("content-type");
+                    if (contentType && contentType.indexOf("application/json") !== -1) {
+                        return await retryResponse.json();
+                    }
+                    if (retryResponse.status === 204 || retryResponse.statusText === "No Content") {
+                        return null;
+                    }
+                    return await retryResponse.text();
+
+                } catch (refreshError) {
+                    // 刷新失败，登出
+                    console.error("Failed to refresh token:", refreshError);
+                    alert("会话已过期，请重新登录。");
+                    logout(); // 强制退出
+                    throw refreshError; // 抛出错误，中断后续操作
+                }
             }
 
+            // 非 401 错误
             if (!response.ok) {
                 const errorData = await response.json();
                 throw new Error(errorData.msg || `HTTP error! status: ${response.status}`);
@@ -742,9 +785,70 @@
 
         } catch (error) {
             console.error('API Fetch Error:', error);
-            alert(`操作失败: ${error.message}`);
+            // 不再弹框，让调用者处理
+            // alert(`操作失败: ${error.message}`);
             throw error;
         }
+    }
+
+    /**
+     * --- 刷新 Token 的函数 ---
+     * 使用 Promise 来处理并发请求，确保 /refresh 只被调用一次
+     */
+    function refreshToken() {
+        return new Promise((resolve, reject) => {
+            const refreshToken = localStorage.getItem('refresh_token');
+            if (!refreshToken) {
+                console.log("No refresh token available.");
+                return reject(new Error("No refresh token."));
+            }
+
+            // 1. 将当前请求加入队列
+            // 存储 resolve/reject 对
+            const requestCallbacks = { resolve, reject };
+            failedRequestQueue.push(requestCallbacks);
+
+            // 2. 如果没有正在刷新，则发起刷新请求
+            if (!isRefreshingToken) {
+                isRefreshingToken = true;
+                console.log("Attempting to refresh token...");
+
+                fetch('/api/refresh', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${refreshToken}`,
+                        'Content-Type': 'application/json'
+                    }
+                })
+                .then(async (response) => {
+                    if (!response.ok) {
+                         const errData = await response.json();
+                        throw new Error(errData.msg || 'Failed to refresh token');
+                    }
+                    const data = await response.json();
+                    const newAccessToken = data.access_token;
+
+                    // 刷新成功
+                    console.log("Token successfully refreshed.");
+                    localStorage.setItem('access_token', newAccessToken);
+                    isRefreshingToken = false;
+
+                    // (重要) 处理队列中的所有请求
+                    failedRequestQueue.forEach(req => req.resolve(newAccessToken));
+                    failedRequestQueue = []; // 清空队列
+                })
+                .catch((error) => {
+                    // 刷新失败
+                    console.error("Token refresh failed:", error);
+                    isRefreshingToken = false;
+
+                    // (重要) 拒绝队列中的所有请求
+                    failedRequestQueue.forEach(req => req.reject(error));
+                    failedRequestQueue = []; // 清空队列
+                });
+            }
+            // 如果正在刷新，请求只会加入队列，等待当前刷新完成
+        });
     }
 
     // --- 认证与 UI 控制 ---
@@ -757,14 +861,21 @@
         errorEl.textContent = '';
 
         try {
-            // 使用 /api/login (由 auth_bp 提供)
-            const result = await apiFetch('/api/login', {
+            // --- 使用标准 fetch 而非 apiFetch，避免登录401时触发刷新 ---
+            const response = await fetch('/api/login', {
                 method: 'POST',
+                headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({username, password})
             });
 
-            // 登录成功后存储所有信息
+            const result = await response.json();
+            if (!response.ok) {
+                 throw new Error(result.msg || '登录失败');
+            }
+
+            // --- 登录成功后存储所有信息 ---
             localStorage.setItem('access_token', result.access_token);
+            localStorage.setItem('refresh_token', result.refresh_token); // --- 存储 Refresh Token
             localStorage.setItem('user_id', result.user_id);
             localStorage.setItem('username', result.username);
             localStorage.setItem('is_superuser', result.is_superuser); // 存储为 'true' 或 'false' 字符串
@@ -783,6 +894,7 @@
     });
 
     function logout() {
+        // 清除本地存储
         localStorage.clear();
         departmentsCache = [];
         tenantDatabasesCache = [];
@@ -790,13 +902,15 @@
         document.getElementById('login-container').style.display = 'block';
     }
 
+
     /**
      * 根据登录状态初始化应用UI
      */
     async function showAppUI() {
+        // 检查 access_token
         const token = localStorage.getItem('access_token');
         if (!token) {
-            logout();
+            logout(); // 调用 logout 清理
             return;
         }
 
@@ -827,9 +941,15 @@
         navigateTo('dashboard');
 
         // 预加载所有下拉框所需的数据
-        await loadTenantDatabasesCache(); //
-        if (isSuperuser) {
-            await loadDepartmentsCache();
+        // 使用 try-catch 保证加载失败时也能显示UI
+        try {
+            await loadTenantDatabasesCache();
+            if (isSuperuser) {
+                await loadDepartmentsCache();
+            }
+        } catch(e) {
+            console.error("Failed to preload caches:", e);
+            // apiFetch 已经处理了 401 登出, 这里无需操作
         }
     }
 
@@ -857,32 +977,34 @@
         });
 
         // 3. 根据目标 ID 加载数据
-        try {
-            switch (targetId) {
-                case 'departments':
-                    loadTableData('departments', '/api/departments', populateDepartmentsTable);
-                    break;
-                case 'users':
-                    loadTableData('users', '/api/users', populateUsersTable);
-                    break;
-                case 'databases':
-                    loadTableData('databases', '/api/databases', populateDatabasesTable);
-                    break;
-                case 'jdy-keys':
-                    loadTableData('jdy-keys', '/api/jdy-keys', populateJdyKeysTable);
-                    break;
-                case 'sync-tasks':
-                    loadTableData('sync-tasks', '/api/sync-tasks', populateSyncTasksTable);
-                    break;
-                case 'error-logs':
-                    loadTableData('error-logs', '/api/error-logs', populateErrorLogsTable);
-                    break;
-                // 'dashboard' 和 'change-password' 不需要初始加载数据
+        (async () => {
+            try {
+                switch (targetId) {
+                    case 'departments':
+                        await loadTableData('departments', '/api/departments', populateDepartmentsTable);
+                        break;
+                    case 'users':
+                        await loadTableData('users', '/api/users', populateUsersTable);
+                        break;
+                    case 'databases':
+                        await loadTableData('databases', '/api/databases', populateDatabasesTable);
+                        break;
+                    case 'jdy-keys':
+                        await loadTableData('jdy-keys', '/api/jdy-keys', populateJdyKeysTable);
+                        break;
+                    case 'sync-tasks':
+                        await loadTableData('sync-tasks', '/api/sync-tasks', populateSyncTasksTable);
+                        break;
+                    case 'error-logs':
+                        await loadTableData('error-logs', '/api/error-logs', populateErrorLogsTable);
+                        break;
+                    // 'dashboard' 和 'change-password' 不需要初始加载数据
+                }
+            } catch (e) {
+                // apiFetch 内部已处理 auth-error, 此处无需重复处理
+                console.error(`Navigation load error for ${targetId}:`, e);
             }
-        } catch (e) {
-            // apiFetch 内部已处理 auth-error, 此处无需重复处理
-            console.error("Navigation load error", e);
-        }
+        })();
     }
 
     // --- 通用数据加载和表格填充 ---
@@ -898,6 +1020,7 @@
             populateFn(data);
         } catch (error) {
             console.error(`Error loading ${entityName}:`, error);
+            // 错误信息现在由 apiFetch 弹出, 仅显示通用错误
             tbody.innerHTML =
                 `<tr><td colspan="100%">数据加载失败: ${error.message}</td></tr>`;
         }
@@ -912,6 +1035,7 @@
             // (移除) 不在此处填充，在 showModal 时填充
         } catch (error) {
             console.error("Error loading tenant databases cache:", error);
+            throw error; // 抛出错误，让 showAppUI 知道
         }
     }
 
@@ -939,6 +1063,7 @@
             populateDepartmentSelect('sync-task-department-id', departmentsCache);
         } catch (error) {
             console.error("Error loading departments cache:", error);
+            throw error; // 抛出错误
         }
     }
 
@@ -1164,6 +1289,7 @@
                 }
             } catch (error) {
                 console.error(`Error deleting ${entityName}:`, error);
+                alert(`删除失败: ${error.message}`); // 错误时弹框
             }
         }
     }
@@ -1219,6 +1345,7 @@
             showModal(modalId, false); // 显示模态框，但不重置表单
         } catch (error) {
             console.error(`Error fetching ${entityName} for edit:`, error);
+            alert(`加载编辑数据失败: ${error.message}`); // 错误时弹框
         }
     }
 
@@ -1300,6 +1427,7 @@
             if (method === 'POST') await loadDepartmentsCache(); // 新增后刷新缓存
         } catch (error) {
             console.error("Save department error:", error);
+            alert(`保存失败: ${error.message}`);
         }
     });
 
@@ -1331,6 +1459,7 @@
             navigateTo('users');
         } catch (error) {
             console.error("Save user error:", error);
+            alert(`保存失败: ${error.message}`);
         }
     });
 
@@ -1354,6 +1483,7 @@
             closeModal('user-modal');
         } catch (error) {
             console.error("Reset password error:", error);
+            alert(`重置失败: ${error.message}`);
         }
     });
 
@@ -1391,6 +1521,7 @@
             await loadTenantDatabasesCache(); // 刷新数据库缓存
         } catch (error) {
             console.error("Save database error:", error);
+            alert(`保存失败: ${error.message}`);
         }
     });
 
@@ -1412,6 +1543,7 @@
             navigateTo('jdy-keys');
         } catch (error) {
             console.error("Save jdy-key error:", error);
+            alert(`保存失败: ${error.message}`);
         }
     });
 
@@ -1440,6 +1572,7 @@
             navigateTo('sync-tasks');
         } catch (error) {
             console.error("Save sync-task error:", error);
+            alert(`保存失败: ${error.message}`);
         }
     });
 

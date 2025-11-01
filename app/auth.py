@@ -3,7 +3,7 @@ import logging
 from functools import wraps
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import (
-    create_access_token, jwt_required, get_jwt, get_jwt_identity
+    create_access_token, create_refresh_token, jwt_required, get_jwt, get_jwt_identity
 )
 from app.models import ConfigSession, User
 
@@ -64,14 +64,18 @@ def login():
                 "department_name": user.department.department_name if user.department else None
             }
 
+            # --- 创建两种 Token ---
             access_token = create_access_token(
                 identity=identity,
                 additional_claims=additional_claims
             )
+            refresh_token = create_refresh_token(identity=identity)
+
 
             # 返回 Token 和用户信息 (用于前端 localStorage)
             return jsonify(
                 access_token=access_token,
+                refresh_token=refresh_token,
                 user_id=user.id,
                 username=user.username,
                 is_superuser=user.is_superuser,
@@ -128,7 +132,41 @@ def change_password():
     finally:
         session.close()
 
-# 不需要 /logout, /refresh, /check_auth 路由
-# 登出操作由前端删除 localStorage 中的 token 实现
-# Token 刷新逻辑也可以在前端实现，但为简化，此版本不包含
-# 身份检查通过 @jwt_required() 在每个受保护的 API 上自动完成
+# --- Refresh 路由 ---
+@auth_bp.route('/api/refresh', methods=['POST'])
+@jwt_required(refresh=True)  # 关键：只允许 Refresh Token 访问
+def refresh():
+    """
+    使用有效的 Refresh Token 获取一个新的 Access Token
+    """
+    identity = get_jwt_identity()
+    session = ConfigSession()
+    try:
+        # 重新获取用户信息来填充 Access Token 的 claims
+        user = session.query(User).get(identity)
+        if not user or not user.is_active:
+            return jsonify({"msg": "User not found or inactive"}), 401
+
+        additional_claims = {
+            "user_id": user.id,
+            "username": user.username,
+            "is_superuser": user.is_superuser,
+            "department_id": user.department_id,
+            "department_name": user.department.department_name if user.department else None
+        }
+
+        # 只创建一个新的 Access Token
+        new_access_token = create_access_token(
+            identity=identity,
+            additional_claims=additional_claims
+        )
+
+        return jsonify(access_token=new_access_token), 200
+    except Exception as e:
+        logging.error(f"Refresh error: {e}")
+        return jsonify({"msg": "Internal server error"}), 500
+    finally:
+        session.close()
+
+# /check_auth (检查身份) 不需要： Flask-JWT-Extended 插件通过 @jwt_required() 装饰器自动完成了身份检查
+# /logout (登出) 不需要： 因为JWT Token（令牌）被存储在前端（浏览器的 localStorage）中，登出操作由前端删除 localStorage 中的 token 实现
