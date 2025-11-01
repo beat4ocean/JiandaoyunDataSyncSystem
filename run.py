@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
 from waitress import serve
 
-from app.config import CONFIG_DB_URL, DB_CONNECT_ARGS, CONFIG_DB_NAME, CONFIG_DB_USER
+from app.config import DB_CONNECT_ARGS, Config
 
 # 确保 app 目录在 sys.path 中
 sys.path.append(os.path.join(os.path.dirname(__file__), 'app'))
@@ -37,13 +37,13 @@ def initialize_databases(app: Flask):
 
         # 1. 创建一个"根"连接（不指定数据库名称），用于创建数据库
         try:
-            admin_engine = create_engine(CONFIG_DB_URL, connect_args=DB_CONNECT_ARGS)
+            admin_engine = create_engine(f"mysql+pymysql://{Config.CONFIG_DB_USER}:{Config.CONFIG_DB_PASSWORD}@{Config.CONFIG_DB_HOST}:{Config.CONFIG_DB_PORT}/?charset=utf8mb4", connect_args=DB_CONNECT_ARGS)
 
             with admin_engine.connect() as connection:
                 # 检查并创建配置数据库
-                print(f"Checking/Creating config database: {CONFIG_DB_NAME}")
+                print(f"Checking/Creating config database: {Config.CONFIG_DB_NAME}")
                 connection.execute(text(
-                    f"CREATE DATABASE IF NOT EXISTS `{CONFIG_DB_NAME}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+                    f"CREATE DATABASE IF NOT EXISTS `{Config.CONFIG_DB_NAME}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
                 ))
                 # # 检查并创建源数据库
                 # print(f"Checking/Creating source database: {SOURCE_DB_NAME}")
@@ -56,7 +56,7 @@ def initialize_databases(app: Flask):
         except OperationalError as e:
             if "Access denied" in str(e):
                 print(
-                    f"CRITICAL: Failed to connect to MySQL server. Check credentials for user '{CONFIG_DB_USER}'. Error: {e}")
+                    f"CRITICAL: Failed to connect to MySQL server. Check credentials for user '{Config.CONFIG_DB_USER}'. Error: {e}")
             else:
                 print(f"CRITICAL: Failed to connect to MySQL server or create databases: {e}")
             print("Please check MySQL connection settings in .env and user permissions (CREATE DATABASE).")

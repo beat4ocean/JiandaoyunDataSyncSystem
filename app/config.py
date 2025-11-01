@@ -38,8 +38,7 @@ class Config:
 
     # --- 数据库连接字符串 ---
     CONFIG_DB_URL = (
-        f"mysql+pymysql://{CONFIG_DB_USER}:{CONFIG_DB_PASSWORD}@"
-        f"{CONFIG_DB_HOST}:{CONFIG_DB_PORT}/{CONFIG_DB_NAME}?charset=utf8mb4"
+        f"mysql+pymysql://{CONFIG_DB_USER}:{CONFIG_DB_PASSWORD}@{CONFIG_DB_HOST}:{CONFIG_DB_PORT}/{CONFIG_DB_NAME}?charset=utf8mb4"
     )
 
     # SOURCE_DB_URL = (
@@ -70,8 +69,8 @@ class Config:
 
 # 导出实例
 CONFIG_DB_URL = Config.CONFIG_DB_URL
-CONFIG_DB_USER = Config.CONFIG_DB_USER
-CONFIG_DB_NAME = Config.CONFIG_DB_NAME
+# CONFIG_DB_USER = Config.CONFIG_DB_USER
+# CONFIG_DB_NAME = Config.CONFIG_DB_NAME
 
 # SOURCE_DB_URL = Config.SOURCE_DB_URL
 # SOURCE_DB_NAME = Config.SOURCE_DB_NAME
