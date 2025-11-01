@@ -272,7 +272,9 @@ def create_resource_endpoints(bp, model_class, route_name):
     辅助函数，为 DatabaseInfo, JdyKeyInfo, SyncTask 创建权限控制的 API
     """
 
-    @bp.route(f'/api/{route_name}', methods=['GET'])
+    # +++ 为每个路由添加唯一的 'endpoint' +++
+
+    @bp.route(f'/api/{route_name}', methods=['GET'], endpoint=f'get_{route_name}')
     @jwt_required()
     def get_items():
         claims = get_current_user_claims()
@@ -294,7 +296,7 @@ def create_resource_endpoints(bp, model_class, route_name):
         finally:
             session.close()
 
-    @bp.route(f'/api/{route_name}', methods=['POST'])
+    @bp.route(f'/api/{route_name}', methods=['POST'], endpoint=f'create_{route_name}')
     @jwt_required()
     def create_item():
         claims = get_current_user_claims()
@@ -330,7 +332,7 @@ def create_resource_endpoints(bp, model_class, route_name):
         finally:
             session.close()
 
-    @bp.route(f'/api/{route_name}/<int:id>', methods=['PUT'])
+    @bp.route(f'/api/{route_name}/<int:id>', methods=['PUT'], endpoint=f'update_{route_name}')
     @jwt_required()
     def update_item(id):
         claims = get_current_user_claims()
@@ -368,7 +370,7 @@ def create_resource_endpoints(bp, model_class, route_name):
         finally:
             session.close()
 
-    @bp.route(f'/api/{route_name}/<int:id>', methods=['DELETE'])
+    @bp.route(f'/api/{route_name}/<int:id>', methods=['DELETE'], endpoint=f'delete_{route_name}')
     @jwt_required()
     def delete_item(id):
         claims = get_current_user_claims()
