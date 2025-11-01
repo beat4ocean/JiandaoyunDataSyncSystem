@@ -98,7 +98,7 @@ class DatabaseInfo(ConfigBase):
     db_show_name = Column(String(50), nullable=False, comment="数据库显示名称 (e.g., 质量部门专用数据库)")
 
     db_type = Column(String(50), nullable=False, comment="数据库类型(e.g. mysql, postgresql, oracle, mssql)")
-    db_host = Column(String(50), nullable=False, comment="数据库主机")
+    db_host = Column(String(255), nullable=False, comment="数据库主机")
     db_port = Column(Integer, nullable=False, comment="数据库端口")
     db_name = Column(String(50), nullable=False, comment="数据库名称")
     db_args = Column(String(255), nullable=True, comment="数据库连接参数(e.g. charset=utf8mb4)")
@@ -277,7 +277,7 @@ class SyncErrLog(ConfigBase):
 
     # 直接使用外键关联到 Department.id
     department_id = Column(Integer, ForeignKey('Department.id'), nullable=False, comment="关联的租户ID")
-    department_name = Column(Integer, nullable=False, comment="关联的租户ID")
+    department_name = Column(String(255), nullable=False, comment="关联的租户部门英文简称, e.g., 'dpt_a'")
 
     error_message = Column(Text, nullable=False)
     traceback = Column(Text, nullable=True)
