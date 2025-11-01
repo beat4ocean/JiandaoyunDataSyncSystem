@@ -4,14 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MySQL数据同步至简道云配置</title>
-    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
-    <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css"/>
-    <script src="//unpkg.com/@element-plus/icons-vue"></script>
-    <script src="https://unpkg.com/element-plus"></script>
-    <script src="https://unpkg.com/element-plus/dist/locale/zh-cn.min.js"></script>
-    <script src="https://unpkg.com/vue-router@4"></script>
-    <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
 
+    <link rel="stylesheet" href="/vendor/index.css"/>
+    <script src="/vendor/vue.global.js"></script>
+    <script src="/vendor/icons-vue.iife.js"></script>
+    <script src="/vendor/element-plus.full.js"></script>
+    <script src="/vendor/zh-cn.min.js"></script>
+    <script src="/vendor/vue-router.global.js"></script>
+    <script src="/vendor/axios.min.js"></script>
     <style>
         html, body { height: 100%; width: 100%; margin: 0; padding: 0; overflow: hidden; }
         body { font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', Arial, sans-serif; background-color: #f4f4f5; }
@@ -131,17 +131,17 @@
     const {ElMessage, ElMessageBox} = ElementPlus;
     const {useRoute, useRouter} = VueRouter;
 
-    // --- (新) 全局状态 ---
+    // --- 全局状态 ---
     // 用于在刷新时处理并发请求
     let isRefreshingToken = false;
     let failedRequestQueue = [];
 
-    // --- (新) Axios 实例 (适配 JWT Bearer Token) ---
+    // --- Axios 实例 (适配 JWT Bearer Token) ---
     const apiClient = axios.create({
-        baseURL: '/api' // (新) 统一使用 /api 前缀
+        baseURL: '/api' // 统一使用 /api 前缀
     });
 
-    // (新) 请求拦截器：自动附加 Bearer Token
+    // 请求拦截器：自动附加 Bearer Token
     apiClient.interceptors.request.use(config => {
         const token = localStorage.getItem('access_token');
         if (token) {
@@ -150,7 +150,7 @@
         return config;
     });
 
-    // (新) 响应拦截器：处理 401 自动刷新
+    // 响应拦截器：处理 401 自动刷新
     apiClient.interceptors.response.use(
         response => response,
         async error => {
@@ -228,7 +228,7 @@
         }
     );
 
-    // --- (新) Reusable CRUD Composable (适配新 API) ---
+    // --- Reusable CRUD Composable (适配新 API) ---
     function useCrud(apiEndpoint, itemName = '项目', defaultItem = {}, idKey = 'id') {
         const items = ref([]);
         const loading = ref(false);
@@ -278,22 +278,26 @@
             }
 
             loading.value = true;
-            // (新) 使用 idKey
+            // 使用 idKey
             const url = isEdit.value ? `${apiEndpoint}/${currentItem[idKey]}` : apiEndpoint;
             const method = isEdit.value ? 'put' : 'post';
 
             try {
                 const dataToSend = {...currentItem};
 
-                // (新) 清理前端临时字段
+                // 清理前端临时字段
                 if ('full_replace_time_temp' in dataToSend) {
                     dataToSend.full_replace_time = dataToSend.full_replace_time_temp || null;
                     delete dataToSend.full_replace_time_temp;
                 }
-                // (新) 清理密码
+                // 清理密码
                 if (method === 'put' && 'password' in dataToSend && !dataToSend.password) {
                     delete dataToSend.password;
                 }
+
+                // 清理只读字段
+                delete dataToSend.created_at;
+                delete dataToSend.updated_at;
 
                 const response = await apiClient[method](url, dataToSend);
 
@@ -333,7 +337,7 @@
         return { items, loading, dialogVisible, isEdit, currentItem, formRef, fetchItems, openDialog, closeDialog, saveItem, deleteItem };
     }
 
-    // --- (新) Login Component (适配 /api/login 和 JWT) ---
+    // --- Login Component (适配 /api/login 和 JWT) ---
     const LoginView = {
         template: `
           <el-card class="login-card">
@@ -366,22 +370,22 @@
                 try { await loginFormRef.value.validate(); } catch (error) { return; }
                 loading.value = true;
                 try {
-                    // (新) 使用 axios.post 访问 /api/login
+                    // 使用 axios.post 访问 /api/login
                     const response = await axios.post('/api/login', loginForm);
                     const data = response.data;
 
-                    // (新) 存储所有 Token 和用户信息
+                    // 存储所有 Token 和用户信息
                     localStorage.setItem('access_token', data.access_token);
                     localStorage.setItem('refresh_token', data.refresh_token);
                     localStorage.setItem('username', data.username);
                     localStorage.setItem('is_superuser', data.is_superuser);
                     localStorage.setItem('department_name', data.department_name || 'N/A');
 
-                    emit('login-success', data); // (新) 传递所有用户数据
+                    emit('login-success', data); // 传递所有用户数据
                     ElMessage.success('登录成功!');
                 } catch (error) {
                     console.error("登录失败:", error);
-                    // (新) 显示后端错误
+                    // 显示后端错误
                     const msg = error.response?.data?.msg || '登录失败，请检查用户名或密码';
                     ElMessage.error(msg);
                 } finally {
@@ -392,7 +396,7 @@
         }
     };
 
-    // --- (新) Department Component ---
+    // --- Department Component ---
     const DepartmentView = {
         template: `
           <el-card class="config-card">
@@ -444,7 +448,7 @@
         }
     };
 
-    // --- (新) User Component ---
+    // --- User Component ---
     const UserView = {
         template: `
           <el-card class="config-card">
@@ -523,7 +527,7 @@
             const crud = useCrud('/users', '用户', defaultItem, 'id');
             const departments = ref([]);
 
-            // (新) 重置密码状态
+            // 重置密码状态
             const resetPasswordDialogVisible = ref(false);
             const resetPasswordData = reactive({ new_password: '' });
             const resetFormRef = ref(null);
@@ -575,7 +579,7 @@
         }
     };
 
-    // --- (新) Database Component ---
+    // --- Database Component ---
     const DatabaseView = {
         props: ['isSuperuser'],
         template: `
@@ -705,7 +709,7 @@
               <el-table-column prop="id" label="ID" width="200"></el-table-column>
               <el-table-column prop="department_name" label="所属部门名称" v-if="isSuperuser" sortable></el-table-column>
               <el-table-column label="API Key">
-                <template #default="scope"> {{ scope.row.api_key.substring(0, 10) }}... </template>
+                <template #default="scope"> {{ scope.row.api_key ? scope.row.api_key.substring(0, 10) : '' }}... </template>
               </el-table-column>
               <el-table-column label="操作" width="300" fixed="right">
                 <template #default="scope">
@@ -769,7 +773,7 @@
               <el-table-column v-if="isSuperuser" prop="department_name" label="所属部门" sortable></el-table-column>
               <el-table-column prop="task_name" label="任务名称" sortable></el-table-column>
               <el-table-column prop="source_db_name" label="源数据库" sortable>
-                <template #default="scope"> <el-tag>{{ scope.row.source_db_name || 'N/A' }} (ID: {{ scope.row.source_db_id }})</el-tag> </template>
+                <template #default="scope"> <el-tag>{{ scope.row.source_db_name || 'N/A' }})</el-tag> </template>
               </el-table-column>
               <el-table-column prop="source_table" label="源表名" sortable></el-table-column>
               <el-table-column prop="jdy_app_id" label="App ID"></el-table-column>
@@ -934,7 +938,7 @@
         `,
         props: ['isSuperuser'],
         setup(props) {
-            // (新) 适配 SyncTask 模型的字段
+            // 适配 SyncTask 模型的字段
             const defaultTask = {
                 task_name: '',
                 department_id: null,
@@ -957,9 +961,9 @@
 
             const crud = useCrud('/sync-tasks', '同步任务', defaultTask, 'task_id');
             const departments = ref([]);
-            const tenantDatabases = ref([]); // (新) 存储所有数据库
+            const tenantDatabases = ref([]); // 存储所有数据库
 
-            // (新) 计算属性，用于根据选择的部门过滤数据库下拉框
+            // 计算属性，用于根据选择的部门过滤数据库下拉框
             const filteredDatabases = computed(() => {
                 if (props.isSuperuser) {
                     if (!crud.currentItem.department_id) return []; // 管理员必须先选部门
@@ -976,14 +980,14 @@
                 }
             };
 
-            // (新) 获取部门 (仅管理员)
+            // 获取部门 (仅管理员)
             const fetchDepartments = async () => {
                 if (props.isSuperuser) {
                     try { departments.value = (await apiClient.get('/departments')).data; } catch (e) { console.error(e); }
                 }
             };
 
-            // (新) 获取数据库 (所有人)
+            // 获取数据库 (所有人)
             const fetchTenantDatabases = async () => {
                 try {
                     // /api/tenant-databases 后端会根据用户权限自动过滤
@@ -1010,7 +1014,7 @@
             // (新)
             watch(() => crud.dialogVisible.value, (newVal) => {
                 if (newVal) {
-                    // (新) 打开弹窗时，确保数据库列表已加载
+                    // 打开弹窗时，确保数据库列表已加载
                     fetchTenantDatabases();
                     if (props.isSuperuser) fetchDepartments();
 
@@ -1019,7 +1023,7 @@
                         crud.currentItem.full_replace_time_temp = crud.currentItem.full_replace_time;
                     } else if (newVal && !crud.isEdit.value) {
                         crud.currentItem.full_replace_time_temp = null;
-                        // (新) 非管理员自动设置部门ID
+                        // 非管理员自动设置部门ID
                         if (!props.isSuperuser) {
                             crud.currentItem.department_id = parseInt(localStorage.getItem('department_id'));
                         }
@@ -1095,10 +1099,10 @@
         `,
         props: ['isSuperuser'],
         setup(props) {
-            // (新) API 适配
+            // API 适配
             const {items, loading, fetchItems} = useCrud('/error-logs', '日志');
 
-            // (新) 适配多租户
+            // 适配多租户
             const filters = reactive({dateRange: null, departmentIdFilter: '', taskIdFilter: ''});
 
             const filteredLogs = computed(() => {
@@ -1110,7 +1114,7 @@
                         return t >= start && t <= end;
                     });
                 }
-                // (新) 适配多租户
+                // 适配多租户
                 if (props.isSuperuser && filters.departmentIdFilter) {
                     logs = logs.filter(log => log.department_id === filters.departmentIdFilter);
                 }
@@ -1133,7 +1137,7 @@
         }
     };
 
-    // --- (新) Router Setup (适配多租户) ---
+    // --- Router Setup (适配多租户) ---
     const routes = [
         {path: '/', redirect: '/sync-tasks'},
         {path: '/departments', component: DepartmentView},
@@ -1145,7 +1149,7 @@
     ];
     const router = VueRouter.createRouter({history: VueRouter.createWebHashHistory(), routes});
 
-    // --- (新) App Setup (适配 JWT) ---
+    // --- App Setup (适配 JWT) ---
     const app = createApp({
         setup() {
             const isAuthenticated = ref(false);
@@ -1156,7 +1160,7 @@
             const route = useRoute();
             const routerInstance = useRouter();
 
-            // (新) 检查 localStorage
+            // 检查 localStorage
             const checkAuthentication = () => {
                 const token = localStorage.getItem('access_token');
                 if (token) {
@@ -1169,7 +1173,7 @@
                 }
             };
 
-            // (新) 登录成功处理器
+            // 登录成功处理器
             const handleLoginSuccess = (userData) => {
                 isAuthenticated.value = true;
                 username.value = userData.username;
@@ -1178,19 +1182,19 @@
                 routerInstance.push('/');
             };
 
-            // (新) 登出处理器
+            // 登出处理器
             const handleLogout = async (force = false) => {
                 if (!force) {
                     try {
-                        // (新) 调用 /api/logout (DELETE) 来吊销Token
-                        // 修正：您的 auth.py 中没有 /logout 路由，所以我们跳过它
+                        // 调用 /api/logout (DELETE) 来吊销Token
+                        // 修正：auth.py 中没有 /logout 路由，所以我们跳过它
                         // await apiClient.delete('/logout');
                     } catch (error) {
                         console.error("Logout failed, proceeding with client-side cleanup:", error);
                     }
                 }
 
-                // (新) 清理 localStorage
+                // 清理 localStorage
                 localStorage.clear();
                 isAuthenticated.value = false;
                 username.value = '';
@@ -1204,9 +1208,9 @@
 
             const activeMenu = computed(() => route.path);
 
-            onMounted(checkAuthentication); // (新) 启动时检查
+            onMounted(checkAuthentication); // 启动时检查
 
-            // (新) 将登出函数暴露给拦截器
+            // 将登出函数暴露给拦截器
             window.appInstance = {handleLogout};
 
             return {
@@ -1224,7 +1228,7 @@
 
     // Register components globally
     app.component('login-view', LoginView);
-    // (新) 注册新组件
+    // 注册新组件
     app.component('DepartmentView', DepartmentView);
     app.component('UserView', UserView);
     app.component('DatabaseView', DatabaseView);
@@ -1240,6 +1244,7 @@
     // --- END FIX ---
 
     app.use(router);
+    // 从本地加载中文语言包
     app.use(ElementPlus, {locale: ElementPlusLocaleZhCn.default});
     app.mount('#app');
 </script>
