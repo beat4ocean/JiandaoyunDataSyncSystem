@@ -52,7 +52,7 @@ def run_task_wrapper(task_id: int):
                 return
 
             # 检查 API Key
-            if not task.department or not task.department.api_key:
+            if not task.department or not task.department.jdy_key_info or not task.department.jdy_key_info.api_key:
                 print(f"[{thread_name}] Task {task_id} missing API Key. Skipping.")
                 log_sync_error(task_config=task, extra_info="Task skipped: Missing API Key.")
                 return
@@ -118,7 +118,7 @@ def run_binlog_listener_in_thread(task_id: int):
                 return
 
             # 检查 API Key
-            if not task.department or not task.department.api_key:
+            if not task.department or not task.department.jdy_key_info or not task.department.jdy_key_info.api_key:
                 print(f"[BinlogListener-{task_id}] Task missing API Key. Exiting thread.")
                 log_sync_error(task_config=task, extra_info="Binlog listener stopped: Missing API Key.")
                 return
@@ -196,7 +196,7 @@ def check_and_start_new_binlog_listeners():
                         continue
 
                     # 检查 API Key
-                    if not task.department or not task.department.api_key:
+                    if not task.department or not task.department.jdy_key_info or not task.department.jdy_key_info.api_key:
                         print(f"[{thread_name}] Task {task.task_id} missing API Key. Cannot start listener.")
                         log_sync_error(task_config=task, extra_info="Binlog listener cannot start: Missing API Key.")
                         continue
@@ -254,7 +254,7 @@ def update_all_field_mappings_job():
             for task in tasks_to_update:
                 try:
                     # 检查 API Key
-                    if not task.department or not task.department.api_key:
+                    if not task.department or not task.department.jdy_key_info or not task.department.jdy_key_info.api_key:
                         print(f"[{thread_name}] Task {task.task_id} missing API Key. Skipping mapping update.")
                         log_sync_error(task_config=task, extra_info="Mapping update skipped: Missing API Key.")
                         continue
