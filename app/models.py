@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from datetime import datetime
 
 from sqlalchemy import (Index, Boolean, Time, create_engine, MetaData, Column, Integer, String,
@@ -31,14 +32,57 @@ class SourceBase(DeclarativeBase):
     metadata = source_metadata
 
 
-# --- 新增模型 ---
+# --- 部门模型 ---
+
+class Department(ConfigBase):
+    """
+    存储租户信息 (部门即租户)
+    这是所有多租户模型的““““根””””
+    """
+    __tablename__ = 'Department'
+    id = Column(Integer, primary_key=True)
+    department_id = Column(Integer, nullable=False, unique=True, comment="关联的租户部门外部ID (保持唯一)")
+    department_name = Column(String(100), nullable=False, unique=True, comment="关联的租户部门英文简称, e.g., 'dpt_a'")
+    is_active = Column(Boolean, default=True, comment="是否激活")
+
+    created_at = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), comment="创建时间")
+    updated_at = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), onupdate=lambda: datetime.now(TZ_UTC_8),
+                        comment="更新时间")
+
+    # --- 租户拥有的资源 (Relationships) ---
+    # 1. 租户下的用户
+    users = relationship("User", back_populates="department", cascade="all, delete-orphan")
+    # 2. 租户的数据库配置
+    database_infos = relationship("DatabaseInfo", back_populates="department", cascade="all, delete-orphan")
+    # 3. 租户的简道云 Key (1:1 关系)
+    jdy_key_info = relationship("JdyKeyInfo", back_populates="department", uselist=False, cascade="all, delete-orphan")
+    # 4. 租户的同步任务
+    sync_tasks = relationship("SyncTask", back_populates="department", cascade="all, delete-orphan")
+    # 5. 租户的错误日志
+    error_logs = relationship("SyncErrLog", back_populates="department", cascade="all, delete-orphan")
+
+
+# --- 用户模型 ---
 
 class User(ConfigBase):
-    """存储用户信息"""
+    """存储用户信息，并关联到 *一个* 租户"""
     __tablename__ = 'users'
     id = Column(Integer, primary_key=True)
     username = Column(String(120), unique=True, nullable=False, comment="用户名")
     password = Column(String(128), comment="密码")  # 存储密码哈希
+
+    # 直接使用外键关联到 Department.id
+    department_id = Column(Integer, ForeignKey('Department.id'), nullable=False, comment="关联的租户ID")
+
+    is_superuser = Column(Boolean, default=False, comment="是否是超级用户")
+    is_active = Column(Boolean, default=True, comment="是否激活")
+
+    created_at = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), comment="创建时间")
+    updated_at = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), onupdate=lambda: datetime.now(TZ_UTC_8),
+                        comment="更新时间")
+
+    # 与 Department 的关系
+    department = relationship("Department", back_populates="users")
 
     def set_password(self, password):
         """设置密码 (加密)"""
@@ -49,26 +93,66 @@ class User(ConfigBase):
         return sha256.verify(password, self.password)
 
 
-# --- 密钥/部门模型 ---
+# --- 数据库模型 ---
+
+class DatabaseInfo(ConfigBase):
+    """
+    存储数据库连接配置，并关联到 *一个* 租户
+    """
+    __tablename__ = 'database'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    db_type = Column(String(50), nullable=False, comment="数据库类型")
+    db_host = Column(String(50), nullable=False, comment="数据库主机")
+    db_port = Column(Integer, nullable=False, comment="数据库端口")
+    db_name = Column(String(50), nullable=False, comment="数据库名称")
+    db_args = Column(String(255), nullable=True, comment="数据库连接参数")
+    db_user = Column(String(50), nullable=False, comment="数据库用户名")
+    db_password = Column(String(50), nullable=False, comment="数据库密码")
+    is_active = Column(Boolean, default=True, comment="是否激活")
+
+    # 直接使用外键关联到 Department.id
+    department_id = Column(Integer, ForeignKey('Department.id'), nullable=False, comment="关联的租户ID")
+
+    created_at = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), comment="创建时间")
+    updated_at = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), onupdate=lambda: datetime.now(TZ_UTC_8),
+                        comment="更新时间")
+
+    # 关系应指向 Department
+    department = relationship("Department", back_populates="database_infos")
+
+    __table_args__ = (
+        UniqueConstraint('db_type', 'db_host', 'db_port', 'db_name', 'db_user', name='uq_department_name'),
+    )
+
+
+# --- 简道云密钥模型 ---
 
 class JdyKeyInfo(ConfigBase):
     """
-    存储部门（租户）与简道云项目API Key的映射关系
+    存储部门（租户）与简道云项目API Key的映射关系 (1:1)
     """
     __tablename__ = 'jdy_key_info'
     id = Column(Integer, primary_key=True, autoincrement=True)
-    department_name = Column(String(100), nullable=False, unique=True, comment="部门英文简称, e.g., 'dpt_a'")
+
+    # 直接使用外键，并添加 unique=True 实现 1:1 关系
+    department_id = Column(Integer, ForeignKey('Department.id'), nullable=False, unique=True, comment="关联的租户ID")
+
     api_key = Column(String(255), nullable=False, comment="该项目专属的 API Key")
 
-    # 与任务的关联
-    tasks = relationship("SyncTask", back_populates="department")
+    created_at = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), comment="创建时间")
+    updated_at = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), onupdate=lambda: datetime.now(TZ_UTC_8),
+                        comment="更新时间")
+
+    # 关系指向 Department
+    department = relationship("Department", back_populates="jdy_key_info")
 
 
-# --- 更新的现有模型 ---
+# --- 同步配置信息模型 ---
 
 class SyncTask(ConfigBase):
     """
-    存储同步任务的配置信息
+    存储同步任务的配置信息，并关联到 *一个* 租户
     """
     __tablename__ = 'sync_tasks'
 
@@ -84,9 +168,8 @@ class SyncTask(ConfigBase):
     jdy_app_id = Column(String(100), nullable=False, comment="简道云应用ID")
     jdy_entry_id = Column(String(100), nullable=False, comment="简道云表单ID")
 
-    # 删除 jdy_api_key，替换为与部门的关联
-    department_name = Column(String(100), ForeignKey('jdy_key_info.department_name'), nullable=False,
-                             comment="关联的部门 (用于获取 API Key)")
+    # 直接使用外键关联到 Department.id
+    department_id = Column(Integer, ForeignKey('Department.id'), nullable=False, comment="关联的租户ID")
 
     # 同步模式
     sync_mode = Column(String(50), nullable=False, default='INCREMENTAL',
@@ -117,7 +200,11 @@ class SyncTask(ConfigBase):
     updated_at = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), onupdate=lambda: datetime.now(TZ_UTC_8),
                         comment="更新时间")
 
-    department = relationship("JdyKeyInfo", back_populates="tasks")
+    # 关系指向 Department
+    department = relationship("Department", back_populates="sync_tasks")
+
+    # 与 FormFieldMapping 的 1:N 关系
+    field_mappings = relationship("FormFieldMapping", back_populates="task", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index('idx_mode_status', 'sync_mode', 'status'),
@@ -125,14 +212,19 @@ class SyncTask(ConfigBase):
     )
 
 
+# --- 表单字段映射关系模型 ---
+
 class FormFieldMapping(ConfigBase):
     """
-    表单字段映射缓存表
+    储存表单字段映射缓存表。
+    租户属性通过 task_id 间接关联。
     """
     __tablename__ = 'form_fields_mapping'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    task_id = Column(Integer, nullable=False, comment="关联的任务ID")  # 已经使用 task_id
+
+    # 明确指定 ForeignKey
+    task_id = Column(Integer, ForeignKey('sync_tasks.task_id'), nullable=False, comment="关联的任务ID")
 
     form_name = Column(String(255), nullable=True, comment="简道云表单名")
     widget_name = Column(String(255), nullable=False, comment="字段ID (e.g., _widget_xxx_, 用于 API 提交)")
@@ -144,6 +236,13 @@ class FormFieldMapping(ConfigBase):
     data_modify_time = Column(DateTime, nullable=True, comment="表单数据修改时间")
 
     last_updated = Column(DateTime, default=datetime.now(TZ_UTC_8), onupdate=datetime.now(TZ_UTC_8))
+
+    created_at = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), comment="创建时间")
+    updated_at = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), onupdate=lambda: datetime.now(TZ_UTC_8),
+                        comment="更新时间")
+
+    # 与 SyncTask 的关系
+    task = relationship("SyncTask", back_populates="field_mappings")
 
     __table_args__ = (
         # 确保每个任务中，widget_alias (MySQL 的列名) 是唯一的
@@ -158,7 +257,7 @@ class FormFieldMapping(ConfigBase):
 
 class SyncErrLog(ConfigBase):
     """
-    存储同步过程中的*错误*日志
+    存储同步过程中的*错误*日志，并关联到 *一个* 租户
     """
     __tablename__ = 'sync_err_log'
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -169,13 +268,20 @@ class SyncErrLog(ConfigBase):
     entry_id = Column(String(100), nullable=True)
     table_name = Column(String(255), nullable=True)
 
-    # 为符合 UI 要求添加
-    department_name = Column(String(100), nullable=True, comment="关联的部门")
+    # 直接使用外键关联到 Department.id
+    department_id = Column(Integer, ForeignKey('Department.id'), nullable=False, comment="关联的租户ID")
 
     error_message = Column(Text, nullable=False)
     traceback = Column(Text, nullable=True)
     payload = Column(LONGTEXT, nullable=True)
     timestamp = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), comment="发生错误时间")
+
+    created_at = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), comment="创建时间")
+    updated_at = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), onupdate=lambda: datetime.now(TZ_UTC_8),
+                        comment="更新时间")
+
+    # 与 Department 的关系
+    department = relationship("Department", back_populates="error_logs")
 
     __table_args__ = (
         Index('idx_task_time', 'task_id', 'timestamp'),

@@ -1,110 +1,365 @@
-from flask import Blueprint, request, jsonify, current_app, g
-from sqlalchemy import text
+# -*- coding: utf-8 -*-
+import logging
+from flask import Blueprint, request, jsonify
+from flask_jwt_extended import jwt_required, get_jwt
+from app.models import (
+    ConfigSession, Department, User, DatabaseInfo, JdyKeyInfo, SyncTask, SyncErrLog
+)
+from app.auth import superuser_required
 
-from app.models import SyncTask
-from app.services import SyncService
-from app.utils import log_sync_error
-
-# 1. 创建蓝图
-main_bp = Blueprint('main', __name__)
-
-
-# @main_bp.route('/webhook/jdy/<int:task_id>', methods=['POST'])
-# def handle_jdy_webhook(task_id):
-#     """
-#     处理简道云的数据推送 Webhook
-#     用于实时回写 _id
-#     URL 示例: https://your-domain.com/webhook/jdy/1
-#     """
-#
-#     # g.config_session 和 g.source_session 由 app/__init__.py 中的 @before_request 创建
-#     config_session = g.config_session
-#     source_session = g.source_session
-#
-#     task = None
-#     try:
-#         payload = request.json
-#         if not payload:
-#             return jsonify({"code": 400, "message": "Invalid JSON"}), 400
-#
-#         op = payload.get('op')
-#         data = payload.get('data')
-#
-#         if not op or not data:
-#             return jsonify({"code": 400, "message": "Missing 'op' or 'data'"}), 400
-#
-#         # 从 g.config_session 获取任务
-#         task = config_session.get(SyncTask, task_id)
-#         if not task:
-#             current_app.logger.error(f"[Webhook {task_id}] Task not found.")
-#             return jsonify({"code": 404, "message": "Task not found"}), 404
-#
-#         # 我们只关心创建和更新操作
-#         if op in ('data_create', 'data_update'):
-#             jdy_id = data.get('_id')
-#             if not jdy_id:
-#                 current_app.logger.warning(f"[Webhook {task_id}] Received {op} but no _id found.")
-#                 return jsonify({"code": 202, "message": "No _id, accepted."})
-#
-#             # 实例化服务
-#             sync_service = SyncService()
-#
-#             pk_field_name = task.pk_field_name
-#
-#             # 字段映射服务现在需要会话
-#             alias_map = sync_service.mapping_service.get_alias_mapping(config_session, task.task_id)
-#             if pk_field_name not in alias_map:
-#                 msg = f"PK field '{pk_field_name}' not in alias_map for webhook."
-#                 current_app.logger.error(f"[Webhook {task_id}] {msg}")
-#                 # 使用新的 log_sync_error
-#                 log_sync_error(task_config=task, error=Exception(msg), payload=payload)
-#                 return jsonify({"code": 500, "message": msg}), 500
-#
-#             pk_field_alias = alias_map[pk_field_name]
-#             # V5: 'value' 可能在也可能不在，取决于字段类型
-#             business_pk_value_data = data.get(pk_field_alias)
-#
-#             # 检查 business_pk_value_data 是否为字典 (例如 { "value": "PK_001" } )
-#             if isinstance(business_pk_value_data, dict):
-#                 business_pk_value = business_pk_value_data.get('value')
-#             else:
-#                 # 否则直接取值 (例如简单的文本字段 "PK_001")
-#                 business_pk_value = business_pk_value_data
-#
-#             if not business_pk_value:
-#                 current_app.logger.warning(
-#                     f"[Webhook {task_id}] Received _id={jdy_id} but PK alias '{pk_field_alias}' not found in payload.")
-#                 return jsonify({"code": 202, "message": "PK not found, accepted."})
-#
-#             # 执行回写 (服务内部会处理视图检查)
-#             sync_service.update_id_from_webhook(task, business_pk_value, jdy_id)
-#
-#             return jsonify({"code": 200, "message": "Webhook processed"})
-#
-#         else:
-#             # data_remove 或其他操作
-#             return jsonify({"code": 200, "message": "Operation skipped"})
-#
-#     except Exception as e:
-#         current_app.logger.error(f"[Webhook {task_id}] Error processing webhook: {e}")
-#         # 使用新的 log_sync_error
-#         # task 可能在 try 块中已成功获取
-#         log_sync_error(task_config=task, error=e, payload=request.json)
-#
-#         return jsonify({"code": 500, "message": "Internal Server Error"}), 500
+# 创建 API 蓝图
+api_bp = Blueprint('api_bp', __name__)
 
 
-@main_bp.route('/health', methods=['GET'])
-def health_check():
-    """
-    健康检查端点
-    """
+# --- 辅助函数 ---
+
+def get_current_user_claims():
+    """从 JWT 获取当前用户的声明"""
+    return get_jwt()
+
+
+def to_dict(model_instance):
+    """简单的 SQLAlchemy 模型转字典"""
+    if not model_instance:
+        return None
+    d = {}
+    for column in model_instance.__table__.columns:
+        # 不暴露密码哈希
+        if column.name == 'password':
+            continue
+        d[column.name] = getattr(model_instance, column.name)
+    return d
+
+
+# --- Department (租户) API ---
+# 只有超级管理员可以管理
+
+@api_bp.route('/api/departments', methods=['GET'])
+@superuser_required
+def get_departments():
+    session = ConfigSession()
     try:
-        # 检查配置数据库
-        g.config_session.execute(text("SELECT 1"))
-        # 检查源数据库
-        g.source_session.execute(text("SELECT 1"))
-        return jsonify({"status": "ok", "databases": "connected"})
+        departments = session.query(Department).all()
+        return jsonify([to_dict(d) for d in departments]), 200
+    finally:
+        session.close()
+
+
+@api_bp.route('/api/departments', methods=['POST'])
+@superuser_required
+def create_department():
+    data = request.get_json()
+    session = ConfigSession()
+    try:
+        new_dept = Department(
+            department_id=data.get('department_id'),
+            department_name=data.get('department_name'),
+            is_active=data.get('is_active', True)
+        )
+        session.add(new_dept)
+        session.commit()
+        return jsonify(to_dict(new_dept)), 201
     except Exception as e:
-        current_app.logger.error(f"Health check failed: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 503
+        session.rollback()
+        logging.error(f"Create department error: {e}")
+        return jsonify({"msg": f"Error creating department: {e}"}), 500
+    finally:
+        session.close()
+
+
+@api_bp.route('/api/departments/<int:id>', methods=['PUT'])
+@superuser_required
+def update_department(id):
+    data = request.get_json()
+    session = ConfigSession()
+    try:
+        dept = session.query(Department).get(id)
+        if not dept:
+            return jsonify({"msg": "Department not found"}), 404
+
+        dept.department_id = data.get('department_id', dept.department_id)
+        dept.department_name = data.get('department_name', dept.department_name)
+        dept.is_active = data.get('is_active', dept.is_active)
+        session.commit()
+        return jsonify(to_dict(dept)), 200
+    except Exception as e:
+        session.rollback()
+        logging.error(f"Update department error: {e}")
+        return jsonify({"msg": f"Error updating department: {e}"}), 500
+    finally:
+        session.close()
+
+
+@api_bp.route('/api/departments/<int:id>', methods=['DELETE'])
+@superuser_required
+def delete_department(id):
+    session = ConfigSession()
+    try:
+        dept = session.query(Department).get(id)
+        if not dept:
+            return jsonify({"msg": "Department not found"}), 404
+
+        session.delete(dept)
+        session.commit()
+        return jsonify({"msg": "Department deleted"}), 200
+    except Exception as e:
+        session.rollback()
+        logging.error(f"Delete department error: {e}")
+        # 捕获外键约束错误
+        if "foreign key constraint fails" in str(e).lower():
+            return jsonify(
+                {"msg": "Cannot delete department: It is referenced by other resources (users, keys, etc.)"}), 409
+        return jsonify({"msg": f"Error deleting department: {e}"}), 500
+    finally:
+        session.close()
+
+
+# --- User (用户) API ---
+# 只有超级管理员可以管理 (修改密码除外)
+
+@api_bp.route('/api/users', methods=['GET'])
+@superuser_required
+def get_users():
+    session = ConfigSession()
+    try:
+        users = session.query(User).all()
+        return jsonify([to_dict(u) for u in users]), 200
+    finally:
+        session.close()
+
+
+@api_bp.route('/api/users', methods=['POST'])
+@superuser_required
+def create_user():
+    data = request.get_json()
+    session = ConfigSession()
+    try:
+        new_user = User(
+            username=data.get('username'),
+            department_id=data.get('department_id'),
+            is_superuser=data.get('is_superuser', False),
+            is_active=data.get('is_active', True)
+        )
+        if not data.get('password'):
+            return jsonify({"msg": "Password is required for new user"}), 400
+        new_user.set_password(data.get('password'))  # 设置密码
+        session.add(new_user)
+        session.commit()
+        return jsonify(to_dict(new_user)), 201
+    except Exception as e:
+        session.rollback()
+        logging.error(f"Create user error: {e}")
+        return jsonify({"msg": f"Error creating user: {e}"}), 500
+    finally:
+        session.close()
+
+
+@api_bp.route('/api/users/<int:id>', methods=['PUT'])
+@superuser_required
+def update_user(id):
+    data = request.get_json()
+    session = ConfigSession()
+    try:
+        user = session.query(User).get(id)
+        if not user:
+            return jsonify({"msg": "User not found"}), 404
+
+        user.username = data.get('username', user.username)
+        user.department_id = data.get('department_id', user.department_id)
+        user.is_superuser = data.get('is_superuser', user.is_superuser)
+        user.is_active = data.get('is_active', user.is_active)
+        session.commit()
+        return jsonify(to_dict(user)), 200
+    except Exception as e:
+        session.rollback()
+        logging.error(f"Update user error: {e}")
+        return jsonify({"msg": f"Error updating user: {e}"}), 500
+    finally:
+        session.close()
+
+
+@api_bp.route('/api/users/<int:id>/reset-password', methods=['PATCH'])
+@superuser_required
+def reset_user_password(id):
+    data = request.get_json()
+    new_password = data.get('new_password')
+    if not new_password:
+        return jsonify({"msg": "Missing new_password"}), 400
+
+    session = ConfigSession()
+    try:
+        user = session.query(User).get(id)
+        if not user:
+            return jsonify({"msg": "User not found"}), 404
+
+        user.set_password(new_password)
+        session.commit()
+        return jsonify({"msg": f"Password for user {user.username} has been reset."}), 200
+    except Exception as e:
+        session.rollback()
+        logging.error(f"Reset password error: {e}")
+        return jsonify({"msg": f"Error resetting password: {e}"}), 500
+    finally:
+        session.close()
+
+
+@api_bp.route('/api/users/<int:id>', methods=['DELETE'])
+@superuser_required
+def delete_user(id):
+    session = ConfigSession()
+    try:
+        user = session.query(User).get(id)
+        if not user:
+            return jsonify({"msg": "User not found"}), 404
+
+        session.delete(user)
+        session.commit()
+        return jsonify({"msg": "User deleted"}), 200
+    except Exception as e:
+        session.rollback()
+        logging.error(f"Delete user error: {e}")
+        return jsonify({"msg": f"Error deleting user: {e}"}), 500
+    finally:
+        session.close()
+
+
+# --- 通用资源 API (DatabaseInfo, JdyKeyInfo, SyncTask) ---
+
+def create_resource_endpoints(bp, model_class, route_name):
+    """
+    辅助函数，为 DatabaseInfo, JdyKeyInfo, SyncTask 创建权限控制的 API
+    """
+
+    @bp.route(f'/api/{route_name}', methods=['GET'])
+    @jwt_required()
+    def get_items():
+        claims = get_current_user_claims()
+        session = ConfigSession()
+        try:
+            if claims.get('is_superuser'):
+                items = session.query(model_class).all()
+            else:
+                department_id = claims.get('department_id')
+                items = session.query(model_class).filter_by(department_id=department_id).all()
+            return jsonify([to_dict(item) for item in items]), 200
+        finally:
+            session.close()
+
+    @bp.route(f'/api/{route_name}', methods=['POST'])
+    @jwt_required()
+    def create_item():
+        claims = get_current_user_claims()
+        data = request.get_json()
+        session = ConfigSession()
+
+        # 非超管，强制使用自己的 department_id
+        if not claims.get('is_superuser'):
+            data['department_id'] = claims.get('department_id')
+
+        # 确保 department_id 存在
+        if 'department_id' not in data or data['department_id'] is None:
+            return jsonify({"msg": "department_id is required"}), 400
+
+        try:
+            # 动态创建实例
+            new_item = model_class(**data)
+            session.add(new_item)
+            session.commit()
+            return jsonify(to_dict(new_item)), 201
+        except Exception as e:
+            session.rollback()
+            logging.error(f"Create {route_name} error: {e}")
+            return jsonify({"msg": f"Error creating item: {e}"}), 500
+        finally:
+            session.close()
+
+    @bp.route(f'/api/{route_name}/<int:id>', methods=['PUT'])
+    @jwt_required()
+    def update_item(id):
+        claims = get_current_user_claims()
+        data = request.get_json()
+        session = ConfigSession()
+        try:
+            # item = session.query(model_class).get(id)
+            # 特殊处理 SyncTask 的主键
+            pk_name = 'task_id' if model_class == SyncTask else 'id'
+            item = session.query(model_class).filter(getattr(model_class, pk_name) == id).first()
+
+            if not item:
+                return jsonify({"msg": "Item not found"}), 404
+
+            # 权限检查：非超管只能修改自己部门的
+            if not claims.get('is_superuser') and item.department_id != claims.get('department_id'):
+                return jsonify({"msg": "Forbidden"}), 403
+
+            # 动态更新字段
+            for key, value in data.items():
+                if hasattr(item, key):
+                    setattr(item, key, value)
+
+            session.commit()
+            return jsonify(to_dict(item)), 200
+        except Exception as e:
+            session.rollback()
+            logging.error(f"Update {route_name} error: {e}")
+            return jsonify({"msg": f"Error updating item: {e}"}), 500
+        finally:
+            session.close()
+
+    @bp.route(f'/api/{route_name}/<int:id>', methods=['DELETE'])
+    @jwt_required()
+    def delete_item(id):
+        claims = get_current_user_claims()
+        session = ConfigSession()
+        try:
+            # item = session.query(model_class).get(id)
+            # 特殊处理 SyncTask 的主键
+            pk_name = 'task_id' if model_class == SyncTask else 'id'
+            item = session.query(model_class).filter(getattr(model_class, pk_name) == id).first()
+
+            if not item:
+                return jsonify({"msg": "Item not found"}), 404
+
+            # 权限检查：非超管只能删除自己部门的
+            if not claims.get('is_superuser') and item.department_id != claims.get('department_id'):
+                return jsonify({"msg": "Forbidden"}), 403
+
+            session.delete(item)
+            session.commit()
+            return jsonify({"msg": "Item deleted"}), 200
+        except Exception as e:
+            session.rollback()
+            logging.error(f"Delete {route_name} error: {e}")
+            return jsonify({"msg": f"Error deleting item: {e}"}), 500
+        finally:
+            session.close()
+
+
+# --- 注册通用资源 API ---
+create_resource_endpoints(api_bp, DatabaseInfo, 'databases')
+create_resource_endpoints(api_bp, JdyKeyInfo, 'jdy-keys')
+create_resource_endpoints(api_bp, SyncTask, 'sync-tasks')
+
+
+# --- SyncErrLog (错误日志) API ---
+# 只有 GET 权限
+
+@api_bp.route('/api/error-logs', methods=['GET'])
+@jwt_required()
+def get_error_logs():
+    claims = get_current_user_claims()
+    session = ConfigSession()
+    try:
+        query = session.query(SyncErrLog)
+
+        if claims.get('is_superuser'):
+            # 超管查看所有
+            logs = query.order_by(SyncErrLog.timestamp.desc()).all()
+        else:
+            # 非超管只看自己部门的
+            department_id = claims.get('department_id')
+            logs = query.filter_by(department_id=department_id).order_by(SyncErrLog.timestamp.desc()).all()
+
+        return jsonify([to_dict(log) for log in logs]), 200
+    finally:
+        session.close()
