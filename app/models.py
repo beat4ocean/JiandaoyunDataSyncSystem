@@ -273,7 +273,7 @@ class SyncErrLog(ConfigBase):
 
     # 直接使用外键关联到 Department.id
     department_id = Column(Integer, ForeignKey('Department.id'), nullable=False, comment="关联的租户ID")
-    department_name = Column(Integer, ForeignKey('Department.department_name'), nullable=False, comment="关联的租户ID")
+    department_name = Column(Integer, nullable=False, comment="关联的租户ID")
 
     error_message = Column(Text, nullable=False)
     traceback = Column(Text, nullable=True)
