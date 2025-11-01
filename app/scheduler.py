@@ -70,8 +70,8 @@ def run_task_wrapper(task_id: int):
 
             print(f"[{thread_name}] Starting task: {task.task_name} (Mode: {task.sync_mode})")
 
-            # 3. 运行前准备 (添加 _id 等)
-            sync_service._prepare_source_table(task)
+            # # 3. 运行前准备 (添加 _id 等)
+            # sync_service._prepare_source_table(task)
 
             # 4. 执行任务
             if task.sync_mode == 'FULL_REPLACE':
@@ -210,8 +210,8 @@ def check_and_start_new_binlog_listeners():
 
                     print(f"[{thread_name}] Starting listener for task: {task.task_id}...")
 
-                    # 在启动监听器前, 准备源表 (添加 _id 等)
-                    sync_service._prepare_source_table(task)
+                    # # 在启动监听器前, 准备源表 (添加 _id 等)
+                    # sync_service._prepare_source_table(task)
 
                     listener_thread = threading.Thread(
                         target=run_binlog_listener_in_thread,

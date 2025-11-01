@@ -393,6 +393,7 @@ class SyncService:
 
         return pk_fields, pk_values
 
+    @retry()
     def _find_jdy_id_by_pk(
             self,
             task: SyncTask,
@@ -448,6 +449,8 @@ class SyncService:
                 return None  # 未找到
 
             # 4. 主键去重逻辑
+            total_deleted = 0
+
             if len(jdy_data) > 1:
                 id_to_keep = jdy_data[0].get('_id')
                 ids_to_delete = [d.get('_id') for d in jdy_data[1:] if d.get('_id')]
@@ -459,7 +462,13 @@ class SyncService:
 
                 try:
                     # 调用批量删除 (QPS 10)
-                    data_api_delete.delete_batch_data(task.jdy_app_id, task.jdy_entry_id, ids_to_delete)
+                    data_ids = [d['_id'] for d in jdy_data]
+                    delete_responses = data_api_delete.delete_batch_data(task.jdy_app_id, task.jdy_entry_id, ids_to_delete)
+                    success_count = sum(resp.get('success_count', 0) for resp in delete_responses)
+                    total_deleted += success_count
+                    if success_count != len(data_ids):
+                        log_sync_error(task_config=task,
+                                       extra_info=f"[{task.task_id}] Delete mismatch. Requested: {len(data_ids)}, Deleted: {success_count}.")
                 except Exception as e:
                     log_sync_error(
                         task_config=task,
@@ -480,6 +489,7 @@ class SyncService:
             )
             return None
 
+    @retry()
     def _writeback_id_to_source(
             self,
             source_session: Session,
@@ -602,7 +612,7 @@ class SyncService:
                     data_ids = [d['_id'] for d in jdy_data]
                     delete_responses = data_api_delete.delete_batch_data(task.jdy_app_id, task.jdy_entry_id, data_ids)
 
-                    # 密码delete_batch_data 返回一个列表，需要对列表中的每个响应求和
+                    # delete_batch_data 返回一个列表，需要对列表中的每个响应求和
                     success_count = sum(resp.get('success_count', 0) for resp in delete_responses)
                     total_deleted += success_count
                     if success_count != len(data_ids):
@@ -867,22 +877,35 @@ class SyncService:
                     trans_id = str(uuid.uuid4())
                     if jdy_id:
                         # 更新
-                        data_api_update.update_single_data(
+                        update_response = data_api_update.update_single_data(
                             task.jdy_app_id, task.jdy_entry_id, jdy_id,
                             data_payload, transaction_id=trans_id
                         )
-                        count_updated += 1
+                        update_jdy_id = update_response.get('data', {}).get('_id')
+                        if not update_jdy_id:
+                            log_sync_error(task_config=task,
+                                           payload=data_payload,
+                                           error=update_response,
+                                           extra_info=f"[{task.task_id}] Failed to update data.")
+                        else:
+                            count_updated += 1
                     else:
                         # 新增
-                        response = data_api_create.create_single_data(
+                        create_response = data_api_create.create_single_data(
                             task.jdy_app_id, task.jdy_entry_id,
                             data_payload, transaction_id=trans_id
                         )
-                        new_jdy_id = response.get('data', {}).get('_id')
-                        if new_jdy_id:
-                            count_new += 1
-                            # 传入 row_dict 以进行复合主键回写
-                            self._writeback_id_to_source(source_session, task, new_jdy_id, row_dict)
+                        new_jdy_id = create_response.get('data', {}).get('_id')
+                        if not new_jdy_id:
+                            log_sync_error(task_config=task,
+                                           payload=data_payload,
+                                           error=create_response,
+                                           extra_info=f"[{task.task_id}] Failed to create data.")
+                        # 是否需要回写，有待商榷，实际可不用回写
+                        # if new_jdy_id:
+                        #     count_new += 1
+                        #     # 传入 row_dict 以进行复合主键回写
+                        #     self._writeback_id_to_source(source_session, task, new_jdy_id, row_dict)
 
             print(f"[{task.task_id}] INCREMENTAL sync completed. New: {count_new}, Updated: {count_updated}.")
             self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
@@ -1015,15 +1038,21 @@ class SyncService:
 
                             if isinstance(binlog_event, WriteRowsEvent):
                                 data_payload = self._transform_row_to_jdy(row['values'], payload_map)
-                                response = data_api_create.create_single_data(
+                                create_response = data_api_create.create_single_data(
                                     task.jdy_app_id, task.jdy_entry_id,
                                     data_payload, transaction_id=trans_id
                                 )
-                                new_jdy_id = response.get('data', {}).get('_id')
-                                if new_jdy_id:
-                                    # 传入 row['values']
-                                    self._writeback_id_to_source(source_session, task, new_jdy_id, row['values'])
-                                print(f"[{thread_name}] Created data.")
+                                new_jdy_id = create_response.get('data', {}).get('_id')
+                                if not new_jdy_id:
+                                    log_sync_error(task_config=task,
+                                                   payload = data_payload,
+                                                   error=create_response,
+                                                   extra_info=f"[{thread_name}] Failed to create data.")
+                                # binlog 模式不需要回写_id, 会导致binlog被重复激发
+                                # if new_jdy_id:
+                                #     # 传入 row['values']
+                                #     self._writeback_id_to_source(source_session, task, new_jdy_id, row['values'])
+                                # print(f"[{thread_name}] Created data.")
 
                             elif isinstance(binlog_event, UpdateRowsEvent):
                                 # 传入 row['after_values']
@@ -1034,15 +1063,36 @@ class SyncService:
 
                                 if jdy_id:
                                     data_payload = self._transform_row_to_jdy(row['after_values'], payload_map)
-                                    data_api_update.update_single_data(
+                                    update_response = data_api_update.update_single_data(
                                         task.jdy_app_id, task.jdy_entry_id, jdy_id,
                                         data_payload, transaction_id=trans_id
                                     )
-                                    print(f"[{thread_name}] Updated data.")
+                                    update_jdy_id = update_response.get('data', {}).get('_id')
+                                    if not update_jdy_id:
+                                        log_sync_error(task_config=task,
+                                                       payload=data_payload,
+                                                       error=update_response,
+                                                       extra_info=f"[{task.task_id}] Failed to update data.")
+                                    else:
+                                        print(f"[{thread_name}] Updated data.")
                                 else:
-                                    log_sync_error(task_config=task,
-                                                   extra_info=f"[{thread_name}] Update event skipped: Jdy ID not found.",
-                                                   payload=row['after_values'])
+                                    # log_sync_error(task_config=task,
+                                    #                extra_info=f"[{thread_name}] Update event skipped: Jdy ID not found.",
+                                    #                payload=row['after_values'])
+                                    # 简道云中没有，则新增
+                                    data_payload = self._transform_row_to_jdy(row['after_values'], payload_map)
+                                    create_response = data_api_create.create_single_data(
+                                        task.jdy_app_id, task.jdy_entry_id,
+                                        data_payload, transaction_id=trans_id
+                                    )
+                                    new_jdy_id = create_response.get('data', {}).get('_id')
+                                    if not new_jdy_id:
+                                        log_sync_error(task_config=task,
+                                                       payload=data_payload,
+                                                       error=create_response,
+                                                       extra_info=f"[{thread_name}] Failed to create data.")
+                                    else:
+                                        print(f"[{thread_name}] Update event: Jdy ID not found, Created data.")
 
                             elif isinstance(binlog_event, DeleteRowsEvent):
                                 # 传入 row['values']
@@ -1053,8 +1103,15 @@ class SyncService:
 
                                 if jdy_id:
                                     # Delete single 没有 transaction_id
-                                    data_api_delete.delete_single_data(task.jdy_app_id, task.jdy_entry_id, jdy_id)
-                                    print(f"[{thread_name}] Deleted data.")
+                                    delete_response = data_api_delete.delete_single_data(task.jdy_app_id, task.jdy_entry_id, jdy_id)
+                                    success = delete_response.get('status')
+                                    if not success:
+                                        log_sync_error(task_config=task,
+                                                       payload=row['values'],
+                                                       error=delete_response,
+                                                       extra_info=f"[{thread_name}] Failed to delete data.")
+                                    else:
+                                       print(f"[{thread_name}] Deleted data.")
                                 else:
                                     log_sync_error(task_config=task,
                                                    extra_info=f"[{thread_name}] Delete event skipped: Jdy ID not found.",

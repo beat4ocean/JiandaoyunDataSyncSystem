@@ -32,7 +32,8 @@ class Department(ConfigBase):
     """
     __tablename__ = 'Department'
     id = Column(Integer, primary_key=True, autoincrement=True, comment="关联的租户部门外部ID")
-    department_name = Column(String(100), nullable=False, unique=True, comment="关联的租户部门英文简称, e.g., 'dpt_a'")
+    # 用于前端展示
+    department_name = Column(String(100), nullable=False, unique=True, comment="关联的租户部门全称, e.g., '软件部门'")
     is_active = Column(Boolean, default=True, comment="是否激活")
 
     created_at = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), comment="创建时间")
