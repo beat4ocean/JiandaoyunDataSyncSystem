@@ -61,7 +61,7 @@ def create_department():
     session = ConfigSession()
     try:
         new_dept = Department(
-            department_id=data.get('department_id'),
+            id=data.get('department_id'),
             department_name=data.get('department_name'),
             is_active=data.get('is_active', True)
         )
@@ -86,7 +86,7 @@ def update_department(id):
         if not dept:
             return jsonify({"msg": "Department not found"}), 404
 
-        dept.department_id = data.get('department_id', dept.department_id)
+        dept.id = data.get('department_id', dept.id)
         dept.department_name = data.get('department_name', dept.department_name)
         dept.is_active = data.get('is_active', dept.is_active)
         session.commit()
@@ -244,7 +244,8 @@ def get_tenant_databases():
     session = ConfigSession()
     try:
         # 仅查询需要的字段
-        query = session.query(DatabaseInfo).with_entities(DatabaseInfo.id, DatabaseInfo.db_show_name)
+        query = (session.query(DatabaseInfo)
+                 .with_entities(DatabaseInfo.id, DatabaseInfo.db_show_name, DatabaseInfo.department_id))
 
         if claims.get('is_superuser'):
             # 超管获取所有数据库
@@ -254,8 +255,9 @@ def get_tenant_databases():
             department_id = claims.get('department_id')
             items = query.filter_by(department_id=department_id).all()
 
-        # 返回 {id, name} 格式的列表
-        return jsonify([{"id": item.id, "name": item.db_show_name} for item in items]), 200
+        # 返回 {id, name, department_id} 格式的列表
+        return jsonify(
+            [{"id": item.id, "name": item.db_show_name, "department_id": item.id} for item in items]), 200
     except Exception as e:
         logging.error(f"Get tenant-databases error: {e}")
         return jsonify({"msg": "Internal server error"}), 500
@@ -305,8 +307,8 @@ def create_resource_endpoints(bp, model_class, route_name):
 
         # 确保 department_id 存在
         if 'department_id' not in data or data['department_id'] is None:
-            # JdyKeyInfo 是 1:1，可能在创建时没有 department_id，但 DatabaseInfo 和 SyncTask 需要
-            if model_class in [DatabaseInfo, SyncTask]:
+            # JdyKeyInfo 是 1:1，可能在创建时没有 department_id，但 DatabaseInfo、JdyKeyInfo 和 SyncTask 需要
+            if model_class in [DatabaseInfo, SyncTask, JdyKeyInfo]:
                 return jsonify({"msg": "department_id is required"}), 400
 
         try:
@@ -314,11 +316,17 @@ def create_resource_endpoints(bp, model_class, route_name):
             new_item = model_class(**data)
             session.add(new_item)
             session.commit()
+
+            # 如果是 SyncTask, 需要重新加载以获取 source_db_name
+            if model_class == SyncTask:
+                session.refresh(new_item, ['source_database'])
+
             return jsonify(to_dict(new_item)), 201
         except Exception as e:
             session.rollback()
             logging.error(f"Create {route_name} error: {e}")
             return jsonify({"msg": f"Error creating item: {e}"}), 500
+
         finally:
             session.close()
 
@@ -338,15 +346,20 @@ def create_resource_endpoints(bp, model_class, route_name):
                 return jsonify({"msg": "Item not found"}), 404
 
             # 权限检查：非超管只能修改自己部门的
-            if not claims.get('is_superuser') and item.department_id != claims.get('department_id'):
+            if not claims.get('is_superuser') and item.id != claims.get('department_id'):
                 return jsonify({"msg": "Forbidden"}), 403
 
             # 动态更新字段
             for key, value in data.items():
-                if hasattr(item, key):
+                if hasattr(item, key) and key != pk_name:  # 不允许修改主键
                     setattr(item, key, value)
 
             session.commit()
+
+            # 如果是 SyncTask, 需要重新加载以获取 source_db_name
+            if model_class == SyncTask:
+                session.refresh(item, ['source_database'])
+
             return jsonify(to_dict(item)), 200
         except Exception as e:
             session.rollback()
@@ -370,7 +383,7 @@ def create_resource_endpoints(bp, model_class, route_name):
                 return jsonify({"msg": "Item not found"}), 404
 
             # 权限检查：非超管只能删除自己部门的
-            if not claims.get('is_superuser') and item.department_id != claims.get('department_id'):
+            if not claims.get('is_superuser') and item.id != claims.get('department_id'):
                 return jsonify({"msg": "Forbidden"}), 403
 
             session.delete(item)
@@ -380,7 +393,12 @@ def create_resource_endpoints(bp, model_class, route_name):
             session.rollback()
             logging.error(f"Delete {route_name} error: {e}")
             if "foreign key constraint fails" in str(e).lower():
-                return jsonify({"msg": "Cannot delete: This item is being used by a SyncTask."}), 409
+                # 提供更具体的错误
+                if model_class == DatabaseInfo:
+                    return jsonify({"msg": "Cannot delete: This database is being used by one or more SyncTasks."}), 409
+                if model_class == Department:
+                    return jsonify({
+                        "msg": "Cannot delete: This department is being used by users, databases, or other resources."}), 409
             return jsonify({"msg": f"Error deleting item: {e}"}), 500
         finally:
             session.close()

@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
 from waitress import serve
 
-from app.config import CONFIG_DB_URL, DB_CONNECT_ARGS, CONFIG_DB_NAME, SOURCE_DB_NAME, CONFIG_DB_USER
+from app.config import CONFIG_DB_URL, DB_CONNECT_ARGS, CONFIG_DB_NAME, CONFIG_DB_USER
 
 # 确保 app 目录在 sys.path 中
 sys.path.append(os.path.join(os.path.dirname(__file__), 'app'))
@@ -29,8 +29,8 @@ except ImportError as e:
 def initialize_databases(app: Flask):
     """
     初始化数据库：
-    1. 创建数据库 (config 和 source)，如果它们尚不存在。
-    2. 在 config 数据库中创建所有表 (sync_tasks, users, jdy_key_info)。
+    1. 创建数据库 (config)，如果它尚不存在。
+    2. 在 config 数据库中创建所有表。
     """
     with app.app_context():  # 进入Flask应用上下文
         print("Initializing databases...")
@@ -45,13 +45,13 @@ def initialize_databases(app: Flask):
                 connection.execute(text(
                     f"CREATE DATABASE IF NOT EXISTS `{CONFIG_DB_NAME}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
                 ))
-                # 检查并创建源数据库
-                print(f"Checking/Creating source database: {SOURCE_DB_NAME}")
-                connection.execute(text(
-                    f"CREATE DATABASE IF NOT EXISTS `{SOURCE_DB_NAME}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
-                ))
+                # # 检查并创建源数据库
+                # print(f"Checking/Creating source database: {SOURCE_DB_NAME}")
+                # connection.execute(text(
+                #     f"CREATE DATABASE IF NOT EXISTS `{SOURCE_DB_NAME}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+                # ))
             admin_engine.dispose()
-            print("Database existence check complete.")
+            print("Config Database existence check complete.")
 
         except OperationalError as e:
             if "Access denied" in str(e):
@@ -73,7 +73,7 @@ def initialize_databases(app: Flask):
             print(f"CRITICAL: Failed to create config database tables: {e}")
             raise
 
-        # # 3. 在 *源* 数据库中创建表 (如果定义了)
+        # # 3. 在 *源* 数据库中创建表
         # try:
         #     source_metadata.create_all(source_engine)
         #     print("Source database tables checked/created (if any were defined).")
@@ -81,40 +81,41 @@ def initialize_databases(app: Flask):
         #     print(f"WARNING: Failed to check/create source database tables: {e}")
         #     pass
 
-        print("Database initialization complete. Source table checks will run with each task.")
+        print("Database initialization complete.")
 
 
-def create_first_admin():
-    """
-    检查是否已有用户，如果没有，则根据 .env 文件创建第一个管理员。
-    """
-    admin_user = os.environ.get("ADMIN_USER")
-    admin_pass = os.environ.get("ADMIN_PASSWORD")
-
-    if not admin_user or not admin_pass:
-        print("警告：未在 .env 文件中设置 ADMIN_USER 或 ADMIN_PASSWORD。")
-        print("如果这是第一次启动，你将无法登录。")
-        return
-
-    session = ConfigSession()
-    try:
-        # 检查是否已存在任何用户
-        user_exists = session.query(User).first()
-        if not user_exists:
-            print(f"未找到任何用户，正在创建第一个管理员: {admin_user}")
-            new_admin = User(username=admin_user)
-            new_admin.set_password(admin_pass)
-            new_admin.set_is_superuser(True)
-            session.add(new_admin)
-            session.commit()
-            print(f"管理员 '{admin_user}' 创建成功。")
-        else:
-            print("数据库中已存在用户，跳过创建管理员。")
-    except Exception as e:
-        session.rollback()
-        print(f"创建第一个管理员时出错: {e}")
-    finally:
-        session.close()
+# 此功能已移至 'flask create-admin' CLI 命令 (在 app/__init__.py 中)
+# def create_first_admin(app: Flask):
+#     """
+#     检查是否已有用户，如果没有，则根据 .env 文件创建第一个管理员。
+#     """
+#     admin_user = os.environ.get("ADMIN_USER")
+#     admin_pass = os.environ.get("ADMIN_PASSWORD")
+#
+#     if not admin_user or not admin_pass:
+#         print("警告：未在 .env 文件中设置 ADMIN_USER 或 ADMIN_PASSWORD。")
+#         print("如果这是第一次启动，你将无法登录。")
+#         return
+#
+#     session = ConfigSession()
+#     try:
+#         # 检查是否已存在任何用户
+#         user_exists = session.query(User).first()
+#         if not user_exists:
+#             print(f"未找到任何用户，正在创建第一个管理员: {admin_user}")
+#             new_admin = User(username=admin_user)
+#             new_admin.set_password(admin_pass)
+#             new_admin.set_is_superuser(True)
+#             session.add(new_admin)
+#             session.commit()
+#             print(f"管理员 '{admin_user}' 创建成功。")
+#         else:
+#             print("数据库中已存在用户，跳过创建管理员。")
+#     except Exception as e:
+#         session.rollback()
+#         print(f"创建第一个管理员时出错: {e}")
+#     finally:
+#         session.close()
 
 
 def shutdown_scheduler():
@@ -132,8 +133,8 @@ if __name__ == "__main__":
     with app.app_context():
         # 1. 初始化数据库
         initialize_databases(app)
-        # 2. 检查并创建第一个管理员
-        create_first_admin()
+        # # 2. 检查并创建第一个管理员
+        # create_first_admin()
 
     # 3. 注册一个钩子，在程序退出时调用 shutdown_scheduler
     atexit.register(shutdown_scheduler)

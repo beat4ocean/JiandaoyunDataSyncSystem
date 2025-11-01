@@ -15,7 +15,7 @@ else:
 class Config:
     # --- 数据库连接 (从 .env 读取) ---
 
-    # 1. 配置数据库 (存储任务)
+    # 1. 配置数据库 (存储任务、用户、日志、数据库配置)
     CONFIG_DB_USER = os.getenv('CONFIG_DB_USER', 'root')
     CONFIG_DB_PASSWORD = quote_plus(os.getenv('CONFIG_DB_PASSWORD', 'password'))
     CONFIG_DB_HOST = os.getenv('CONFIG_DB_HOST', 'localhost')

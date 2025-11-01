@@ -142,6 +142,7 @@ def log_sync_error(task_config: 'SyncTask' = None,
     app_id = None
     entry_id = None
     table_name = None
+    department_id = None
     department_name = None
 
     if task_config:
@@ -152,7 +153,8 @@ def log_sync_error(task_config: 'SyncTask' = None,
             app_id = task_config.jdy_app_id
             entry_id = task_config.jdy_entry_id
             table_name = task_config.source_table
-            department_name = task_config.department_name
+            department_id = task_config.department.id
+            department_name = task_config.department.department_name
 
     try:
         # --- 安全地尝试获取会话 ---
@@ -194,6 +196,7 @@ def log_sync_error(task_config: 'SyncTask' = None,
             app_id=app_id,
             entry_id=entry_id,
             table_name=table_name,
+            department_id=department_id,
             department_name=department_name,
             error_message=error_message,
             traceback=traceback_str,  # 使用格式化后的字符串

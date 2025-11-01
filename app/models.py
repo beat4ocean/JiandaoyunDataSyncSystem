@@ -31,8 +31,7 @@ class Department(ConfigBase):
     这是所有多租户模型的““““根””””
     """
     __tablename__ = 'Department'
-    id = Column(Integer, primary_key=True)
-    department_id = Column(Integer, nullable=False, unique=True, comment="关联的租户部门外部ID (保持唯一)")
+    id = Column(Integer, primary_key=True, autoincrement=True, comment="关联的租户部门外部ID")
     department_name = Column(String(100), nullable=False, unique=True, comment="关联的租户部门英文简称, e.g., 'dpt_a'")
     is_active = Column(Boolean, default=True, comment="是否激活")
 
@@ -75,10 +74,6 @@ class User(ConfigBase):
     # 与 Department 的关系
     department = relationship("Department", back_populates="users")
 
-    def set_is_superuser(self, is_superuser):
-        """设置是否超级管理员"""
-        self.is_superuser = is_superuser
-
     def set_password(self, password):
         """设置密码 (加密)"""
         self.password = sha256.hash(password)
@@ -98,11 +93,11 @@ class DatabaseInfo(ConfigBase):
     id = Column(Integer, primary_key=True, autoincrement=True)
     db_show_name = Column(String(50), nullable=False, comment="数据库显示名称 (e.g., 质量部门专用数据库)")
 
-    db_type = Column(String(50), nullable=False, comment="数据库类型")
+    db_type = Column(String(50), nullable=False, comment="数据库类型(e.g. mysql, postgresql, oracle, mssql)")
     db_host = Column(String(50), nullable=False, comment="数据库主机")
     db_port = Column(Integer, nullable=False, comment="数据库端口")
     db_name = Column(String(50), nullable=False, comment="数据库名称")
-    db_args = Column(String(255), nullable=True, comment="数据库连接参数")
+    db_args = Column(String(255), nullable=True, comment="数据库连接参数(e.g. charset=utf8mb4)")
     db_user = Column(String(50), nullable=False, comment="数据库用户名")
     db_password = Column(String(50), nullable=False, comment="数据库密码")
     is_active = Column(Boolean, default=True, comment="是否激活")
@@ -235,7 +230,7 @@ class FormFieldMapping(ConfigBase):
     task_id = Column(Integer, ForeignKey('sync_tasks.task_id'), nullable=False, comment="关联的任务ID")
 
     form_name = Column(String(255), nullable=True, comment="简道云表单名")
-    widget_name = Column(String(255), nullable=False, comment="字段ID (e.g., _widget_xxx_, 用于 API 提交)")
+    widget_name = Column(String(255), nullable=False, comment="字段ID (e.g., _widget_xxx, 用于 API 提交)")
     widget_alias = Column(String(255), nullable=False, comment="字段后端别名 (name, 用于 API 查询/匹配)")
     label = Column(String(255), nullable=False, comment="字段前端别名 (label)")
     type = Column(String(255), nullable=False, comment="字段类型 (type)")
@@ -278,6 +273,7 @@ class SyncErrLog(ConfigBase):
 
     # 直接使用外键关联到 Department.id
     department_id = Column(Integer, ForeignKey('Department.id'), nullable=False, comment="关联的租户ID")
+    department_name = Column(Integer, ForeignKey('Department.department_name'), nullable=False, comment="关联的租户ID")
 
     error_message = Column(Text, nullable=False)
     traceback = Column(Text, nullable=True)

@@ -11,7 +11,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import joinedload
 
 from app.config import Config
-from app.models import ConfigSession, SourceSession, SyncTask
+from app.models import ConfigSession, SyncTask
 from app.services import SyncService, FieldMappingService
 from app.utils import log_sync_error, TZ_UTC_8
 
@@ -35,9 +35,10 @@ def run_task_wrapper(task_id: int):
 
     with ConfigSession() as config_session:
         try:
-            # 使用 joinedload 预加载 department (JdyKeyInfo) 关系
+            # 预加载 department 和 source_database
             task = config_session.query(SyncTask).options(
-                joinedload(SyncTask.department)
+                joinedload(SyncTask.department),
+                joinedload(SyncTask.source_database)
             ).get(task_id)
 
             # 1. 检查任务是否有效
@@ -56,6 +57,12 @@ def run_task_wrapper(task_id: int):
                 log_sync_error(task_config=task, extra_info="Task skipped: Missing API Key.")
                 return
 
+            # 检查源数据库配置
+            if not task.source_database:
+                print(f"[{thread_name}] Task {task_id} missing Source Database config. Skipping.")
+                log_sync_error(task_config=task, extra_info="Task skipped: Missing Source Database config.")
+                return
+
             # 2. (关键) 并发检查: 如果任务已在运行, 则丢弃本次执行
             if task.status == 'running':
                 print(f"[{thread_name}] Task {task_id} is already running. Skipping this run.")
@@ -67,12 +74,11 @@ def run_task_wrapper(task_id: int):
             sync_service._prepare_source_table(task)
 
             # 4. 执行任务
-            with SourceSession() as source_session:
-                if task.sync_mode == 'FULL_REPLACE':
-                    sync_service.run_full_replace(config_session, source_session, task)
+            if task.sync_mode == 'FULL_REPLACE':
+                sync_service.run_full_replace(config_session, task)
 
-                elif task.sync_mode == 'INCREMENTAL':
-                    sync_service.run_incremental(config_session, source_session, task)
+            elif task.sync_mode == 'INCREMENTAL':
+                sync_service.run_incremental(config_session, task)
 
         except OperationalError as e:
             print(f"[{thread_name}] DB connection error in task runner: {e}")
@@ -101,9 +107,10 @@ def run_binlog_listener_in_thread(task_id: int):
 
         # 获取任务对象 (binlog 监听器需要它)
         with ConfigSession() as session:
-            # 使用 joinedload 预加载 department
+            # 预加载 department 和 source_database
             task = session.query(SyncTask).options(
-                joinedload(SyncTask.department)
+                joinedload(SyncTask.department),
+                joinedload(SyncTask.source_database)
             ).get(task_id)
 
             if not task:
@@ -114,6 +121,12 @@ def run_binlog_listener_in_thread(task_id: int):
             if not task.department or not task.department.api_key:
                 print(f"[BinlogListener-{task_id}] Task missing API Key. Exiting thread.")
                 log_sync_error(task_config=task, extra_info="Binlog listener stopped: Missing API Key.")
+                return
+
+            # 检查源数据库配置
+            if not task.source_database:
+                print(f"[{task_id}] Task {task_id} missing Source Database config. Skipping.")
+                log_sync_error(task_config=task, extra_info="Task skipped: Missing Source Database config.")
                 return
 
         # 运行长连接监听器
@@ -140,7 +153,6 @@ def run_binlog_listener_in_thread(task_id: int):
 def check_and_start_new_binlog_listeners():
     """
     APScheduler 作业: 检查并启动新的 BINLOG 监听器。
-    (增加 prepare_source_table 调用)
     """
     thread_name = "BinlogManagerThread"
     current_thread().name = thread_name
@@ -149,9 +161,10 @@ def check_and_start_new_binlog_listeners():
     with ConfigSession() as config_session:
         try:
             # 1. 查找所有激活的 BINLOG 任务
-            # 预加载 department
+            # 预加载 department 和 source_database
             active_binlog_tasks = config_session.query(SyncTask).options(
-                joinedload(SyncTask.department)
+                joinedload(SyncTask.department),
+                joinedload(SyncTask.source_database)
             ).filter(
                 SyncTask.is_active == True,
                 SyncTask.sync_mode == 'BINLOG'
@@ -186,6 +199,13 @@ def check_and_start_new_binlog_listeners():
                     if not task.department or not task.department.api_key:
                         print(f"[{thread_name}] Task {task.task_id} missing API Key. Cannot start listener.")
                         log_sync_error(task_config=task, extra_info="Binlog listener cannot start: Missing API Key.")
+                        continue
+
+                    # 检查源数据库
+                    if not task.source_database:
+                        print(f"[{thread_name}] Task {task.task_id} missing Source Database. Cannot start listener.")
+                        log_sync_error(task_config=task,
+                                       extra_info="Binlog listener cannot start: Missing Source Database.")
                         continue
 
                     print(f"[{thread_name}] Starting listener for task: {task.task_id}...")
@@ -340,9 +360,10 @@ def start_scheduler(app: Flask):
         print("Starting APScheduler...")
         try:
             with ConfigSession() as config_session:
-                # 1. 遍历所有激活的任务并动态添加作业
+                # 1. 预加载 department 和 source_database
                 tasks = config_session.query(SyncTask).options(
-                    joinedload(SyncTask.department)
+                    joinedload(SyncTask.department),
+                    joinedload(SyncTask.source_database)
                 ).filter_by(is_active=True).all()
                 print(f"Found {len(tasks)} active tasks to schedule.")
 

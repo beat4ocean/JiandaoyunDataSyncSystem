@@ -1000,7 +1000,7 @@
     function populateDatabasesTable(databases) {
         const tbody = document.getElementById('databases-table').querySelector('tbody');
         const isSuperuser = localStorage.getItem('is_superuser') === 'true';
-        const colCount = isSuperuser ? 10 : 9; // (已更新)
+        const colCount = isSuperuser ? 10 : 9; //
         if (databases.length === 0) {
             tbody.innerHTML = `<tr><td colspan="${colCount}">没有数据</td></tr>`;
             return;
@@ -1053,7 +1053,7 @@
     function populateSyncTasksTable(tasks) {
         const tbody = document.getElementById('sync-tasks-table').querySelector('tbody');
         const isSuperuser = localStorage.getItem('is_superuser') === 'true';
-        const colCount = isSuperuser ? 11 : 10; // (已更新)
+        const colCount = isSuperuser ? 11 : 10; //
         if (tasks.length === 0) {
             tbody.innerHTML = `<tr><td colspan="${colCount}">没有数据</td></tr>`;
             return;
@@ -1357,7 +1357,7 @@
         }
     });
 
-    // Database 提交 (已更新)
+    // Database 提交
     document.getElementById('database-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         const id = document.getElementById('database-id-hidden').value;
@@ -1415,7 +1415,7 @@
         }
     });
 
-    // SyncTask 提交 (已更新)
+    // SyncTask 提交
     document.getElementById('sync-task-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         const id = document.getElementById('sync-task-id-hidden').value;
