@@ -71,7 +71,8 @@
                                     <span>用户管理</span>
                                 </template>
                                 <el-menu-item index="/departments">
-                                    <el-icon><OfficeBuilding/></el-icon>
+                                    <!--<el-icon><OfficeBuilding/></el-icon>--> <!--不能正常显示-->
+                                    <el-icon><Memo/></el-icon>
                                     <span>部门管理</span>
                                 </el-menu-item>
                                 <el-menu-item index="/users">
@@ -816,7 +817,7 @@
               <el-table-column v-if="isSuperuser" prop="department_name" label="所属部门" sortable></el-table-column>
               <el-table-column prop="task_name" label="任务名称" sortable></el-table-column>
               <el-table-column prop="source_db_name" label="源数据库" sortable>
-                <template #default="scope"> <el-tag>{{ scope.row.source_db_name || 'N/A' }})</el-tag> </template>
+                <template #default="scope"> <el-tag>{{ scope.row.source_db_name || 'N/A' }}</el-tag> </template>
               </el-table-column>
               <el-table-column prop="source_table" label="源表名" sortable></el-table-column>
               <el-table-column prop="jdy_app_id" label="App ID"></el-table-column>
