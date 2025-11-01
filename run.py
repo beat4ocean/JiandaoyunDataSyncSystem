@@ -16,8 +16,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'app'))
 try:
     from app import create_app
     from app.models import (
-        config_engine, source_engine, config_metadata, source_metadata,
-        ConfigSession, User
+        config_engine, config_metadata, ConfigSession, User
     )
     from app.scheduler import scheduler, start_scheduler
     from app.utils import log_sync_error
@@ -74,26 +73,26 @@ def initialize_databases(app: Flask):
             print(f"CRITICAL: Failed to create config database tables: {e}")
             raise
 
-        # 3. 在 *源* 数据库中创建表 (如果定义了)
-        try:
-            source_metadata.create_all(source_engine)
-            print("Source database tables checked/created (if any were defined).")
-        except Exception as e:
-            print(f"WARNING: Failed to check/create source database tables: {e}")
-            pass
+        # # 3. 在 *源* 数据库中创建表 (如果定义了)
+        # try:
+        #     source_metadata.create_all(source_engine)
+        #     print("Source database tables checked/created (if any were defined).")
+        # except Exception as e:
+        #     print(f"WARNING: Failed to check/create source database tables: {e}")
+        #     pass
 
         print("Database initialization complete. Source table checks will run with each task.")
 
 
-def create_first_admin(app: Flask):
+def create_first_admin():
     """
     检查是否已有用户，如果没有，则根据 .env 文件创建第一个管理员。
     """
     admin_user = os.environ.get("ADMIN_USER")
-    admin_pass = os.environ.get("ADMIN_PASS")
+    admin_pass = os.environ.get("ADMIN_PASSWORD")
 
     if not admin_user or not admin_pass:
-        print("警告：未在 .env 文件中设置 ADMIN_USER 或 ADMIN_PASS。")
+        print("警告：未在 .env 文件中设置 ADMIN_USER 或 ADMIN_PASSWORD。")
         print("如果这是第一次启动，你将无法登录。")
         return
 
@@ -105,6 +104,7 @@ def create_first_admin(app: Flask):
             print(f"未找到任何用户，正在创建第一个管理员: {admin_user}")
             new_admin = User(username=admin_user)
             new_admin.set_password(admin_pass)
+            new_admin.set_is_superuser(True)
             session.add(new_admin)
             session.commit()
             print(f"管理员 '{admin_user}' 创建成功。")
@@ -133,7 +133,7 @@ if __name__ == "__main__":
         # 1. 初始化数据库
         initialize_databases(app)
         # 2. 检查并创建第一个管理员
-        create_first_admin(app)
+        create_first_admin()
 
     # 3. 注册一个钩子，在程序退出时调用 shutdown_scheduler
     atexit.register(shutdown_scheduler)

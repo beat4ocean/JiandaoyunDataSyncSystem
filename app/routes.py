@@ -2,6 +2,7 @@
 import logging
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt
+from sqlalchemy.orm import joinedload
 from app.models import (
     ConfigSession, Department, User, DatabaseInfo, JdyKeyInfo, SyncTask, SyncErrLog
 )
@@ -28,6 +29,14 @@ def to_dict(model_instance):
         if column.name == 'password':
             continue
         d[column.name] = getattr(model_instance, column.name)
+
+    # --- 添加关联数据库显示名称 ---
+    if isinstance(model_instance, SyncTask):
+        if model_instance.source_database:
+            d['source_db_name'] = model_instance.source_database.db_show_name
+        else:
+            d['source_db_name'] = 'N/A'
+
     return d
 
 
@@ -223,6 +232,37 @@ def delete_user(id):
         session.close()
 
 
+# --- API: 获取用于下拉框的数据库列表 ---
+
+@api_bp.route('/api/tenant-databases', methods=['GET'])
+@jwt_required()
+def get_tenant_databases():
+    """
+    获取当前租户可用的数据库列表 (仅ID和显示名称)，用于填充表单下拉框。
+    """
+    claims = get_current_user_claims()
+    session = ConfigSession()
+    try:
+        # 仅查询需要的字段
+        query = session.query(DatabaseInfo).with_entities(DatabaseInfo.id, DatabaseInfo.db_show_name)
+
+        if claims.get('is_superuser'):
+            # 超管获取所有数据库
+            items = query.all()
+        else:
+            # 租户仅获取自己部门的数据库
+            department_id = claims.get('department_id')
+            items = query.filter_by(department_id=department_id).all()
+
+        # 返回 {id, name} 格式的列表
+        return jsonify([{"id": item.id, "name": item.db_show_name} for item in items]), 200
+    except Exception as e:
+        logging.error(f"Get tenant-databases error: {e}")
+        return jsonify({"msg": "Internal server error"}), 500
+    finally:
+        session.close()
+
+
 # --- 通用资源 API (DatabaseInfo, JdyKeyInfo, SyncTask) ---
 
 def create_resource_endpoints(bp, model_class, route_name):
@@ -236,11 +276,18 @@ def create_resource_endpoints(bp, model_class, route_name):
         claims = get_current_user_claims()
         session = ConfigSession()
         try:
+            query = session.query(model_class)
+
+            # --- 如果是 SyncTask，预加载 source_database ---
+            if model_class == SyncTask:
+                query = query.options(joinedload(SyncTask.source_database))
+
             if claims.get('is_superuser'):
-                items = session.query(model_class).all()
+                items = query.all()
             else:
                 department_id = claims.get('department_id')
-                items = session.query(model_class).filter_by(department_id=department_id).all()
+                items = query.filter_by(department_id=department_id).all()
+
             return jsonify([to_dict(item) for item in items]), 200
         finally:
             session.close()
@@ -258,7 +305,9 @@ def create_resource_endpoints(bp, model_class, route_name):
 
         # 确保 department_id 存在
         if 'department_id' not in data or data['department_id'] is None:
-            return jsonify({"msg": "department_id is required"}), 400
+            # JdyKeyInfo 是 1:1，可能在创建时没有 department_id，但 DatabaseInfo 和 SyncTask 需要
+            if model_class in [DatabaseInfo, SyncTask]:
+                return jsonify({"msg": "department_id is required"}), 400
 
         try:
             # 动态创建实例
@@ -330,6 +379,8 @@ def create_resource_endpoints(bp, model_class, route_name):
         except Exception as e:
             session.rollback()
             logging.error(f"Delete {route_name} error: {e}")
+            if "foreign key constraint fails" in str(e).lower():
+                return jsonify({"msg": "Cannot delete: This item is being used by a SyncTask."}), 409
             return jsonify({"msg": f"Error deleting item: {e}"}), 500
         finally:
             session.close()

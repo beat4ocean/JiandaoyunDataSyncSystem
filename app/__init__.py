@@ -10,7 +10,7 @@ from flask_jwt_extended import JWTManager
 from flask_cors import CORS
 
 from app.config import Config
-from app.models import ConfigSession, SourceSession
+from app.models import ConfigSession
 
 
 def create_app():
@@ -47,20 +47,18 @@ def create_app():
         re.compile(r"^https?://10\..*")
     ])
 
-    # 2. 注册蓝图
-    from app.routes import main_bp
-    app.register_blueprint(main_bp)
-
-    # 注册认证和 API 蓝图
+    # 2.  # 注册认证和 API 蓝图
     from app.auth import auth_bp
     app.register_blueprint(auth_bp)
-    from app.api import api_bp
+
+    from app.routes import api_bp
     app.register_blueprint(api_bp)
 
     # 3. (关键) 设置请求生命周期内的会话管理
     # 使用 scoped_session 确保线程安全
     config_session_scoped = scoped_session(ConfigSession)
-    source_session_scoped = scoped_session(SourceSession)
+
+    # source_session_scoped = scoped_session(SourceSession)
 
     @app.before_request
     def create_sessions():
@@ -74,25 +72,25 @@ def create_app():
         for attempt in range(3):
             try:
                 g.config_session = config_session_scoped()
-                g.source_session = source_session_scoped()
+                # g.source_session = source_session_scoped()
 
                 # type尝试轻量级查询以激活连接, 从而触发重试
                 g.config_session.query(1).first()
-                g.source_session.query(1).first()
+                # g.source_session.query(1).first()
 
                 # 连接成功, 退出循环
                 return
 
             except OperationalError as e:
                 last_exception = e
-                print(f"Warning: DB connection failed on attempt {attempt + 1}/3. Retrying in 2s...")
+                print(f"Warning: Config DB connection failed on attempt {attempt + 1}/3. Retrying in 2s...")
                 # 发生连接错误时, 显式回滚/移除会话
                 config_session_scoped.remove()
-                source_session_scoped.remove()
+                # source_session_scoped.remove()
                 time.sleep(2)  # 简单延迟
 
         # type如果所有重试都失败
-        print(f"CRITICAL: Failed to create DB session after 3 attempts: {last_exception}")
+        print(f"CRITICAL: Failed to create Config DB session after 3 attempts: {last_exception}")
         # 抛出 503 服务不可用
         abort(503, "Database connection failed.")
 
@@ -106,9 +104,9 @@ def create_app():
         if config_session is not None:
             config_session_scoped.remove()
 
-        source_session = g.pop('source_session', None)
-        if source_session is not None:
-            source_session_scoped.remove()
+        # source_session = g.pop('source_session', None)
+        # if source_session is not None:
+        #     source_session_scoped.remove()
 
     # --- Serve Frontend ---
     # 用于服务 Vue SPA 的路由
@@ -119,7 +117,7 @@ def create_app():
             # 服务静态文件 (js, css, etc.)
             return send_from_directory(app.static_folder, path)
         else:
-            # 其他所有路径都返回 index.html，交由 Vue Router 处理
+            # 其他所有路径都返回 index.html
             return send_from_directory(app.static_folder, 'index.html')
 
     print("Flask App created with JWT, CORS, and SPA frontend serving.")

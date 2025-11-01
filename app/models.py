@@ -7,29 +7,20 @@ from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import sessionmaker, DeclarativeBase, relationship
 from passlib.hash import pbkdf2_sha256 as sha256
 
-from app.config import CONFIG_DB_URL, SOURCE_DB_URL, DB_CONNECT_ARGS
+from app.config import CONFIG_DB_URL, DB_CONNECT_ARGS
 from app.utils import TZ_UTC_8
 
 # --- 数据库引擎和会话 ---
 
-# 配置数据库 (存储任务、日志、用户)
+# 配置数据库 (存储任务、日志、用户、数据库配置)
 config_engine = create_engine(CONFIG_DB_URL, pool_recycle=3600, connect_args=DB_CONNECT_ARGS)
 ConfigSession = sessionmaker(bind=config_engine)
 config_metadata = MetaData()
-
-# 源数据库 (存储需要被同步的业务数据)
-source_engine = create_engine(SOURCE_DB_URL, pool_recycle=3600, connect_args=DB_CONNECT_ARGS)
-SourceSession = sessionmaker(bind=source_engine)
-source_metadata = MetaData()
 
 
 # --- 声明式基类 ---
 class ConfigBase(DeclarativeBase):
     metadata = config_metadata
-
-
-class SourceBase(DeclarativeBase):
-    metadata = source_metadata
 
 
 # --- 部门模型 ---
@@ -84,6 +75,10 @@ class User(ConfigBase):
     # 与 Department 的关系
     department = relationship("Department", back_populates="users")
 
+    def set_is_superuser(self, is_superuser):
+        """设置是否超级管理员"""
+        self.is_superuser = is_superuser
+
     def set_password(self, password):
         """设置密码 (加密)"""
         self.password = sha256.hash(password)
@@ -97,10 +92,11 @@ class User(ConfigBase):
 
 class DatabaseInfo(ConfigBase):
     """
-    存储数据库连接配置，并关联到 *一个* 租户
+    存储 *源* 数据库连接配置，并关联到 *一个* 租户
     """
     __tablename__ = 'database'
     id = Column(Integer, primary_key=True, autoincrement=True)
+    db_show_name = Column(String(50), nullable=False, comment="数据库显示名称 (e.g., 质量部门专用数据库)")
 
     db_type = Column(String(50), nullable=False, comment="数据库类型")
     db_host = Column(String(50), nullable=False, comment="数据库主机")
@@ -121,8 +117,14 @@ class DatabaseInfo(ConfigBase):
     # 关系应指向 Department
     department = relationship("Department", back_populates="database_infos")
 
+    # 此数据库配置被哪些同步任务使用
+    sync_tasks = relationship("SyncTask", back_populates="source_database")
+
     __table_args__ = (
-        UniqueConstraint('db_type', 'db_host', 'db_port', 'db_name', 'db_user', name='uq_department_name'),
+        # 确保同一个租户下的显示名称是唯一的
+        UniqueConstraint('department_id', 'db_show_name', name='uq_dept_db_show_name'),
+        # 确保连接信息是唯一的
+        UniqueConstraint('db_type', 'db_host', 'db_port', 'db_name', 'db_user', name='uq_db_connection_info'),
     )
 
 
@@ -159,8 +161,11 @@ class SyncTask(ConfigBase):
     task_id = Column(Integer, primary_key=True, autoincrement=True, comment="任务ID")
     task_name = Column(String(255), nullable=True, comment="任务名称")
 
-    # 源数据库配置
+    # 1. 关联到 DatabaseInfo
+    source_db_id = Column(Integer, ForeignKey('database.id'), nullable=False, comment="源数据库ID")
+    # 2. 源表名
     source_table = Column(String(255), nullable=False, comment="源数据库表名")
+
     # 业务主键
     pk_field_names = Column(String(255), nullable=False, comment="源表主键字段名 (复合主键用英文逗号分隔)")
 
@@ -200,8 +205,11 @@ class SyncTask(ConfigBase):
     updated_at = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), onupdate=lambda: datetime.now(TZ_UTC_8),
                         comment="更新时间")
 
-    # 关系指向 Department
+    # 关系1: 指向 Department
     department = relationship("Department", back_populates="sync_tasks")
+
+    # --- 关系2: 指向源数据库 ---
+    source_database = relationship("DatabaseInfo", back_populates="sync_tasks")
 
     # 与 FormFieldMapping 的 1:N 关系
     field_mappings = relationship("FormFieldMapping", back_populates="task", cascade="all, delete-orphan")

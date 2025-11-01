@@ -42,12 +42,13 @@
             font-weight: 500;
         }
 
-        .form-group input {
+        .form-group input, .form-group select {
             width: 100%;
             padding: 12px;
             border: 1px solid #ddd;
             border-radius: 6px;
             box-sizing: border-box; /* 确保 padding 不影响宽度 */
+            background-color: #fff;
         }
 
         button {
@@ -404,6 +405,7 @@
                     <tr>
                         <th>ID</th>
                         <th class="admin-only">部门ID</th>
+                        <th>显示名称</th>
                         <th>类型</th>
                         <th>主机</th>
                         <th>端口</th>
@@ -446,6 +448,7 @@
                         <th>ID</th>
                         <th class="admin-only">部门ID</th>
                         <th>任务名称</th>
+                        <th>源数据库</th>
                         <th>源表</th>
                         <th>简道云AppID</th>
                         <th>简道云EntryID</th>
@@ -577,6 +580,10 @@
                 <select id="database-department-id" required></select>
             </div>
             <div class="form-group">
+                <label for="database-db-show-name">显示名称 (e.g., 生产库)</label>
+                <input type="text" id="database-db-show-name" required>
+            </div>
+            <div class="form-group">
                 <label for="database-db-type">数据库类型 (e.g., mysql)</label>
                 <input type="text" id="database-db-type" value="mysql" required>
             </div>
@@ -646,6 +653,12 @@
                 <input type="text" id="sync-task-task-name">
             </div>
             <div class="form-group">
+                <label for="sync-task-source-db-id">源数据库</label>
+                <select id="sync-task-source-db-id" required>
+                    <option value="">-- 请先选择部门 --</option>
+                </select>
+            </div>
+            <div class="form-group">
                 <label for="sync-task-source-table">源表名</label>
                 <input type="text" id="sync-task-source-table" required>
             </div>
@@ -680,7 +693,8 @@
 
 <script>
     // --- 全局变量和帮助函数 ---
-    let departmentsCache = []; // 用于填充下拉框
+    let departmentsCache = []; // 用于填充部门下拉框
+    let tenantDatabasesCache = []; // 用于填充数据库下拉框
 
     /**
      * 封装的 fetch API, 自动添加 JWT
@@ -770,6 +784,8 @@
 
     function logout() {
         localStorage.clear();
+        departmentsCache = [];
+        tenantDatabasesCache = [];
         document.getElementById('app-container').style.display = 'none';
         document.getElementById('login-container').style.display = 'block';
     }
@@ -777,7 +793,7 @@
     /**
      * 根据登录状态初始化应用UI
      */
-    function showAppUI() {
+    async function showAppUI() {
         const token = localStorage.getItem('access_token');
         if (!token) {
             logout();
@@ -810,9 +826,10 @@
         // 导航到默认页面 (仪表盘)
         navigateTo('dashboard');
 
-        // 预加载部门信息 (用于下拉框)
+        // 预加载所有下拉框所需的数据
+        await loadTenantDatabasesCache(); //
         if (isSuperuser) {
-            loadDepartmentsCache();
+            await loadDepartmentsCache();
         }
     }
 
@@ -887,7 +904,30 @@
     }
 
     /**
-     * 预加载部门列表，用于填充表单中的下拉框
+     * 预加载租户数据库列表
+     */
+    async function loadTenantDatabasesCache() {
+        try {
+            tenantDatabasesCache = await apiFetch('/api/tenant-databases');
+            // (移除) 不在此处填充，在 showModal 时填充
+        } catch (error) {
+            console.error("Error loading tenant databases cache:", error);
+        }
+    }
+
+    /**
+     * 填充数据库下拉框
+     */
+    function populateDatabaseSelect(selectId, databases) {
+        const select = document.getElementById(selectId);
+        select.innerHTML = '<option value="">-- 请选择 --</option>';
+        databases.forEach(db => {
+            select.innerHTML += `<option value="${db.id}">${db.name} (ID: ${db.id})</option>`;
+        });
+    }
+
+    /**
+     * 预加载部门列表 (超管)
      */
     async function loadDepartmentsCache() {
         try {
@@ -960,7 +1000,7 @@
     function populateDatabasesTable(databases) {
         const tbody = document.getElementById('databases-table').querySelector('tbody');
         const isSuperuser = localStorage.getItem('is_superuser') === 'true';
-        const colCount = isSuperuser ? 9 : 8;
+        const colCount = isSuperuser ? 10 : 9; // (已更新)
         if (databases.length === 0) {
             tbody.innerHTML = `<tr><td colspan="${colCount}">没有数据</td></tr>`;
             return;
@@ -970,7 +1010,7 @@
                 <tr>
                     <td>${d.id}</td>
                     ${isSuperuser ? `<td>${d.department_id}</td>` : ''}
-                    <td>${d.db_type}</td>
+                    <td>${d.db_show_name}</td> <td>${d.db_type}</td>
                     <td>${d.db_host}</td>
                     <td>${d.db_port}</td>
                     <td>${d.db_name}</td>
@@ -1013,7 +1053,7 @@
     function populateSyncTasksTable(tasks) {
         const tbody = document.getElementById('sync-tasks-table').querySelector('tbody');
         const isSuperuser = localStorage.getItem('is_superuser') === 'true';
-        const colCount = isSuperuser ? 10 : 9;
+        const colCount = isSuperuser ? 11 : 10; // (已更新)
         if (tasks.length === 0) {
             tbody.innerHTML = `<tr><td colspan="${colCount}">没有数据</td></tr>`;
             return;
@@ -1024,7 +1064,7 @@
                     <td>${t.task_id}</td>
                     ${isSuperuser ? `<td>${t.department_id}</td>` : ''}
                     <td>${t.task_name || 'N/A'}</td>
-                    <td>${t.source_table}</td>
+                    <td>${t.source_db_name || 'N/A'}</td> <td>${t.source_table}</td>
                     <td>${t.jdy_app_id}</td>
                     <td>${t.jdy_entry_id}</td>
                     <td>${t.sync_mode}</td>
@@ -1090,6 +1130,14 @@
                 document.getElementById('database-db-password').placeholder = '';
             }
         }
+
+        // --- 特殊处理：同步任务模态框 ---
+        if (modalId === 'sync-task-modal') {
+            // (Re)-populate the database dropdown from the cache
+            // 此时 tenantDatabasesCache 应该已经加载
+            populateDatabaseSelect('sync-task-source-db-id', tenantDatabasesCache);
+        }
+
         document.getElementById(modalId).style.display = 'flex';
     }
 
@@ -1109,6 +1157,11 @@
                 alert(`${entityName} 删除成功!`);
                 // 重新加载对应的表格
                 navigateTo(entityName + 's'); // e.g., 'departments'
+
+                // 如果删除了数据库，刷新数据库缓存
+                if (entityName === 'database') {
+                    await loadTenantDatabasesCache();
+                }
             } catch (error) {
                 console.error(`Error deleting ${entityName}:`, error);
             }
@@ -1194,6 +1247,7 @@
 
     function populateDatabaseForm(data) {
         document.getElementById('database-department-id').value = data.department_id;
+        document.getElementById('database-db-show-name').value = data.db_show_name; //
         document.getElementById('database-db-type').value = data.db_type;
         document.getElementById('database-db-host').value = data.db_host;
         document.getElementById('database-db-port').value = data.db_port;
@@ -1216,6 +1270,7 @@
     function populateSyncTaskForm(data) {
         document.getElementById('sync-task-department-id').value = data.department_id;
         document.getElementById('sync-task-task-name').value = data.task_name;
+        document.getElementById('sync-task-source-db-id').value = data.source_db_id; //
         document.getElementById('sync-task-source-table').value = data.source_table;
         document.getElementById('sync-task-pk-field-names').value = data.pk_field_names;
         document.getElementById('sync-task-jdy-app-id').value = data.jdy_app_id;
@@ -1302,12 +1357,13 @@
         }
     });
 
-    // Database 提交
+    // Database 提交 (已更新)
     document.getElementById('database-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         const id = document.getElementById('database-id-hidden').value;
         const data = {
             department_id: document.getElementById('database-department-id').value,
+            db_show_name: document.getElementById('database-db-show-name').value, //
             db_type: document.getElementById('database-db-type').value,
             db_host: document.getElementById('database-db-host').value,
             db_port: document.getElementById('database-db-port').value,
@@ -1332,6 +1388,7 @@
             await apiFetch(url, {method, body: JSON.stringify(data)});
             closeModal('database-modal');
             navigateTo('databases');
+            await loadTenantDatabasesCache(); // 刷新数据库缓存
         } catch (error) {
             console.error("Save database error:", error);
         }
@@ -1358,13 +1415,14 @@
         }
     });
 
-    // SyncTask 提交
+    // SyncTask 提交 (已更新)
     document.getElementById('sync-task-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         const id = document.getElementById('sync-task-id-hidden').value;
         const data = {
             department_id: document.getElementById('sync-task-department-id').value,
             task_name: document.getElementById('sync-task-task-name').value,
+            source_db_id: document.getElementById('sync-task-source-db-id').value, //
             source_table: document.getElementById('sync-task-source-table').value,
             pk_field_names: document.getElementById('sync-task-pk-field-names').value,
             jdy_app_id: document.getElementById('sync-task-jdy-app-id').value,

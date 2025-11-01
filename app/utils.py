@@ -42,7 +42,7 @@ def json_serializer(obj):
     if isinstance(obj, time_obj):
         return obj.strftime('%H:%M:%S')
 
-    # 新增：如果是 Decimal 对象，将其转换为 float
+    # 如果是 Decimal 对象，将其转换为 float
     if isinstance(obj, Decimal):
         return float(obj)
 
