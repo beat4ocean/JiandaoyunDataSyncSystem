@@ -45,7 +45,6 @@ def create_app():
     jwt = JWTManager(app)
 
     # JWT 声明加载器 - 确保 User/Department 信息在每个请求中都是最新的
-    # (这在 app/auth.py 的 login 中已经做了, 但这里是可选的附加步骤)
     @jwt.user_lookup_loader
     def user_lookup_callback(_jwt_header, jwt_data):
         """
@@ -53,11 +52,14 @@ def create_app():
         确保 g.user 是最新的 User 对象
         """
         identity = jwt_data["sub"]  # 'sub' 是 user.id
-        session = config_session_scoped()
-        try:
+
+        # 使用 'g' 对象上的请求会话 (由 before_request 创建)
+        # 不要在此处创建或移除会话
+        session = g.config_session
+
+        if session:
             return session.query(User).get(identity)
-        finally:
-            config_session_scoped.remove()
+        return None
 
     # @jwt.additional_claims_loader
     # def add_claims_to_access_token(identity):

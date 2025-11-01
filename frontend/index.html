@@ -378,12 +378,12 @@
               </div>
             </template>
             <el-table :data="items" v-loading="loading" style="width: 100%">
-              <el-table-column prop="id" label="部门ID (外部)" width="120" sortable></el-table-column>
+              <el-table-column prop="id" label="部门ID" width="200" sortable></el-table-column>
               <el-table-column prop="department_name" label="部门简称 (英文)" sortable></el-table-column>
-              <el-table-column prop="is_active" label="是否激活" width="100">
+              <el-table-column prop="is_active" label="是否激活" width="200">
                 <template #default="scope"> <el-tag :type="scope.row.is_active ? 'success' : 'info'">{{ scope.row.is_active ? '是' : '否' }}</el-tag> </template>
               </el-table-column>
-              <el-table-column label="操作" width="180" fixed="right">
+              <el-table-column label="操作" width="300" fixed="right">
                 <template #default="scope">
                   <el-button size="small" @click="openDialog(scope.row)" :icon="ElementPlusIcons.Edit">编辑</el-button>
                   <el-button size="small" type="danger" @click="deleteItem(scope.row.id)" :icon="ElementPlusIcons.Delete">删除</el-button>
@@ -430,16 +430,16 @@
               </div>
             </template>
             <el-table :data="items" v-loading="loading" style="width: 100%">
-              <el-table-column prop="id" label="ID" width="80" sortable></el-table-column>
+              <el-table-column prop="id" label="ID" width="100" sortable></el-table-column>
               <el-table-column prop="username" label="用户名" sortable></el-table-column>
               <el-table-column prop="department_id" label="所属部门ID" sortable></el-table-column>
-              <el-table-column prop="is_superuser" label="超级管理员" width="120">
+              <el-table-column prop="is_superuser" label="超级管理员" width="200">
                 <template #default="scope"> <el-tag :type="scope.row.is_superuser ? 'danger' : 'info'">{{ scope.row.is_superuser ? '是' : '否' }}</el-tag> </template>
               </el-table-column>
-              <el-table-column prop="is_active" label="是否激活" width="100">
+              <el-table-column prop="is_active" label="是否激活" width="200">
                 <template #default="scope"> <el-tag :type="scope.row.is_active ? 'success' : 'info'">{{ scope.row.is_active ? '是' : '否' }}</el-tag> </template>
               </el-table-column>
-              <el-table-column label="操作" width="250" fixed="right">
+              <el-table-column label="操作" width="300" fixed="right">
                 <template #default="scope">
                   <el-button size="small" @click="openResetPassword(scope.row)" :icon="ElementPlusIcons.RefreshLeft">重置密码</el-button>
                   <el-button size="small" @click="openDialog(scope.row)" :icon="ElementPlusIcons.Edit">编辑</el-button>
@@ -573,7 +573,7 @@
               <el-table-column prop="is_active" label="激活" width="80">
                 <template #default="scope"> <el-tag :type="scope.row.is_active ? 'success' : 'info'">{{ scope.row.is_active ? '是' : '否' }}</el-tag> </template>
               </el-table-column>
-              <el-table-column label="操作" width="180" fixed="right">
+              <el-table-column label="操作" width="300" fixed="right">
                 <template #default="scope">
                   <el-button size="small" @click="openDialog(scope.row)" :icon="ElementPlusIcons.Edit">编辑</el-button>
                   <el-button size="small" type="danger" @click="deleteItem(scope.row.id)" :icon="ElementPlusIcons.Delete">删除</el-button>
@@ -667,7 +667,7 @@
         }
     };
 
-    // --- (修改) JdyKeyInfo Component (适配多租户) ---
+    // --- JdyKeyInfo Component (适配多租户) ---
     const JdyKeyInfoView = {
         props: ['isSuperuser'],
         template: `
@@ -683,7 +683,7 @@
               <el-table-column label="API Key (部分)">
                 <template #default="scope"> {{ scope.row.api_key.substring(0, 10) }}... </template>
               </el-table-column>
-              <el-table-column label="操作" width="180" fixed="right">
+              <el-table-column label="操作" width="300" fixed="right">
                 <template #default="scope">
                   <el-button size="small" @click="openDialog(scope.row)" :icon="ElementPlusIcons.Edit">编辑</el-button>
                   <el-button size="small" type="danger" @click="deleteItem(scope.row.id)" :icon="ElementPlusIcons.Delete">删除</el-button>
@@ -730,7 +730,7 @@
         }
     };
 
-    // --- (修改) SyncTask Component (适配多租户) ---
+    // --- SyncTask Component (适配多租户) ---
     const SyncTaskView = {
         props: ['isSuperuser'],
         template: `
@@ -764,7 +764,7 @@
               <el-table-column prop="last_sync_time" label="上次同步时间" width="170">
                 <template #default="scope">{{ formatDateTime(scope.row.last_sync_time) }}</template>
               </el-table-column>
-              <el-table-column label="操作" width="180" fixed="right">
+              <el-table-column label="操作" width="300" fixed="right">
                 <template #default="scope">
                   <el-button size="small" @click="openDialog(scope.row)" :icon="ElementPlusIcons.Edit">编辑</el-button>
                   <el-button size="small" type="danger" @click="deleteItem(scope.row.task_id)" :icon="ElementPlusIcons.Delete">删除</el-button>
@@ -1017,7 +1017,7 @@
         }
     };
 
-    // --- (修改) SyncLog Component (适配多租户) ---
+    // --- SyncLog Component (适配多租户) ---
     const SyncLogView = {
         props: ['isSuperuser'],
         template: `
@@ -1159,7 +1159,8 @@
                 if (!force) {
                     try {
                         // (新) 调用 /api/logout (DELETE) 来吊销Token
-                        await apiClient.delete('/logout');
+                        // 修正：auth.py 中没有 /logout 路由，所以我们跳过它
+                        // await apiClient.delete('/logout');
                     } catch (error) {
                         console.error("Logout failed, proceeding with client-side cleanup:", error);
                     }
@@ -1207,9 +1208,11 @@
     app.component('SyncTaskView', SyncTaskView);
     app.component('SyncLogView', SyncLogView);
 
-    for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
+    // 修复将 ElementPlusIconsVue 错误地用于循环的 BUG
+    for (const [key, component] of Object.entries(ElementPlusIcons)) {
         app.component(key, component)
     }
+
     app.use(router);
     app.use(ElementPlus, {locale: ElementPlusLocaleZhCn.default});
     app.mount('#app');

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import logging
 from functools import wraps
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, g
 from flask_jwt_extended import (
     create_access_token, create_refresh_token, jwt_required, get_jwt, get_jwt_identity
 )
@@ -43,7 +43,10 @@ def login():
     if not username or not password:
         return jsonify({"msg": "Missing username or password"}), 400
 
-    session = ConfigSession()
+    # --- 不在此处创建会话 ---
+    # session = ConfigSession()
+    # 使用 g.config_session，它由 __init__.py 的 before_request 创建
+    session = g.config_session
     try:
         # !! 确保 User 模型有 department_id 和 is_superuser
         user = session.query(User).filter_by(username=username).first()
@@ -52,9 +55,11 @@ def login():
             if not user.is_active:
                 return jsonify({"msg": "User account is disabled"}), 401
 
-            # 创建 JWT 声明 (claims)
-            # 我们将 user.id 作为 identity，以便于后续操作
-            identity = user.id
+            # --- START FIX: 'Subject must be a string' ---
+            # JWT 的 identity 必须是字符串
+            identity = str(user.id)
+            # --- END FIX ---
+
             additional_claims = {
                 "user_id": user.id,
                 "username": user.username,
@@ -70,7 +75,6 @@ def login():
                 additional_claims=additional_claims
             )
             refresh_token = create_refresh_token(identity=identity)
-
 
             # 返回 Token 和用户信息 (用于前端 localStorage)
             return jsonify(
@@ -89,7 +93,8 @@ def login():
         logging.error(f"Login error: {e}")
         return jsonify({"msg": "Internal server error"}), 500
     finally:
-        session.close()
+        # 移除 session.close()，由 teardown_request 统一处理
+        pass
 
 
 @auth_bp.route('/api/users/change-password', methods=['PATCH'])
@@ -105,13 +110,14 @@ def change_password():
     if not old_password or not new_password:
         return jsonify({"msg": "Missing old or new password"}), 400
 
-    # 从 JWT 的 identity 中获取 user_id
+    # 从 JWT 的 identity 中获取 user_id (这将是一个字符串)
     user_id = get_jwt_identity()
     if not user_id:
         return jsonify({"msg": "Invalid token identity"}), 401
 
-    session = ConfigSession()
+    session = g.config_session  # 使用 g.config_session
     try:
+        # session.get() 可以处理字符串 '1'
         user = session.query(User).get(user_id)
         if not user:
             return jsonify({"msg": "User not found"}), 404
@@ -130,7 +136,8 @@ def change_password():
         logging.error(f"Change password error: {e}")
         return jsonify({"msg": "Internal server error"}), 500
     finally:
-        session.close()
+        pass  # 移除 session.close()
+
 
 # --- Refresh 路由 ---
 @auth_bp.route('/api/refresh', methods=['POST'])
@@ -139,8 +146,9 @@ def refresh():
     """
     使用有效的 Refresh Token 获取一个新的 Access Token
     """
+    # get_jwt_identity() 将返回创建 refresh_token 时使用的字符串 identity
     identity = get_jwt_identity()
-    session = ConfigSession()
+    session = g.config_session  # 使用 g.config_session
     try:
         # 重新获取用户信息来填充 Access Token 的 claims
         user = session.query(User).get(identity)
@@ -156,6 +164,7 @@ def refresh():
         }
 
         # 只创建一个新的 Access Token
+        # 'identity' 已经是我们需要的字符串
         new_access_token = create_access_token(
             identity=identity,
             additional_claims=additional_claims
@@ -166,7 +175,7 @@ def refresh():
         logging.error(f"Refresh error: {e}")
         return jsonify({"msg": "Internal server error"}), 500
     finally:
-        session.close()
+        pass  # 移除 session.close()
 
 # /check_auth (检查身份) 不需要： Flask-JWT-Extended 插件通过 @jwt_required() 装饰器自动完成了身份检查
 # /logout (登出) 不需要： 因为JWT Token（令牌）被存储在前端（浏览器的 localStorage）中，登出操作由前端删除 localStorage 中的 token 实现

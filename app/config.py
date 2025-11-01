@@ -22,7 +22,7 @@ class Config:
     CONFIG_DB_PORT = int(os.getenv('CONFIG_DB_PORT', '3306'))
     CONFIG_DB_NAME = os.getenv('CONFIG_DB_NAME', 'jdy_sync_config')
 
-    # # 2. 目标/源 数据库 (存储业务数据) - (已修复: 重命名为 SOURCE)
+    # # 2. 目标/源 数据库 (存储业务数据) - (已重命名为 SOURCE)
     # SOURCE_DB_USER = os.getenv('SOURCE_DB_USER', 'root')
     # SOURCE_DB_PASSWORD = quote_plus(os.getenv('SOURCE_DB_PASSWORD', 'password'))
     # SOURCE_DB_HOST = os.getenv('SOURCE_DB_HOST', 'localhost')

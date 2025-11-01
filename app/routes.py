@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import logging
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, g
 from flask_jwt_extended import jwt_required, get_jwt
 from sqlalchemy.orm import joinedload
 from app.models import (
@@ -46,22 +46,23 @@ def to_dict(model_instance):
 @api_bp.route('/api/departments', methods=['GET'])
 @superuser_required
 def get_departments():
-    session = ConfigSession()
+    session = g.config_session  # 使用 g.config_session
     try:
         departments = session.query(Department).all()
         return jsonify([to_dict(d) for d in departments]), 200
     finally:
-        session.close()
+        pass # 移除 session.close()
 
 
 @api_bp.route('/api/departments', methods=['POST'])
 @superuser_required
 def create_department():
     data = request.get_json()
-    session = ConfigSession()
+    session = g.config_session  # 使用 g.config_session
     try:
         new_dept = Department(
-            id=data.get('department_id'),
+            # 字段名应为 id，而不是 department_id
+            id=data.get('id'),
             department_name=data.get('department_name'),
             is_active=data.get('is_active', True)
         )
@@ -73,20 +74,21 @@ def create_department():
         logging.error(f"Create department error: {e}")
         return jsonify({"msg": f"Error creating department: {e}"}), 500
     finally:
-        session.close()
+        pass # 移除 session.close()
 
 
 @api_bp.route('/api/departments/<int:id>', methods=['PUT'])
 @superuser_required
 def update_department(id):
     data = request.get_json()
-    session = ConfigSession()
+    session = g.config_session  # 使用 g.config_session
     try:
         dept = session.query(Department).get(id)
         if not dept:
             return jsonify({"msg": "Department not found"}), 404
 
-        dept.id = data.get('department_id', dept.id)
+        # 字段名应为 id
+        dept.id = data.get('id', dept.id)
         dept.department_name = data.get('department_name', dept.department_name)
         dept.is_active = data.get('is_active', dept.is_active)
         session.commit()
@@ -96,13 +98,13 @@ def update_department(id):
         logging.error(f"Update department error: {e}")
         return jsonify({"msg": f"Error updating department: {e}"}), 500
     finally:
-        session.close()
+        pass # 移除 session.close()
 
 
 @api_bp.route('/api/departments/<int:id>', methods=['DELETE'])
 @superuser_required
 def delete_department(id):
-    session = ConfigSession()
+    session = g.config_session  # 使用 g.config_session
     try:
         dept = session.query(Department).get(id)
         if not dept:
@@ -120,7 +122,7 @@ def delete_department(id):
                 {"msg": "Cannot delete department: It is referenced by other resources (users, keys, etc.)"}), 409
         return jsonify({"msg": f"Error deleting department: {e}"}), 500
     finally:
-        session.close()
+        pass # 移除 session.close()
 
 
 # --- User (用户) API ---
@@ -129,19 +131,19 @@ def delete_department(id):
 @api_bp.route('/api/users', methods=['GET'])
 @superuser_required
 def get_users():
-    session = ConfigSession()
+    session = g.config_session  # 使用 g.config_session
     try:
         users = session.query(User).all()
         return jsonify([to_dict(u) for u in users]), 200
     finally:
-        session.close()
+        pass # 移除 session.close()
 
 
 @api_bp.route('/api/users', methods=['POST'])
 @superuser_required
 def create_user():
     data = request.get_json()
-    session = ConfigSession()
+    session = g.config_session  # 使用 g.config_session
     try:
         new_user = User(
             username=data.get('username'),
@@ -160,14 +162,14 @@ def create_user():
         logging.error(f"Create user error: {e}")
         return jsonify({"msg": f"Error creating user: {e}"}), 500
     finally:
-        session.close()
+        pass # 移除 session.close()
 
 
 @api_bp.route('/api/users/<int:id>', methods=['PUT'])
 @superuser_required
 def update_user(id):
     data = request.get_json()
-    session = ConfigSession()
+    session = g.config_session  # 使用 g.config_session
     try:
         user = session.query(User).get(id)
         if not user:
@@ -184,7 +186,7 @@ def update_user(id):
         logging.error(f"Update user error: {e}")
         return jsonify({"msg": f"Error updating user: {e}"}), 500
     finally:
-        session.close()
+        pass # 移除 session.close()
 
 
 @api_bp.route('/api/users/<int:id>/reset-password', methods=['PATCH'])
@@ -195,7 +197,7 @@ def reset_user_password(id):
     if not new_password:
         return jsonify({"msg": "Missing new_password"}), 400
 
-    session = ConfigSession()
+    session = g.config_session  # 使用 g.config_session
     try:
         user = session.query(User).get(id)
         if not user:
@@ -209,13 +211,13 @@ def reset_user_password(id):
         logging.error(f"Reset password error: {e}")
         return jsonify({"msg": f"Error resetting password: {e}"}), 500
     finally:
-        session.close()
+        pass # 移除 session.close()
 
 
 @api_bp.route('/api/users/<int:id>', methods=['DELETE'])
 @superuser_required
 def delete_user(id):
-    session = ConfigSession()
+    session = g.config_session  # 使用 g.config_session
     try:
         user = session.query(User).get(id)
         if not user:
@@ -229,7 +231,7 @@ def delete_user(id):
         logging.error(f"Delete user error: {e}")
         return jsonify({"msg": f"Error deleting user: {e}"}), 500
     finally:
-        session.close()
+        pass # 移除 session.close()
 
 
 # --- API: 获取用于下拉框的数据库列表 ---
@@ -241,7 +243,7 @@ def get_tenant_databases():
     获取当前租户可用的数据库列表 (仅ID和显示名称)，用于填充表单下拉框。
     """
     claims = get_current_user_claims()
-    session = ConfigSession()
+    session = g.config_session  # 使用 g.config_session
     try:
         # 仅查询需要的字段
         query = (session.query(DatabaseInfo)
@@ -256,13 +258,14 @@ def get_tenant_databases():
             items = query.filter_by(department_id=department_id).all()
 
         # 返回 {id, name, department_id} 格式的列表
+        # department_id 应该来自 item.department_id
         return jsonify(
-            [{"id": item.id, "name": item.db_show_name, "department_id": item.id} for item in items]), 200
+            [{"id": item.id, "name": item.db_show_name, "department_id": item.department_id} for item in items]), 200
     except Exception as e:
         logging.error(f"Get tenant-databases error: {e}")
         return jsonify({"msg": "Internal server error"}), 500
     finally:
-        session.close()
+        pass # 移除 session.close()
 
 
 # --- 通用资源 API (DatabaseInfo, JdyKeyInfo, SyncTask) ---
@@ -278,7 +281,7 @@ def create_resource_endpoints(bp, model_class, route_name):
     @jwt_required()
     def get_items():
         claims = get_current_user_claims()
-        session = ConfigSession()
+        session = g.config_session  # 使用 g.config_session
         try:
             query = session.query(model_class)
 
@@ -294,14 +297,14 @@ def create_resource_endpoints(bp, model_class, route_name):
 
             return jsonify([to_dict(item) for item in items]), 200
         finally:
-            session.close()
+            pass # 移除 session.close()
 
     @bp.route(f'/api/{route_name}', methods=['POST'], endpoint=f'create_{route_name}')
     @jwt_required()
     def create_item():
         claims = get_current_user_claims()
         data = request.get_json()
-        session = ConfigSession()
+        session = g.config_session  # 使用 g.config_session
 
         # 非超管，强制使用自己的 department_id
         if not claims.get('is_superuser'):
@@ -330,14 +333,14 @@ def create_resource_endpoints(bp, model_class, route_name):
             return jsonify({"msg": f"Error creating item: {e}"}), 500
 
         finally:
-            session.close()
+            pass # 移除 session.close()
 
     @bp.route(f'/api/{route_name}/<int:id>', methods=['PUT'], endpoint=f'update_{route_name}')
     @jwt_required()
     def update_item(id):
         claims = get_current_user_claims()
         data = request.get_json()
-        session = ConfigSession()
+        session = g.config_session  # 使用 g.config_session
         try:
             # item = session.query(model_class).get(id)
             # 特殊处理 SyncTask 的主键
@@ -348,7 +351,8 @@ def create_resource_endpoints(bp, model_class, route_name):
                 return jsonify({"msg": "Item not found"}), 404
 
             # 权限检查：非超管只能修改自己部门的
-            if not claims.get('is_superuser') and item.id != claims.get('department_id'):
+            # 应该比较 item.department_id
+            if not claims.get('is_superuser') and item.department_id != claims.get('department_id'):
                 return jsonify({"msg": "Forbidden"}), 403
 
             # 动态更新字段
@@ -368,13 +372,13 @@ def create_resource_endpoints(bp, model_class, route_name):
             logging.error(f"Update {route_name} error: {e}")
             return jsonify({"msg": f"Error updating item: {e}"}), 500
         finally:
-            session.close()
+            pass # 移除 session.close()
 
     @bp.route(f'/api/{route_name}/<int:id>', methods=['DELETE'], endpoint=f'delete_{route_name}')
     @jwt_required()
     def delete_item(id):
         claims = get_current_user_claims()
-        session = ConfigSession()
+        session = g.config_session  # 使用 g.config_session
         try:
             # item = session.query(model_class).get(id)
             # 特殊处理 SyncTask 的主键
@@ -385,7 +389,8 @@ def create_resource_endpoints(bp, model_class, route_name):
                 return jsonify({"msg": "Item not found"}), 404
 
             # 权限检查：非超管只能删除自己部门的
-            if not claims.get('is_superuser') and item.id != claims.get('department_id'):
+            # 应该比较 item.department_id
+            if not claims.get('is_superuser') and item.department_id != claims.get('department_id'):
                 return jsonify({"msg": "Forbidden"}), 403
 
             session.delete(item)
@@ -403,7 +408,7 @@ def create_resource_endpoints(bp, model_class, route_name):
                         "msg": "Cannot delete: This department is being used by users, databases, or other resources."}), 409
             return jsonify({"msg": f"Error deleting item: {e}"}), 500
         finally:
-            session.close()
+            pass # 移除 session.close()
 
 
 # --- 注册通用资源 API ---
@@ -419,7 +424,7 @@ create_resource_endpoints(api_bp, SyncTask, 'sync-tasks')
 @jwt_required()
 def get_error_logs():
     claims = get_current_user_claims()
-    session = ConfigSession()
+    session = g.config_session  # 使用 g.config_session
     try:
         query = session.query(SyncErrLog)
 
@@ -433,4 +438,4 @@ def get_error_logs():
 
         return jsonify([to_dict(log) for log in logs]), 200
     finally:
-        session.close()
+        pass # 移除 session.close()
