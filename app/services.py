@@ -51,8 +51,8 @@ def get_dynamic_session(task: SyncTask) -> Generator[Any, Any, None]:
         print(f"[{task.task_id}] Creating new dynamic engine for source DB: {db_info.db_show_name} (ID: {db_id})")
         # 构建连接字符串
         db_url = (
-            f"mysql+pymysql://{db_info.db_user}:{quote_plus(db_info.db_password)}@"
-            f"{db_info.db_host}:{db_info.db_port}/{db_info.db_name}?charset=utf8mb4"
+            f"{db_info.db_type}://{db_info.db_user}:{quote_plus(db_info.db_password)}@"
+            f"{db_info.db_host}:{db_info.db_port}/{db_info.db_name}?{db_info.db_args}"
         )
 
         engine = create_engine(db_url, pool_recycle=3600, connect_args=DB_CONNECT_ARGS)

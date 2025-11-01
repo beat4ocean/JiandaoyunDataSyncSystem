@@ -1,14 +1,18 @@
 import datetime
 import json
+import logging
 import time
 import time as time_module
 import traceback
 from datetime import datetime, time as time_obj, date, timezone, timedelta
 from decimal import Decimal
 from functools import wraps
+from typing import Dict, Any
+from urllib.parse import quote_plus, urlunparse
 
 import requests
-from sqlalchemy.exc import OperationalError
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import OperationalError, DBAPIError
 
 TZ_UTC_8 = timezone(timedelta(hours=8))
 
@@ -250,3 +254,86 @@ def log_sync_error(task_config: 'SyncTask' = None,
         if session and session_created:
             # print("log_sync_error: 关闭独立创建的会话。")
             session.close()
+
+
+# --- “测试连接”功能函数 ---
+def test_db_connection(db_info: Dict[str, Any]) -> (bool, str):
+    """
+    尝试连接到数据库并执行一个简单查询。
+
+    :param db_info: 包含连接参数的字典 (来自前端)
+    :return: (bool: 是否成功, str: 消息)
+    """
+    try:
+        db_type = db_info.get('db_type')
+        db_user = db_info.get('db_user')
+        db_password = db_info.get('db_password', '')  # 密码可能为空
+        db_host = db_info.get('db_host')
+        db_port = db_info.get('db_port')
+        db_name = db_info.get('db_name')
+        db_args = db_info.get('db_args', '')
+
+        if not all([db_type, db_user, db_host, db_port, db_name]):
+            return False, "数据库类型、主机、端口、库名和用户名均不能为空"
+
+        # --- 1. 映射数据库类型到 SQLAlchemy 驱动 ---
+        #    (e.g., pymysql, psycopg2-binary, pyodbc)
+        driver_map = {
+            'mysql+pymysql': 'mysql+pymysql',
+            'postgresql+psycopg2': 'postgresql+psycopg2',
+            # 'mssql+pyodbc': 'mssql+pyodbc',
+            'oracle+cx_oracle': 'oracle+cx_oracle',
+        }
+
+        driver = driver_map.get(db_type)
+        if not driver:
+            return False, f"不支持的数据库类型: {db_type}。支持的类型: {list(driver_map.keys())}"
+
+        # --- 2. 构建连接 URL (确保密码被正确编码) ---
+        # 密码中的特殊字符 (如 @, :, /) 需要 URL 编码
+        encoded_password = quote_plus(db_password)
+
+        netloc = f"{db_user}:{encoded_password}@{db_host}:{db_port}"
+
+        # # SQL Server (mssql) 可能需要特殊的 DSN 或 驱动参数
+        # if db_type == 'mssql+pyodbc' and not db_args:
+        #     # 如果用户没有提供 db_args，我们提供一个合理的默认值
+        #     # 注意：这需要安装 'ODBC Driver 17 for SQL Server'
+        #     db_args = "driver=ODBC+Driver+17+for+SQL+Server"
+
+        # --- 3. 构造最终的 URL ---
+        # 使用 urlunparse 来正确组合
+        db_url = urlunparse((
+            driver,  # scheme
+            netloc,  # netloc
+            f"/{db_name}",  # path
+            "",  # params
+            db_args,  # query
+            ""  # fragment
+        ))
+
+        # # 移除 mssql 在 path 上的 /
+        # if db_type == 'mssql+pyodbc':
+        #     db_url = db_url.replace(f"///{db_name}", f"/{db_name}", 1)
+
+        # --- 4. 尝试连接 ---
+        # connect_args={'connect_timeout': 5} 设置5秒超时
+        engine = create_engine(db_url, connect_args={'connect_timeout': 5}, pool_recycle=3600)
+
+        with engine.connect() as connection:
+            # 执行一个简单的查询
+            connection.execute(text("SELECT 1"))
+
+        return True, "数据库连接成功！"
+
+    except (OperationalError, DBAPIError) as e:
+        logging.warning(f"数据库连接测试失败: {e}")
+        # 返回一个更友好的错误信息
+        error_msg = str(e).split('\n')[0]
+        return False, f"连接失败: {error_msg}"
+    except ImportError as e:
+        logging.error(f"数据库驱动未安装: {e}")
+        return False, f"连接失败: 缺少数据库驱动 {e}。 (例如: 'mysql' 需要 'pymysql')"
+    except Exception as e:
+        logging.error(f"数据库连接测试发生未知错误: {e}")
+        return False, f"发生未知错误: {e}"

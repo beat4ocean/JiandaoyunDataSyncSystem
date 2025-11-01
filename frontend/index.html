@@ -593,7 +593,7 @@
               <el-table-column prop="id" label="ID" width="60" sortable></el-table-column>
               <el-table-column v-if="isSuperuser" prop="department_name" label="所属部门" width="200" sortable></el-table-column>
               <el-table-column prop="db_show_name" label="显示名称" sortable></el-table-column>
-              <el-table-column prop="db_type" label="类型" width="100"></el-table-column>
+              <el-table-column prop="db_type" label="类型" width="200"></el-table-column>
               <el-table-column prop="db_host" label="主机"></el-table-column>
               <el-table-column prop="db_port" label="端口" width="80"></el-table-column>
               <el-table-column prop="db_name" label="库名"></el-table-column>
@@ -622,8 +622,13 @@
                 <el-row :gutter="20">
                    <el-col :span="12">
                      <el-form-item label="数据库类型" prop="db_type">
-                      <el-input v-model="currentItem.db_type" placeholder="mysql"></el-input>
-                    </el-form-item>
+                       <el-select v-model="currentItem.db_type" placeholder="选择数据库类型">
+                         <el-option label="MySQL" value="mysql+pymysql"></el-option>
+                         <el-option label="PostgreSQL" value="postgresql+psycopg2"></el-option>
+                         <!-- <el-option label="SQL Server" value="mssql+pyodbc"></el-option>-->
+                         <el-option label="Oracle" value="oracle+cx_oracle"></el-option>
+                       </el-select>
+                     </el-form-item>
                    </el-col>
                    <el-col :span="12">
                      <el-form-item label="主机" prop="db_host">
@@ -655,12 +660,17 @@
                      </el-form-item>
                    </el-col>
                 </el-row>
+                <el-form-item label="额外连接参数 (选填)" prop="db_args">
+                   <el-input v-model="currentItem.db_args" placeholder="例如: charset=utf8mb4"></el-input>
+                   <!--<div class="form-item-note">例如: MySQL 可填 charset=utf8mb4。 SQL Server (mssql) 可能需要填: driver=ODBC+Driver+17+for+SQL+Server</div>-->
+                </el-form-item>
                  <el-form-item label="是否激活">
                    <el-switch v-model="currentItem.is_active"></el-switch>
                  </el-form-item>
               </el-form>
               <template #footer>
                 <el-button @click="closeDialog">取消</el-button>
+                <el-button @click="testConnection" :loading="testLoading" :icon="ElementPlusIcons.Connection">测试连接</el-button>
                 <el-button type="primary" @click="saveItem" :loading="loading">保存</el-button>
               </template>
             </el-dialog>
@@ -668,14 +678,16 @@
         `,
         props: ['isSuperuser'],
         setup(props) {
-            const defaultItem = { db_show_name: '', db_type: 'mysql', db_host: 'localhost', db_port: 3306, db_name: '', db_user: '', db_password: '', is_active: true, department_id: null };
+            const defaultItem = { db_show_name: '', db_type: 'mysql', db_host: 'localhost', db_port: 3306, db_name: '', db_user: '', db_password: '', is_active: true, department_id: null, db_args: '' };
             const crud = useCrud('/databases', '数据库', defaultItem, 'id');
             const departments = ref([]);
+            // 测试连接的加载状态
+            const testLoading = ref(false);
 
             const formRules = {
                 department_id: [{required: props.isSuperuser, message: '请选择部门', trigger: 'change'}],
                 db_show_name: [{required: true, message: '请输入显示名称', trigger: 'blur'}],
-                db_type: [{required: true, message: '请输入类型', trigger: 'blur'}],
+                db_type: [{required: true, message: '请选择类型', trigger: 'change'}],
                 db_host: [{required: true, message: '请输入主机', trigger: 'blur'}],
                 db_port: [{required: true, message: '请输入端口', trigger: 'blur'}],
                 db_name: [{required: true, message: '请输入库名', trigger: 'blur'}],
@@ -689,9 +701,40 @@
                 }
             };
 
+            // 测试连接方法
+            const testConnection = async () => {
+                if (!crud.formRef.value) return;
+                try {
+                    // 验证表单以确保数据存在
+                    await crud.formRef.value.validate();
+                } catch (error) {
+                    ElMessage.warning('请先填写完整的数据库连接信息。');
+                    return;
+                }
+
+                testLoading.value = true;
+                try {
+                    const response = await apiClient.post('/databases/test', crud.currentItem);
+
+                    if (response.status === 200) {
+                         ElMessage.success(`测试成功: ${response.data.msg}`);
+                    }
+
+                } catch (error) {
+                    console.error("测试连接请求失败:", error);
+                    // 如果错误是 400 (Bad Request)，拦截器已经显示了 msg
+                    if (error.response?.status !== 400) {
+                         ElMessage.error('测试连接时发生未知错误。');
+                    }
+                } finally {
+                    testLoading.value = false;
+                }
+            };
+
             onMounted(fetchDepartments);
 
-            return {...crud, formRules, departments, ElementPlusIcons};
+            // 返回新状态和新方法
+            return {...crud, formRules, departments, testLoading, testConnection, ElementPlusIcons};
         }
     };
 
@@ -1011,7 +1054,6 @@
             const formatDateTime = (isoDateTime) => isoDateTime ? new Date(isoDateTime).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai'}) : '-';
             const statusType = (status) => status === 'running' ? 'primary' : (status === 'error' ? 'danger' : 'info');
 
-            // (新)
             watch(() => crud.dialogVisible.value, (newVal) => {
                 if (newVal) {
                     // 打开弹窗时，确保数据库列表已加载

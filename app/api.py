@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
 from app.models import ConfigSession, JdyKeyInfo, SyncTask, SyncErrLog, FormFieldMapping
-from app.utils import TZ_UTC_8
+from app.utils import TZ_UTC_8, test_db_connection
 from app.scheduler import scheduler, add_or_update_task_in_scheduler, remove_task_from_scheduler
 
 api_bp = Blueprint('api', __name__, url_prefix='/api')

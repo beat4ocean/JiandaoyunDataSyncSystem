@@ -6,6 +6,7 @@ from sqlalchemy.orm import joinedload
 from sqlalchemy.exc import IntegrityError
 from app.models import ( Department, User, DatabaseInfo, JdyKeyInfo, SyncTask, SyncErrLog)
 from app.auth import superuser_required
+from app.utils import test_db_connection
 
 # 创建 API 蓝图
 api_bp = Blueprint('api_bp', __name__)
@@ -479,5 +480,42 @@ def get_error_logs():
             logs = query.filter_by(department_id=department_id).order_by(SyncErrLog.timestamp.desc()).all()
 
         return jsonify([to_dict(log) for log in logs]), 200
+    finally:
+        pass
+
+
+# --- “测试连接”功能路由 ---
+@api_bp.route('/api/databases/test', methods=['POST'])
+@jwt_required()
+def test_database_connection():
+    """
+    测试数据库连接。
+    接收与创建/更新数据库时相同的 JSON body。
+    """
+    claims = get_current_user_claims()
+    data = request.get_json()
+
+    # 权限检查：确保非超管用户不能测试其他租户的配置
+    # (虽然这里只是测试，不保存，但最好保持一致)
+    if not claims.get('is_superuser'):
+        # 如果提供了 department_id 且与用户不符
+        if 'department_id' in data and data.get('department_id') != claims.get('department_id'):
+            return jsonify({"msg": "Forbidden: Cannot test connection for another tenant."}), 403
+
+        # 强制使用自己的 department_id (虽然测试连接本身不依赖此ID)
+        data['department_id'] = claims.get('department_id')
+
+    try:
+        success, message = test_db_connection(data)
+
+        if success:
+            return jsonify({"msg": message}), 200
+        else:
+            # 400 Bad Request 表示用户提供的参数（凭据、主机等）有误
+            return jsonify({"msg": message}), 400
+
+    except Exception as e:
+        logging.error(f"Error during database connection test: {e}")
+        return jsonify({"msg": f"Internal server error: {e}"}), 500
     finally:
         pass
