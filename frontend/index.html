@@ -58,37 +58,57 @@
                 </el-header>
                 <el-container class="full-height-container">
                     <el-aside width="200px">
+
                         <el-menu :default-active="activeMenu" router>
-                            <el-menu-item index="/departments" v-if="isSuperuser">
-                                <el-icon><OfficeBuilding/></el-icon>
-                                <span>部门管理</span>
-                            </el-menu-item>
-                            <el-menu-item index="/users" v-if="isSuperuser">
-                                <el-icon><User/></el-icon>
-                                <span>用户管理</span>
-                            </el-menu-item>
 
-                            <el-menu-item index="/databases">
-                                <el-icon><Coin/></el-icon>
-                                <span>源库管理</span>
-                            </el-menu-item>
+                            <el-sub-menu index="user-management" v-if="isSuperuser">
+                                <template #title>
+                                    <el-icon><User/></el-icon>
+                                    <span>用户管理</span>
+                                </template>
+                                <el-menu-item index="/departments">
+                                    <el-icon><OfficeBuilding/></el-icon>
+                                    <span>部门管理</span>
+                                </el-menu-item>
+                                <el-menu-item index="/users">
+                                    <el-icon><Avatar/></el-icon>
+                                    <span>用户管理</span>
+                                </el-menu-item>
+                            </el-sub-menu>
 
-                            <el-menu-item index="/jdy-keys">
-                                <el-icon><Key/></el-icon>
-                                <span>简道云密钥</span>
-                            </el-menu-item>
+                            <el-sub-menu index="system-management">
+                                <template #title>
+                                    <el-icon><Setting/></el-icon>
+                                    <span>系统管理</span>
+                                </template>
+                                <el-menu-item index="/jdy-keys">
+                                    <el-icon><Key/></el-icon>
+                                    <span>密钥管理</span>
+                                </el-menu-item>
+                                <el-menu-item index="/databases">
+                                    <el-icon><Coin/></el-icon>
+                                    <span>源库管理</span>
+                                </el-menu-item>
+                            </el-sub-menu>
 
                             <el-menu-item index="/sync-tasks">
                                 <el-icon><Tickets/></el-icon>
                                 <span>任务管理</span>
                             </el-menu-item>
 
-                            <el-menu-item index="/error-logs">
-                                <el-icon><Document/></el-icon>
-                                <span>错误日志</span>
-                            </el-menu-item>
+                            <el-sub-menu index="log-management">
+                                <template #title>
+                                    <el-icon><Document/></el-icon>
+                                    <span>日志管理</span>
+                                </template>
+                                <el-menu-item index="/error-logs">
+                                    <el-icon><Warning/></el-icon>
+                                    <span>错误日志</span>
+                                </el-menu-item>
+                            </el-sub-menu>
+
                         </el-menu>
-                    </el-aside>
+                        </el-aside>
                     <el-main>
                         <router-view
                             :is-superuser="isSuperuser"
@@ -1159,7 +1179,7 @@
                 if (!force) {
                     try {
                         // (新) 调用 /api/logout (DELETE) 来吊销Token
-                        // 修正：auth.py 中没有 /logout 路由，所以我们跳过它
+                        // 修正：您的 auth.py 中没有 /logout 路由，所以我们跳过它
                         // await apiClient.delete('/logout');
                     } catch (error) {
                         console.error("Logout failed, proceeding with client-side cleanup:", error);
@@ -1208,10 +1228,12 @@
     app.component('SyncTaskView', SyncTaskView);
     app.component('SyncLogView', SyncLogView);
 
-    // 修复将 ElementPlusIconsVue 错误地用于循环的 BUG
+    // --- START FIX ---
+    // 修复了将 ElementPlusIconsVue 错误地用于循环的 BUG
     for (const [key, component] of Object.entries(ElementPlusIcons)) {
         app.component(key, component)
     }
+    // --- END FIX ---
 
     app.use(router);
     app.use(ElementPlus, {locale: ElementPlusLocaleZhCn.default});
