@@ -3,1607 +3,1216 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MySQL同步简道云管理系统</title>
+    <title>MySQL数据同步至简道云配置</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css"/>
+    <script src="//unpkg.com/@element-plus/icons-vue"></script>
+    <script src="https://unpkg.com/element-plus"></script>
+    <script src="https://unpkg.com/element-plus/dist/locale/zh-cn.min.js"></script>
+    <script src="https://unpkg.com/vue-router@4"></script>
+    <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+
     <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            margin: 0;
-            background-color: #f4f7f6;
-            color: #333;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-        }
-
-        /* --- 登录容器 --- */
-        #login-container {
-            width: 320px;
-            padding: 30px;
-            background: #fff;
-            border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
-        }
-
-        #login-container h1 {
-            text-align: center;
-            color: #1a1a1a;
-            margin-bottom: 25px;
-            font-size: 24px;
-        }
-
-        .form-group {
-            margin-bottom: 20px;
-        }
-
-        .form-group label {
-            display: block;
-            margin-bottom: 8px;
-            font-weight: 500;
-        }
-
-        .form-group input, .form-group select {
-            width: 100%;
-            padding: 12px;
-            border: 1px solid #ddd;
-            border-radius: 6px;
-            box-sizing: border-box; /* 确保 padding 不影响宽度 */
-            background-color: #fff;
-        }
-
-        button {
-            width: 100%;
-            padding: 12px;
-            background-color: #007aff;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 16px;
-            font-weight: 500;
-        }
-
-        button:hover {
-            background-color: #0056b3;
-        }
-
-        #login-error {
-            color: #d93025;
-            text-align: center;
-            margin-top: 15px;
-            font-size: 14px;
-        }
-
-        /* --- 应用容器 --- */
-        #app-container {
-            display: none; /* 默认隐藏 */
-            width: 95%;
-            max-width: 1400px;
-            height: 90vh;
-            background: #fff;
-            border-radius: 8px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-        }
-
-        header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 15px 25px;
-            background-color: #ffffff;
-            border-bottom: 1px solid #e0e0e0;
-        }
-
-        header h1 {
-            margin: 0;
-            font-size: 22px;
-        }
-
-        #user-info {
-            font-size: 14px;
-            color: #555;
-        }
-
-        #user-info span {
-            font-weight: 500;
-        }
-
-        #logout-btn {
-            color: #007aff;
-            text-decoration: none;
-            margin-left: 15px;
-            font-weight: 500;
-            cursor: pointer;
-        }
-
-        #logout-btn:hover {
-            text-decoration: underline;
-        }
-
-        .main-layout {
-            display: flex;
-            flex-grow: 1;
-            overflow: hidden;
-        }
-
-        nav {
-            width: 220px;
-            background: #fafafa;
-            border-right: 1px solid #e0e0e0;
-            padding: 20px 0;
-            flex-shrink: 0;
-        }
-
-        nav a {
-            display: block;
-            padding: 12px 25px;
-            text-decoration: none;
-            color: #333;
-            font-weight: 500;
-            border-left: 3px solid transparent;
-            cursor: pointer;
-        }
-
-        nav a.active {
-            background: #e9f5ff;
-            color: #007aff;
-            border-left-color: #007aff;
-        }
-
-        nav a:hover {
-            background: #f0f0f0;
-        }
-
-        main {
-            flex-grow: 1;
-            padding: 25px;
-            overflow-y: auto;
-        }
-
-        .content-section {
-            display: none; /* 默认隐藏所有内容区域 */
-        }
-
-        .content-section.active {
-            display: block;
-        }
-
-        .content-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-        }
-
-        .content-header h2 {
-            margin: 0;
-            font-size: 24px;
-        }
-
-        .btn-primary {
-            background-color: #007aff;
-            color: white;
-            padding: 10px 15px;
-            border-radius: 6px;
-            text-decoration: none;
-            font-size: 14px;
-            border: none;
-            cursor: pointer;
-        }
-
-        .btn-primary:hover {
-            background-color: #0056b3;
-        }
-
-        .btn-danger {
-            background-color: #d93025;
-            color: white;
-        }
-
-        .btn-danger:hover {
-            background-color: #b0261e;
-        }
-
-        .btn-secondary {
-            background-color: #6c757d;
-            color: white;
-        }
-
-        .btn-secondary:hover {
-            background-color: #5a6268;
-        }
-
-        /* --- 表格样式 --- */
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 20px;
-        }
-
-        th, td {
-            border: 1px solid #ddd;
-            padding: 12px;
-            text-align: left;
-            font-size: 14px;
-            vertical-align: top;
-            overflow-wrap: break-word;
-            word-break: break-all;
-        }
-
-        th {
-            background-color: #f9f9f9;
-            font-weight: 600;
-        }
-
-        tr:nth-child(even) {
-            background-color: #fdfdfd;
-        }
-
-        td .btn-group {
-            display: flex;
-            gap: 5px;
-            min-width: 100px;
-        }
-
-        td button, td .btn-primary {
-            padding: 5px 10px;
-            font-size: 12px;
-            width: auto;
-        }
-
-        /* --- 模态框 (Modal) --- */
-        .modal {
-            display: none;
-            position: fixed;
-            z-index: 1000;
-            left: 0;
-            top: 0;
-            width: 100%;
-            height: 100%;
-            overflow: auto;
-            background-color: rgba(0, 0, 0, 0.4);
-            justify-content: center;
-            align-items: center;
-        }
-
-        .modal-content {
-            background-color: #fefefe;
-            margin: auto;
-            padding: 30px;
-            border-radius: 8px;
-            width: 90%;
-            max-width: 500px;
-            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
-            position: relative;
-        }
-
-        .modal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-        }
-
-        .modal-header h2 {
-            margin: 0;
-        }
-
-        .close-btn {
-            color: #aaa;
-            font-size: 28px;
-            font-weight: bold;
-            cursor: pointer;
-        }
-
-        .close-btn:hover {
-            color: #000;
-        }
-
-        /* --- 权限控制 --- */
-        .admin-only, .non-admin-only {
-            display: none;
-        }
+        html, body { height: 100%; width: 100%; margin: 0; padding: 0; overflow: hidden; }
+        body { font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', Arial, sans-serif; background-color: #f4f4f5; }
+        #app { height: 100%; display: flex; flex-direction: column; }
+        .login-container { flex-grow: 1; display: flex; justify-content: center; align-items: center; background-color: #f4f4f5; }
+        .login-card { width: 400px; padding: 40px 30px; border-radius: 8px; box-shadow: 0 2px 12px 0 rgba(0, 0, 0, .1); background-color: #fff; text-align: center; }
+        .login-title { font-size: 24px; font-weight: bold; color: #303133; margin-bottom: 25px; }
+        .login-card h2 { font-size: 18px; color: #606266; margin-top: 0; margin-bottom: 20px; }
+        .app-container { flex-grow: 1; display: flex; flex-direction: column; overflow: hidden; background-color: #fff; }
+        .full-height-container { flex-grow: 1; display: flex; overflow: hidden; }
+        .el-main { padding: 0; flex-grow: 1; overflow-y: auto; background-color: #f4f4f5; }
+        .el-header { background-color: #fff; color: #303133; display: flex; justify-content: space-between; align-items: center; padding: 0 20px; flex-shrink: 0; border-bottom: 1px solid #e4e7ed; }
+        .el-header h2 { font-size: 20px; }
+        .el-menu { border-right: none; }
+        .el-menu-item.is-active { background-color: #ecf5ff; }
+        .config-card { margin: 20px; }
+        .form-dialog .el-input, .form-dialog .el-select, .form-dialog .el-time-picker { width: 100%; }
+        .form-dialog .el-form-item { margin-bottom: 15px; }
+        .el-table .cell { white-space: pre-wrap; }
+        .card-header { display: flex; justify-content: space-between; align-items: center; }
+        .el-aside { flex-shrink: 0; background-color: #fff; border-right: 1px solid #eee; padding-top: 10px; }
+        .log-filter-form { padding: 15px 0 0 0; display: flex; gap: 15px; align-items: center; flex-wrap: wrap; }
+        .log-filter-form .el-form-item { margin-bottom: 0; }
+        .visibility-toggle-btn { margin-left: 8px; }
+        .form-item-note { font-size: 12px; color: #909399; margin-top: -5px; line-height: 1.2; }
     </style>
 </head>
 <body>
-
-<div id="login-container">
-    <h1>MySQL同步简道云管理系统登录</h1>
-    <form id="login-form">
-        <div class="form-group">
-            <label for="username">用户名</label>
-            <input type="text" id="username" required>
-        </div>
-        <div class="form-group">
-            <label for="password">密码</label>
-            <input type="password" id="password" required>
-        </div>
-        <button type="submit">登录</button>
-        <p id="login-error"></p>
-    </form>
-</div>
-
-<div id="app-container">
-    <header>
-        <h1>MySQL同步简道云管理系统</h1>
-        <div id="user-info">
-            欢迎, <span id="username-display"></span>
-            (<span id="department-display"></span>)
-            <a id="logout-btn">退出登录</a>
-        </div>
-    </header>
-
-    <div class="main-layout">
-        <nav id="main-nav">
-            <a class="nav-link" data-target="dashboard">仪表盘</a>
-            <a class="nav-link admin-only" data-target="departments">部门管理</a>
-            <a class="nav-link admin-only" data-target="users">用户管理</a>
-            <a class="nav-link" data-target="databases">数据库管理</a>
-            <a class="nav-link" data-target="jdy-keys">简道云密钥</a>
-            <a class="nav-link" data-target="sync-tasks">同步任务</a>
-            <a class="nav-link" data-target="error-logs">错误日志</a>
-            <a class="nav-link non-admin-only" data-target="change-password">修改密码</a>
-        </nav>
-
-        <main>
-            <section id="dashboard" class="content-section active">
-                <div class="content-header">
-                    <h2>仪表盘</h2>
-                </div>
-                <p>欢迎使用多租户同步管理系统。</p>
-            </section>
-
-            <section id="departments" class="content-section admin-only">
-                <div class="content-header">
-                    <h2>部门管理</h2>
-                    <button class="btn-primary" onclick="showModal('department-modal')">新增部门</button>
-                </div>
-                <table id="departments-table">
-                    <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>部门外部ID</th>
-                        <th>部门简称</th>
-                        <th>是否激活</th>
-                        <th>操作</th>
-                    </tr>
-                    </thead>
-                    <tbody></tbody>
-                </table>
-            </section>
-
-            <section id="users" class="content-section admin-only">
-                <div class="content-header">
-                    <h2>用户管理</h2>
-                    <button class="btn-primary" onclick="showModal('user-modal')">新增用户</button>
-                </div>
-                <table id="users-table">
-                    <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>用户名</th>
-                        <th>所属部门ID</th>
-                        <th>是否超管</th>
-                        <th>是否激活</th>
-                        <th>操作</th>
-                    </tr>
-                    </thead>
-                    <tbody></tbody>
-                </table>
-            </section>
-
-            <section id="databases" class="content-section">
-                <div class="content-header">
-                    <h2>数据库管理</h2>
-                    <button class="btn-primary" onclick="showModal('database-modal')">新增数据库</button>
-                </div>
-                <table id="databases-table">
-                    <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th class="admin-only">部门ID</th>
-                        <th>显示名称</th>
-                        <th>类型</th>
-                        <th>主机</th>
-                        <th>端口</th>
-                        <th>库名</th>
-                        <th>用户</th>
-                        <th>是否激活</th>
-                        <th>操作</th>
-                    </tr>
-                    </thead>
-                    <tbody></tbody>
-                </table>
-            </section>
-
-            <section id="jdy-keys" class="content-section">
-                <div class="content-header">
-                    <h2>简道云密钥管理</h2>
-                    <button class="btn-primary" onclick="showModal('jdy-key-modal')">新增密钥</button>
-                </div>
-                <table id="jdy-keys-table">
-                    <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th class="admin-only">部门ID</th>
-                        <th>API Key (部分)</th>
-                        <th>操作</th>
-                    </tr>
-                    </thead>
-                    <tbody></tbody>
-                </table>
-            </section>
-
-            <section id="sync-tasks" class="content-section">
-                <div class="content-header">
-                    <h2>同步任务管理</h2>
-                    <button class="btn-primary" onclick="showModal('sync-task-modal')">新增任务</button>
-                </div>
-                <table id="sync-tasks-table">
-                    <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th class="admin-only">部门ID</th>
-                        <th>任务名称</th>
-                        <th>源数据库</th>
-                        <th>源表</th>
-                        <th>简道云AppID</th>
-                        <th>简道云EntryID</th>
-                        <th>模式</th>
-                        <th>状态</th>
-                        <th>是否激活</th>
-                        <th>操作</th>
-                    </tr>
-                    </thead>
-                    <tbody></tbody>
-                </table>
-            </section>
-
-            <section id="error-logs" class="content-section">
-                <div class="content-header">
-                    <h2>错误日志</h2>
-                </div>
-                <table id="error-logs-table">
-                    <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th class="admin-only">部门ID</th>
-                        <th>任务ID</th>
-                        <th>时间</th>
-                        <th>错误信息</th>
-                        <th>Traceback</th>
-                    </tr>
-                    </thead>
-                    <tbody></tbody>
-                </table>
-            </section>
-
-            <section id="change-password" class="content-section non-admin-only">
-                <div class="content-header">
-                    <h2>修改密码</h2>
-                </div>
-                <form id="change-password-form" style="max-width: 400px;">
-                    <div class="form-group">
-                        <label for="old-password">旧密码</label>
-                        <input type="password" id="old-password" required>
+<div id="app">
+    <el-config-provider :locale="zhCn">
+        <template v-if="!isAuthenticated">
+            <div class="login-container">
+                <login-view @login-success="handleLoginSuccess"></login-view>
+            </div>
+        </template>
+        <template v-else>
+            <div class="app-container">
+                <el-header height="60px">
+                    <h2>MySQL同步至简道云配置</h2>
+                    <div>
+                        <span>你好, {{ username }} ({{ isSuperuser ? '超级管理员' : '租户: ' + departmentName }})</span>
+                        <el-button type="danger" link @click="logout" style="margin-left: 15px;">退出登录</el-button>
                     </div>
-                    <div class="form-group">
-                        <label for="new-password">新密码</label>
-                        <input type="password" id="new-password" required>
-                    </div>
-                    <button type="submit">确认修改</button>
-                    <p id="change-password-status" style="margin-top: 15px;"></p>
-                </form>
-            </section>
+                </el-header>
+                <el-container class="full-height-container">
+                    <el-aside width="200px">
+                        <el-menu :default-active="activeMenu" router>
+                            <el-menu-item index="/departments" v-if="isSuperuser">
+                                <el-icon><OfficeBuilding/></el-icon>
+                                <span>部门管理</span>
+                            </el-menu-item>
+                            <el-menu-item index="/users" v-if="isSuperuser">
+                                <el-icon><User/></el-icon>
+                                <span>用户管理</span>
+                            </el-menu-item>
 
-        </main>
-    </div>
+                            <el-menu-item index="/databases">
+                                <el-icon><Coin/></el-icon>
+                                <span>源库管理</span>
+                            </el-menu-item>
+
+                            <el-menu-item index="/jdy-keys">
+                                <el-icon><Key/></el-icon>
+                                <span>简道云密钥</span>
+                            </el-menu-item>
+
+                            <el-menu-item index="/sync-tasks">
+                                <el-icon><Tickets/></el-icon>
+                                <span>任务管理</span>
+                            </el-menu-item>
+
+                            <el-menu-item index="/error-logs">
+                                <el-icon><Document/></el-icon>
+                                <span>错误日志</span>
+                            </el-menu-item>
+                        </el-menu>
+                    </el-aside>
+                    <el-main>
+                        <router-view
+                            :is-superuser="isSuperuser"
+                            :key="activeMenu"
+                        ></router-view>
+                    </el-main>
+                </el-container>
+            </div>
+        </template>
+    </el-config-provider>
 </div>
-
-<div id="department-modal" class="modal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h2 id="department-modal-title">新增部门</h2>
-            <span class="close-btn" onclick="closeModal('department-modal')">&times;</span>
-        </div>
-        <form id="department-form">
-            <input type="hidden" id="department-id-hidden">
-            <div class="form-group">
-                <label for="department-department-id">部门外部ID (唯一)</label>
-                <input type="number" id="department-department-id" required>
-            </div>
-            <div class="form-group">
-                <label for="department-department-name">部门简称 (唯一, e.g., dpt_a)</label>
-                <input type="text" id="department-department-name" required>
-            </div>
-            <div class="form-group">
-                <label><input type="checkbox" id="department-is-active" checked> 是否激活</label>
-            </div>
-            <button type="submit">保存</button>
-        </form>
-    </div>
-</div>
-
-<div id="user-modal" class="modal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h2 id="user-modal-title">新增用户</h2>
-            <span class="close-btn" onclick="closeModal('user-modal')">&times;</span>
-        </div>
-        <form id="user-form">
-            <input type="hidden" id="user-id-hidden">
-            <div class="form-group">
-                <label for="user-username">用户名 (唯一)</label>
-                <input type="text" id="user-username" required>
-            </div>
-            <div class="form-group" id="user-password-group">
-                <label for="user-password">密码 (新增时必填)</label>
-                <input type="password" id="user-password">
-            </div>
-            <div class="form-group">
-                <label for="user-department-id">所属部门</label>
-                <select id="user-department-id" required></select>
-            </div>
-            <div class="form-group">
-                <label><input type="checkbox" id="user-is-superuser"> 是否超级管理员</label>
-            </div>
-            <div class="form-group">
-                <label><input type="checkbox" id="user-is-active" checked> 是否激活</label>
-            </div>
-            <button type="submit">保存</button>
-        </form>
-        <hr style="margin: 20px 0;">
-        <h3>重置密码</h3>
-        <form id="reset-password-form" style="display: none;">
-            <div class="form-group">
-                <label for="reset-password-new">新密码</label>
-                <input type="password" id="reset-password-new" required>
-            </div>
-            <button type="submit" class="btn-secondary">确认重置</button>
-        </form>
-    </div>
-</div>
-
-<div id="database-modal" class="modal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h2 id="database-modal-title">新增数据库</h2>
-            <span class="close-btn" onclick="closeModal('database-modal')">&times;</span>
-        </div>
-        <form id="database-form">
-            <input type="hidden" id="database-id-hidden">
-            <div class="form-group admin-only">
-                <label for="database-department-id">所属部门</label>
-                <select id="database-department-id" required></select>
-            </div>
-            <div class="form-group">
-                <label for="database-db-show-name">显示名称 (e.g., 生产库)</label>
-                <input type="text" id="database-db-show-name" required>
-            </div>
-            <div class="form-group">
-                <label for="database-db-type">数据库类型 (e.g., mysql)</label>
-                <input type="text" id="database-db-type" value="mysql" required>
-            </div>
-            <div class="form-group">
-                <label for="database-db-host">主机</label>
-                <input type="text" id="database-db-host" required>
-            </div>
-            <div class="form-group">
-                <label for="database-db-port">端口</label>
-                <input type="number" id="database-db-port" value="3306" required>
-            </div>
-            <div class="form-group">
-                <label for="database-db-name">数据库名称</label>
-                <input type="text" id="database-db-name" required>
-            </div>
-            <div class="form-group">
-                <label for="database-db-user">用户名</label>
-                <input type="text" id="database-db-user" required>
-            </div>
-            <div class="form-group">
-                <label for="database-db-password">密码</label>
-                <input type="password" id="database-db-password" required>
-            </div>
-            <div class="form-group">
-                <label><input type="checkbox" id="database-is-active" checked> 是否激活</label>
-            </div>
-            <button type="submit">保存</button>
-        </form>
-    </div>
-</div>
-
-<div id="jdy-key-modal" class="modal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h2 id="jdy-key-modal-title">新增密钥</h2>
-            <span class="close-btn" onclick="closeModal('jdy-key-modal')">&times;</span>
-        </div>
-        <form id="jdy-key-form">
-            <input type="hidden" id="jdy-key-id-hidden">
-            <div class="form-group admin-only">
-                <label for="jdy-key-department-id">所属部门 (1:1 关系, 确保唯一)</label>
-                <select id="jdy-key-department-id" required></select>
-            </div>
-            <div class="form-group">
-                <label for="jdy-key-api-key">API Key</label>
-                <input type="text" id="jdy-key-api-key" required>
-            </div>
-            <button type="submit">保存</button>
-        </form>
-    </div>
-</div>
-
-<div id="sync-task-modal" class="modal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <h2 id="sync-task-modal-title">新增任务</h2>
-            <span class="close-btn" onclick="closeModal('sync-task-modal')">&times;</span>
-        </div>
-        <form id="sync-task-form">
-            <input type="hidden" id="sync-task-id-hidden">
-            <div class="form-group admin-only">
-                <label for="sync-task-department-id">所属部门</label>
-                <select id="sync-task-department-id" required></select>
-            </div>
-            <div class="form-group">
-                <label for="sync-task-task-name">任务名称</label>
-                <input type="text" id="sync-task-task-name">
-            </div>
-            <div class="form-group">
-                <label for="sync-task-source-db-id">源数据库</label>
-                <select id="sync-task-source-db-id" required>
-                    <option value="">-- 请先选择部门 --</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <label for="sync-task-source-table">源表名</label>
-                <input type="text" id="sync-task-source-table" required>
-            </div>
-            <div class="form-group">
-                <label for="sync-task-pk-field-names">源表主键 (逗号分隔)</label>
-                <input type="text" id="sync-task-pk-field-names" required>
-            </div>
-            <div class="form-group">
-                <label for="sync-task-jdy-app-id">简道云 App ID</label>
-                <input type="text" id="sync-task-jdy-app-id" required>
-            </div>
-            <div class="form-group">
-                <label for="sync-task-jdy-entry-id">简道云 Entry ID</label>
-                <input type="text" id="sync-task-jdy-entry-id" required>
-            </div>
-            <div class="form-group">
-                <label for="sync-task-sync-mode">同步模式</label>
-                <select id="sync-task-sync-mode">
-                    <option value="INCREMENTAL">INCREMENTAL</option>
-                    <option value="FULL_REPLACE">FULL_REPLACE</option>
-                    <option value="BINLOG">BINLOG</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <label><input type="checkbox" id="sync-task-is-active" checked> 是否激活</label>
-            </div>
-            <button type="submit">保存</button>
-        </form>
-    </div>
-</div>
-
 
 <script>
-    // --- 全局变量和帮助函数 ---
-    let departmentsCache = []; // 用于填充部门下拉框
-    let tenantDatabasesCache = []; // 用于填充数据库下拉框
+    const ElementPlusIcons = window.ElementPlusIconsVue || {};
+    const {createApp, ref, reactive, computed, onMounted, watch} = Vue;
+    const {ElMessage, ElMessageBox} = ElementPlus;
+    const {useRoute, useRouter} = VueRouter;
 
-    // --- 新增：用于跟踪刷新状态 ---
+    // --- (新) 全局状态 ---
+    // 用于在刷新时处理并发请求
     let isRefreshingToken = false;
-    let failedRequestQueue = []; // 存储因 token 失效而失败的请求
+    let failedRequestQueue = [];
 
-    /**
-     * --- 封装的 fetch API, 自动添加 JWT 并处理刷新 ---
-     */
-    async function apiFetch(url, options = {}) {
+    // --- (新) Axios 实例 (适配 JWT Bearer Token) ---
+    const apiClient = axios.create({
+        baseURL: '/api' // (新) 统一使用 /api 前缀
+    });
+
+    // (新) 请求拦截器：自动附加 Bearer Token
+    apiClient.interceptors.request.use(config => {
         const token = localStorage.getItem('access_token');
-        const headers = {
-            'Content-Type': 'application/json',
-            ...options.headers,
-        };
-
         if (token) {
-            headers['Authorization'] = `Bearer ${token}`;
+            config.headers['Authorization'] = `Bearer ${token}`;
         }
+        return config;
+    });
 
-        options.headers = headers;
+    // (新) 响应拦截器：处理 401 自动刷新
+    apiClient.interceptors.response.use(
+        response => response,
+        async error => {
+            const originalRequest = error.config;
 
-        try {
-            const response = await fetch(url, options);
-
-            if (response.status === 401) {
-                // Token 失效
-                console.warn('Auth error (401): Access Token expired or invalid.');
-
-                // 如果是 /api/refresh 本身失败了，直接登出
-                if (url.endsWith('/api/refresh')) {
-                    console.error("Refresh token failed. Logging out.");
-                    logout();
-                    throw new Error("会话已过期，请重新登录。");
+            // 1. 如果是 401 错误，并且不是 /refresh 或 /login 失败
+            if (error.response?.status === 401 && !originalRequest._retry) {
+                if (originalRequest.url.endsWith('/login') || originalRequest.url.endsWith('/refresh')) {
+                    // 登录或刷新失败，直接登出
+                    window.appInstance?.handleLogout(true); // 强制登出
+                    return Promise.reject(error.response?.data?.msg || '认证失败');
                 }
 
-                // 尝试刷新 Token
+                originalRequest._retry = true; // 标记为重试
+
+                // 2. 处理并发的刷新请求
+                if (isRefreshingToken) {
+                    // 如果正在刷新，将失败的请求存入队列
+                    return new Promise((resolve, reject) => {
+                        failedRequestQueue.push({ resolve, reject, config: originalRequest });
+                    });
+                }
+
+                isRefreshingToken = true;
+                const refreshToken = localStorage.getItem('refresh_token');
+                if (!refreshToken) {
+                    window.appInstance?.handleLogout(true);
+                    return Promise.reject('无刷新令牌，请重新登录。');
+                }
+
                 try {
-                    // 使用 refreshToken() 函数处理并发
-                    const newAccessToken = await refreshToken();
+                    // 3. 尝试获取新 Token
+                    const refreshResponse = await axios.post('/api/refresh', {}, {
+                        headers: { 'Authorization': `Bearer ${refreshToken}` }
+                    });
 
-                    // 刷新成功，更新 header 并重试原始请求
-                    options.headers['Authorization'] = `Bearer ${newAccessToken}`;
-                    console.log("Token refreshed. Retrying original request to:", url);
-                    // (重要) 直接返回重试的 fetch，而不是 apiFetch 避免无限循环
-                    const retryResponse = await fetch(url, options);
+                    const newAccessToken = refreshResponse.data.access_token;
+                    localStorage.setItem('access_token', newAccessToken);
 
-                    if (!retryResponse.ok) {
-                         const errorData = await retryResponse.json();
-                         throw new Error(errorData.msg || `HTTP error! status: ${retryResponse.status}`);
-                    }
-                    // 根据重试的响应返回 JSON 或 Text
-                    const contentType = retryResponse.headers.get("content-type");
-                    if (contentType && contentType.indexOf("application/json") !== -1) {
-                        return await retryResponse.json();
-                    }
-                    if (retryResponse.status === 204 || retryResponse.statusText === "No Content") {
-                        return null;
-                    }
-                    return await retryResponse.text();
+                    // 4. 更新当前请求的 Header 并重新发送
+                    originalRequest.headers['Authorization'] = `Bearer ${newAccessToken}`;
+
+                    // (重要) 处理队列中所有等待的请求
+                    failedRequestQueue.forEach(req => {
+                        req.config.headers['Authorization'] = `Bearer ${newAccessToken}`;
+                        apiClient(req.config).then(req.resolve).catch(req.reject);
+                    });
+                    failedRequestQueue = [];
+
+                    isRefreshingToken = false;
+                    return apiClient(originalRequest); // 返回重试的原始请求
 
                 } catch (refreshError) {
-                    // 刷新失败，登出
-                    console.error("Failed to refresh token:", refreshError);
-                    alert("会话已过期，请重新登录。");
-                    logout(); // 强制退出
-                    throw refreshError; // 抛出错误，中断后续操作
+                    // 5. 刷新失败，登出
+                    console.error("Token refresh failed:", refreshError);
+                    window.appInstance?.handleLogout(true);
+                    ElMessage.error('会话已过期，请重新登录。');
+                    isRefreshingToken = false;
+                    failedRequestQueue = [];
+                    return Promise.reject(refreshError);
                 }
             }
 
-            // 非 401 错误
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.msg || `HTTP error! status: ${response.status}`);
-            }
-
-            // DELETE 请求可能没有 body
-            if (response.status === 204 || response.statusText === "No Content") {
-                return null;
-            }
-
-            // 检查返回的是否是JSON
-            const contentType = response.headers.get("content-type");
-            if (contentType && contentType.indexOf("application/json") !== -1) {
-                return await response.json();
+            // (原) 处理其他错误
+            if (error.response?.data?.error) {
+                ElMessage.error(`操作失败: ${error.response.data.error}`);
+            } else if (error.response?.data?.msg) {
+                 ElMessage.error(`操作失败: ${error.response.data.msg}`);
+            } else if (error.message) {
+                ElMessage.error(`请求错误: ${error.message}`);
             } else {
-                return await response.text();
+                ElMessage.error('发生未知错误');
             }
-
-        } catch (error) {
-            console.error('API Fetch Error:', error);
-            // 不再弹框，让调用者处理
-            // alert(`操作失败: ${error.message}`);
-            throw error;
+            return Promise.reject(error);
         }
-    }
+    );
 
-    /**
-     * --- 刷新 Token 的函数 ---
-     * 使用 Promise 来处理并发请求，确保 /refresh 只被调用一次
-     */
-    function refreshToken() {
-        return new Promise((resolve, reject) => {
-            const refreshToken = localStorage.getItem('refresh_token');
-            if (!refreshToken) {
-                console.log("No refresh token available.");
-                return reject(new Error("No refresh token."));
-            }
+    // --- (新) Reusable CRUD Composable (适配新 API) ---
+    function useCrud(apiEndpoint, itemName = '项目', defaultItem = {}, idKey = 'id') {
+        const items = ref([]);
+        const loading = ref(false);
+        const dialogVisible = ref(false);
+        const isEdit = ref(false);
+        const currentItem = reactive({});
+        const formRef = ref(null);
 
-            // 1. 将当前请求加入队列
-            // 存储 resolve/reject 对
-            const requestCallbacks = { resolve, reject };
-            failedRequestQueue.push(requestCallbacks);
-
-            // 2. 如果没有正在刷新，则发起刷新请求
-            if (!isRefreshingToken) {
-                isRefreshingToken = true;
-                console.log("Attempting to refresh token...");
-
-                fetch('/api/refresh', {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${refreshToken}`,
-                        'Content-Type': 'application/json'
-                    }
-                })
-                .then(async (response) => {
-                    if (!response.ok) {
-                         const errData = await response.json();
-                        throw new Error(errData.msg || 'Failed to refresh token');
-                    }
-                    const data = await response.json();
-                    const newAccessToken = data.access_token;
-
-                    // 刷新成功
-                    console.log("Token successfully refreshed.");
-                    localStorage.setItem('access_token', newAccessToken);
-                    isRefreshingToken = false;
-
-                    // (重要) 处理队列中的所有请求
-                    failedRequestQueue.forEach(req => req.resolve(newAccessToken));
-                    failedRequestQueue = []; // 清空队列
-                })
-                .catch((error) => {
-                    // 刷新失败
-                    console.error("Token refresh failed:", error);
-                    isRefreshingToken = false;
-
-                    // (重要) 拒绝队列中的所有请求
-                    failedRequestQueue.forEach(req => req.reject(error));
-                    failedRequestQueue = []; // 清空队列
-                });
-            }
-            // 如果正在刷新，请求只会加入队列，等待当前刷新完成
-        });
-    }
-
-    // --- 认证与 UI 控制 ---
-
-    document.getElementById('login-form').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const username = document.getElementById('username').value;
-        const password = document.getElementById('password').value;
-        const errorEl = document.getElementById('login-error');
-        errorEl.textContent = '';
-
-        try {
-            // --- 使用标准 fetch 而非 apiFetch，避免登录401时触发刷新 ---
-            const response = await fetch('/api/login', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({username, password})
-            });
-
-            const result = await response.json();
-            if (!response.ok) {
-                 throw new Error(result.msg || '登录失败');
-            }
-
-            // --- 登录成功后存储所有信息 ---
-            localStorage.setItem('access_token', result.access_token);
-            localStorage.setItem('refresh_token', result.refresh_token); // --- 存储 Refresh Token
-            localStorage.setItem('user_id', result.user_id);
-            localStorage.setItem('username', result.username);
-            localStorage.setItem('is_superuser', result.is_superuser); // 存储为 'true' 或 'false' 字符串
-            localStorage.setItem('department_id', result.department_id);
-            localStorage.setItem('department_name', result.department_name || 'N/A');
-
-            showAppUI();
-        } catch (err) {
-            errorEl.textContent = err.message || '登录失败，请检查网络';
-        }
-    });
-
-    document.getElementById('logout-btn').addEventListener('click', (e) => {
-        e.preventDefault();
-        logout();
-    });
-
-    function logout() {
-        // 清除本地存储
-        localStorage.clear();
-        departmentsCache = [];
-        tenantDatabasesCache = [];
-        document.getElementById('app-container').style.display = 'none';
-        document.getElementById('login-container').style.display = 'block';
-    }
-
-
-    /**
-     * 根据登录状态初始化应用UI
-     */
-    async function showAppUI() {
-        // 检查 access_token
-        const token = localStorage.getItem('access_token');
-        if (!token) {
-            logout(); // 调用 logout 清理
-            return;
-        }
-
-        document.getElementById('login-container').style.display = 'none';
-        document.getElementById('app-container').style.display = 'flex'; // 显示应用
-
-        const username = localStorage.getItem('username');
-        const departmentName = localStorage.getItem('department_name');
-        const isSuperuser = localStorage.getItem('is_superuser') === 'true'; // 转换为布尔值
-
-        document.getElementById('username-display').textContent = username;
-        document.getElementById('department-display').textContent = isSuperuser ? '超级管理员' : `部门: ${departmentName}`;
-
-        // 控制 Admin/Non-Admin 元素的显示
-        document.querySelectorAll('.admin-only').forEach(el => {
-            el.style.display = isSuperuser ? '' : 'none'; // 根据是否为超管显示
-        });
-        document.querySelectorAll('.non-admin-only').forEach(el => {
-            el.style.display = isSuperuser ? 'none' : ''; // 相反
-        });
-
-        // 修正表格中 admin-only 的 th/td
-        document.querySelectorAll('th.admin-only, td.admin-only').forEach(el => {
-            el.style.display = isSuperuser ? 'table-cell' : 'none';
-        });
-
-        // 导航到默认页面 (仪表盘)
-        navigateTo('dashboard');
-
-        // 预加载所有下拉框所需的数据
-        // 使用 try-catch 保证加载失败时也能显示UI
-        try {
-            await loadTenantDatabasesCache();
-            if (isSuperuser) {
-                await loadDepartmentsCache();
-            }
-        } catch(e) {
-            console.error("Failed to preload caches:", e);
-            // apiFetch 已经处理了 401 登出, 这里无需操作
-        }
-    }
-
-    // --- 导航控制 ---
-
-    document.getElementById('main-nav').addEventListener('click', (e) => {
-        if (e.target.tagName === 'A') {
-            e.preventDefault();
-            const targetId = e.target.dataset.target;
-            if (targetId) {
-                navigateTo(targetId);
-            }
-        }
-    });
-
-    function navigateTo(targetId) {
-        // 1. 更新导航链接的 active 状态
-        document.querySelectorAll('#main-nav .nav-link').forEach(link => {
-            link.classList.toggle('active', link.dataset.target === targetId);
-        });
-
-        // 2. 隐藏所有内容区域，显示目标区域
-        document.querySelectorAll('.content-section').forEach(section => {
-            section.classList.toggle('active', section.id === targetId);
-        });
-
-        // 3. 根据目标 ID 加载数据
-        (async () => {
+        const fetchItems = async () => {
+            loading.value = true;
             try {
-                switch (targetId) {
-                    case 'departments':
-                        await loadTableData('departments', '/api/departments', populateDepartmentsTable);
-                        break;
-                    case 'users':
-                        await loadTableData('users', '/api/users', populateUsersTable);
-                        break;
-                    case 'databases':
-                        await loadTableData('databases', '/api/databases', populateDatabasesTable);
-                        break;
-                    case 'jdy-keys':
-                        await loadTableData('jdy-keys', '/api/jdy-keys', populateJdyKeysTable);
-                        break;
-                    case 'sync-tasks':
-                        await loadTableData('sync-tasks', '/api/sync-tasks', populateSyncTasksTable);
-                        break;
-                    case 'error-logs':
-                        await loadTableData('error-logs', '/api/error-logs', populateErrorLogsTable);
-                        break;
-                    // 'dashboard' 和 'change-password' 不需要初始加载数据
-                }
-            } catch (e) {
-                // apiFetch 内部已处理 auth-error, 此处无需重复处理
-                console.error(`Navigation load error for ${targetId}:`, e);
-            }
-        })();
-    }
-
-    // --- 通用数据加载和表格填充 ---
-
-    /**
-     * 通用函数：加载数据并填充表格
-     */
-    async function loadTableData(entityName, url, populateFn) {
-        const tbody = document.getElementById(`${entityName}-table`).querySelector('tbody');
-        tbody.innerHTML = `<tr><td colspan="100%">正在加载...</td></tr>`;
-        try {
-            const data = await apiFetch(url);
-            populateFn(data);
-        } catch (error) {
-            console.error(`Error loading ${entityName}:`, error);
-            // 错误信息现在由 apiFetch 弹出, 仅显示通用错误
-            tbody.innerHTML =
-                `<tr><td colspan="100%">数据加载失败: ${error.message}</td></tr>`;
-        }
-    }
-
-    /**
-     * 预加载租户数据库列表
-     */
-    async function loadTenantDatabasesCache() {
-        try {
-            tenantDatabasesCache = await apiFetch('/api/tenant-databases');
-            // (移除) 不在此处填充，在 showModal 时填充
-        } catch (error) {
-            console.error("Error loading tenant databases cache:", error);
-            throw error; // 抛出错误，让 showAppUI 知道
-        }
-    }
-
-    /**
-     * 填充数据库下拉框
-     */
-    function populateDatabaseSelect(selectId, databases) {
-        const select = document.getElementById(selectId);
-        select.innerHTML = '<option value="">-- 请选择 --</option>';
-        databases.forEach(db => {
-            select.innerHTML += `<option value="${db.id}">${db.name} (ID: ${db.id})</option>`;
-        });
-    }
-
-    /**
-     * 预加载部门列表 (超管)
-     */
-    async function loadDepartmentsCache() {
-        try {
-            departmentsCache = await apiFetch('/api/departments');
-            // 填充所有需要部门下拉框的 select
-            populateDepartmentSelect('user-department-id', departmentsCache);
-            populateDepartmentSelect('database-department-id', departmentsCache);
-            populateDepartmentSelect('jdy-key-department-id', departmentsCache);
-            populateDepartmentSelect('sync-task-department-id', departmentsCache);
-        } catch (error) {
-            console.error("Error loading departments cache:", error);
-            throw error; // 抛出错误
-        }
-    }
-
-    function populateDepartmentSelect(selectId, departments) {
-        const select = document.getElementById(selectId);
-        select.innerHTML = '<option value="">-- 请选择 --</option>'; // 默认选项
-        departments.forEach(dept => {
-            select.innerHTML += `<option value="${dept.id}">${dept.department_name} (ID: ${dept.id})</option>`;
-        });
-    }
-
-    // --- 实体专用的表格填充函数 ---
-
-    function populateDepartmentsTable(departments) {
-        const tbody = document.getElementById('departments-table').querySelector('tbody');
-        if (departments.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="5">没有数据</td></tr>`;
-            return;
-        }
-        tbody.innerHTML = departments.map(d => `
-                <tr>
-                    <td>${d.id}</td>
-                    <td>${d.department_id}</td>
-                    <td>${d.department_name}</td>
-                    <td>${d.is_active ? '是' : '否'}</td>
-                    <td>
-                        <div class="btn-group">
-                            <button class="btn-primary" onclick="editEntity('department', ${d.id})">编辑</button>
-                            <button class="btn-danger" onclick="deleteEntity('department', ${d.id}, '/api/departments')">删除</button>
-                        </div>
-                    </td>
-                </tr>
-            `).join('');
-    }
-
-    function populateUsersTable(users) {
-        const tbody = document.getElementById('users-table').querySelector('tbody');
-        if (users.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="6">没有数据</td></tr>`;
-            return;
-        }
-        tbody.innerHTML = users.map(u => `
-                <tr>
-                    <td>${u.id}</td>
-                    <td>${u.username}</td>
-                    <td>${u.department_id}</td>
-                    <td>${u.is_superuser ? '是' : '否'}</td>
-                    <td>${u.is_active ? '是' : '否'}</td>
-                    <td>
-                         <div class="btn-group">
-                            <button class="btn-primary" onclick="editEntity('user', ${u.id})">编辑</button>
-                            <button class="btn-danger" onclick="deleteEntity('user', ${u.id}, '/api/users')">删除</button>
-                        </div>
-                    </td>
-                </tr>
-            `).join('');
-    }
-
-    function populateDatabasesTable(databases) {
-        const tbody = document.getElementById('databases-table').querySelector('tbody');
-        const isSuperuser = localStorage.getItem('is_superuser') === 'true';
-        const colCount = isSuperuser ? 10 : 9; //
-        if (databases.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="${colCount}">没有数据</td></tr>`;
-            return;
-        }
-
-        tbody.innerHTML = databases.map(d => `
-                <tr>
-                    <td>${d.id}</td>
-                    ${isSuperuser ? `<td>${d.department_id}</td>` : ''}
-                    <td>${d.db_show_name}</td> <td>${d.db_type}</td>
-                    <td>${d.db_host}</td>
-                    <td>${d.db_port}</td>
-                    <td>${d.db_name}</td>
-                    <td>${d.db_user}</td>
-                    <td>${d.is_active ? '是' : '否'}</td>
-                    <td>
-                         <div class="btn-group">
-                            <button class="btn-primary" onclick="editEntity('database', ${d.id})">编辑</button>
-                            <button class="btn-danger" onclick="deleteEntity('database', ${d.id}, '/api/databases')">删除</button>
-                        </div>
-                    </td>
-                </tr>
-            `).join('');
-    }
-
-    function populateJdyKeysTable(keys) {
-        const tbody = document.getElementById('jdy-keys-table').querySelector('tbody');
-        const isSuperuser = localStorage.getItem('is_superuser') === 'true';
-        const colCount = isSuperuser ? 4 : 3;
-        if (keys.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="${colCount}">没有数据</td></tr>`;
-            return;
-        }
-
-        tbody.innerHTML = keys.map(k => `
-                <tr>
-                    <td>${k.id}</td>
-                    ${isSuperuser ? `<td>${k.department_id}</td>` : ''}
-                    <td>${k.api_key.substring(0, 10)}...</td>
-                    <td>
-                         <div class="btn-group">
-                            <button class="btn-primary" onclick="editEntity('jdy-key', ${k.id})">编辑</button>
-                            <button class="btn-danger" onclick="deleteEntity('jdy-key', ${k.id}, '/api/jdy-keys')">删除</button>
-                        </div>
-                    </td>
-                </tr>
-            `).join('');
-    }
-
-    function populateSyncTasksTable(tasks) {
-        const tbody = document.getElementById('sync-tasks-table').querySelector('tbody');
-        const isSuperuser = localStorage.getItem('is_superuser') === 'true';
-        const colCount = isSuperuser ? 11 : 10; //
-        if (tasks.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="${colCount}">没有数据</td></tr>`;
-            return;
-        }
-
-        tbody.innerHTML = tasks.map(t => `
-                <tr>
-                    <td>${t.task_id}</td>
-                    ${isSuperuser ? `<td>${t.department_id}</td>` : ''}
-                    <td>${t.task_name || 'N/A'}</td>
-                    <td>${t.source_db_name || 'N/A'}</td> <td>${t.source_table}</td>
-                    <td>${t.jdy_app_id}</td>
-                    <td>${t.jdy_entry_id}</td>
-                    <td>${t.sync_mode}</td>
-                    <td>${t.status}</td>
-                    <td>${t.is_active ? '是' : '否'}</td>
-                    <td>
-                         <div class="btn-group">
-                            <button class="btn-primary" onclick="editEntity('sync-task', ${t.task_id})">编辑</button>
-                            <button class="btn-danger" onclick="deleteEntity('sync-task', ${t.task_id}, '/api/sync-tasks')">删除</button>
-                        </div>
-                    </td>
-                </tr>
-            `).join('');
-    }
-
-    function populateErrorLogsTable(logs) {
-        const tbody = document.getElementById('error-logs-table').querySelector('tbody');
-        const isSuperuser = localStorage.getItem('is_superuser') === 'true';
-        const colCount = isSuperuser ? 6 : 5;
-        if (logs.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="${colCount}">没有日志</td></tr>`;
-            return;
-        }
-
-        tbody.innerHTML = logs.map(l => `
-                <tr>
-                    <td>${l.id}</td>
-                    ${isSuperuser ? `<td>${l.department_id}</td>` : ''}
-                    <td>${l.task_id || 'N/A'}</td>
-                    <td>${new Date(l.timestamp).toLocaleString()}</td>
-                    <td style="max-width: 300px;">${l.error_message}</td>
-                    <td style="max-width: 400px; white-space: pre-wrap; font-size: 12px; color: #555;">${l.traceback || ''}</td>
-                </tr>
-            `).join('');
-    }
-
-    // --- 模态框和表单处理 ---
-
-    function showModal(modalId, reset = true) {
-        if (reset) {
-            // 重置表单
-            const form = document.getElementById(modalId).querySelector('form');
-            if (form) form.reset();
-
-            // 清空隐藏的 ID 字段
-            document.querySelectorAll(`#${modalId} input[type="hidden"]`).forEach(input => input.value = '');
-
-            // 重置标题
-            const title = document.getElementById(`${modalId.replace('-modal', '')}-modal-title`);
-            if (title) title.textContent = title.textContent.replace('编辑', '新增');
-
-            // 特殊处理：用户表单
-            if (modalId === 'user-modal') {
-                document.getElementById('user-password').required = true;
-                document.getElementById('user-password-group').style.display = '';
-                document.getElementById('reset-password-form').style.display = 'none';
-                document.getElementById('reset-password-form').dataset.userId = '';
-            }
-
-            // 特殊处理：数据库表单密码
-            if (modalId === 'database-modal') {
-                document.getElementById('database-db-password').required = true;
-                document.getElementById('database-db-password').placeholder = '';
-            }
-        }
-
-        // --- 特殊处理：同步任务模态框 ---
-        if (modalId === 'sync-task-modal') {
-            // (Re)-populate the database dropdown from the cache
-            // 此时 tenantDatabasesCache 应该已经加载
-            populateDatabaseSelect('sync-task-source-db-id', tenantDatabasesCache);
-        }
-
-        document.getElementById(modalId).style.display = 'flex';
-    }
-
-    function closeModal(modalId) {
-        document.getElementById(modalId).style.display = 'none';
-    }
-
-    // --- 通用 CRUD 操作 ---
-
-    /**
-     * 通用删除
-     */
-    async function deleteEntity(entityName, id, baseUrl) {
-        if (confirm(`确定要删除这个 ${entityName} (ID: ${id}) 吗？`)) {
-            try {
-                await apiFetch(`${baseUrl}/${id}`, {method: 'DELETE'});
-                alert(`${entityName} 删除成功!`);
-                // 重新加载对应的表格
-                navigateTo(entityName + 's'); // e.g., 'departments'
-
-                // 如果删除了数据库，刷新数据库缓存
-                if (entityName === 'database') {
-                    await loadTenantDatabasesCache();
-                }
+                const response = await apiClient.get(apiEndpoint);
+                items.value = response.data;
             } catch (error) {
-                console.error(`Error deleting ${entityName}:`, error);
-                alert(`删除失败: ${error.message}`); // 错误时弹框
+                console.error(`获取 ${itemName} 列表失败:`, error);
+            } finally {
+                loading.value = false;
             }
-        }
-    }
-
-    /**
-     * 通用编辑（加载数据到表单）
-     */
-    async function editEntity(entityName, id) {
-        let apiUrl, modalId, populateFn, hiddenIdField;
-
-        // 定义
-        switch (entityName) {
-            case 'department':
-                apiUrl = `/api/departments/${id}`;
-                modalId = 'department-modal';
-                populateFn = populateDepartmentForm;
-                hiddenIdField = 'department-id-hidden';
-                break;
-            case 'user':
-                apiUrl = `/api/users/${id}`;
-                modalId = 'user-modal';
-                populateFn = populateUserForm;
-                hiddenIdField = 'user-id-hidden';
-                break;
-            case 'database':
-                apiUrl = `/api/databases/${id}`;
-                modalId = 'database-modal';
-                populateFn = populateDatabaseForm;
-                hiddenIdField = 'database-id-hidden';
-                break;
-            case 'jdy-key':
-                apiUrl = `/api/jdy-keys/${id}`;
-                modalId = 'jdy-key-modal';
-                populateFn = populateJdyKeyForm;
-                hiddenIdField = 'jdy-key-id-hidden';
-                break;
-            case 'sync-task':
-                apiUrl = `/api/sync-tasks/${id}`;
-                modalId = 'sync-task-modal';
-                populateFn = populateSyncTaskForm;
-                hiddenIdField = 'sync-task-id-hidden';
-                break;
-            default:
-                console.error("Unknown entity type:", entityName);
-                return;
-        }
-
-        try {
-            const data = await apiFetch(apiUrl);
-            document.getElementById(`${entityName}-modal-title`).textContent = `编辑 (ID: ${id})`;
-            document.getElementById(hiddenIdField).value = id; // 存储 ID
-            populateFn(data);
-            showModal(modalId, false); // 显示模态框，但不重置表单
-        } catch (error) {
-            console.error(`Error fetching ${entityName} for edit:`, error);
-            alert(`加载编辑数据失败: ${error.message}`); // 错误时弹框
-        }
-    }
-
-    // --- 实体专用的表单填充函数 ---
-
-    function populateDepartmentForm(data) {
-        document.getElementById('department-department-id').value = data.department_id;
-        document.getElementById('department-department-name').value = data.department_name;
-        document.getElementById('department-is-active').checked = data.is_active;
-    }
-
-    function populateUserForm(data) {
-        document.getElementById('user-username').value = data.username;
-        document.getElementById('user-department-id').value = data.department_id;
-        document.getElementById('user-is-superuser').checked = data.is_superuser;
-        document.getElementById('user-is-active').checked = data.is_active;
-
-        // 编辑时，密码设为非必填
-        document.getElementById('user-password').required = false;
-        document.getElementById('user-password-group').style.display = 'none'; // 隐藏密码输入
-
-        // 显示重置密码表单
-        document.getElementById('reset-password-form').style.display = 'block';
-        document.getElementById('reset-password-form').dataset.userId = data.id; // 存储ID
-    }
-
-    function populateDatabaseForm(data) {
-        document.getElementById('database-department-id').value = data.department_id;
-        document.getElementById('database-db-show-name').value = data.db_show_name; //
-        document.getElementById('database-db-type').value = data.db_type;
-        document.getElementById('database-db-host').value = data.db_host;
-        document.getElementById('database-db-port').value = data.db_port;
-        document.getElementById('database-db-name').value = data.db_name;
-        document.getElementById('database-db-user').value = data.db_user;
-        // 编辑时不显示密码，设为非必填
-        const passInput = document.getElementById('database-db-password');
-        passInput.required = false;
-        passInput.value = ''; // 清空
-        passInput.placeholder = "如需修改请输入新密码";
-
-        document.getElementById('database-is-active').checked = data.is_active;
-    }
-
-    function populateJdyKeyForm(data) {
-        document.getElementById('jdy-key-department-id').value = data.department_id;
-        document.getElementById('jdy-key-api-key').value = data.api_key;
-    }
-
-    function populateSyncTaskForm(data) {
-        document.getElementById('sync-task-department-id').value = data.department_id;
-        document.getElementById('sync-task-task-name').value = data.task_name;
-        document.getElementById('sync-task-source-db-id').value = data.source_db_id; //
-        document.getElementById('sync-task-source-table').value = data.source_table;
-        document.getElementById('sync-task-pk-field-names').value = data.pk_field_names;
-        document.getElementById('sync-task-jdy-app-id').value = data.jdy_app_id;
-        document.getElementById('sync-task-jdy-entry-id').value = data.jdy_entry_id;
-        document.getElementById('sync-task-sync-mode').value = data.sync_mode;
-        document.getElementById('sync-task-is-active').checked = data.is_active;
-    }
-
-    // --- 实体专用的表单提交事件 ---
-
-    // Department 提交
-    document.getElementById('department-form').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const id = document.getElementById('department-id-hidden').value;
-        const data = {
-            department_id: document.getElementById('department-department-id').value,
-            department_name: document.getElementById('department-department-name').value,
-            is_active: document.getElementById('department-is-active').checked,
-        };
-        const url = id ? `/api/departments/${id}` : '/api/departments';
-        const method = id ? 'PUT' : 'POST';
-
-        try {
-            await apiFetch(url, {method, body: JSON.stringify(data)});
-            closeModal('department-modal');
-            navigateTo('departments'); // 刷新表格
-            if (method === 'POST') await loadDepartmentsCache(); // 新增后刷新缓存
-        } catch (error) {
-            console.error("Save department error:", error);
-            alert(`保存失败: ${error.message}`);
-        }
-    });
-
-    // User 提交
-    document.getElementById('user-form').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const id = document.getElementById('user-id-hidden').value;
-        const data = {
-            username: document.getElementById('user-username').value,
-            department_id: document.getElementById('user-department-id').value,
-            is_superuser: document.getElementById('user-is-superuser').checked,
-            is_active: document.getElementById('user-is-active').checked,
         };
 
-        const password = document.getElementById('user-password').value;
-        if (!id && password) { // 新增时
-            data.password = password;
-        } else if (!id && !password) {
-            alert("新增用户时必须设置密码");
-            return;
-        }
-
-        const url = id ? `/api/users/${id}` : '/api/users';
-        const method = id ? 'PUT' : 'POST';
-
-        try {
-            await apiFetch(url, {method, body: JSON.stringify(data)});
-            closeModal('user-modal');
-            navigateTo('users');
-        } catch (error) {
-            console.error("Save user error:", error);
-            alert(`保存失败: ${error.message}`);
-        }
-    });
-
-    // 重置密码 提交
-    document.getElementById('reset-password-form').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const userId = e.target.dataset.userId;
-        const new_password = document.getElementById('reset-password-new').value;
-        if (!userId || !new_password) {
-            alert("无法重置密码");
-            return;
-        }
-
-        try {
-            await apiFetch(`/api/users/${userId}/reset-password`, {
-                method: 'PATCH',
-                body: JSON.stringify({new_password})
+        const openDialog = (item = null) => {
+            if (item) {
+                isEdit.value = true;
+                Object.assign(currentItem, JSON.parse(JSON.stringify(item)));
+            } else {
+                isEdit.value = false;
+                Object.keys(currentItem).forEach(key => delete currentItem[key]);
+                Object.assign(currentItem, JSON.parse(JSON.stringify(defaultItem)));
+            }
+            dialogVisible.value = true;
+            Vue.nextTick(() => {
+                if (formRef.value) formRef.value.clearValidate();
             });
-            alert("密码重置成功！");
-            document.getElementById('reset-password-new').value = '';
-            closeModal('user-modal');
-        } catch (error) {
-            console.error("Reset password error:", error);
-            alert(`重置失败: ${error.message}`);
-        }
-    });
-
-    // Database 提交
-    document.getElementById('database-form').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const id = document.getElementById('database-id-hidden').value;
-        const data = {
-            department_id: document.getElementById('database-department-id').value,
-            db_show_name: document.getElementById('database-db-show-name').value, //
-            db_type: document.getElementById('database-db-type').value,
-            db_host: document.getElementById('database-db-host').value,
-            db_port: document.getElementById('database-db-port').value,
-            db_name: document.getElementById('database-db-name').value,
-            db_user: document.getElementById('database-db-user').value,
-            is_active: document.getElementById('database-is-active').checked,
         };
 
-        const password = document.getElementById('database-db-password').value;
-        if (password || !id) { // 新增时或输入了新密码时
-            if (!password && !id) {
-                alert("新增时必须输入密码");
+        const closeDialog = () => {
+            dialogVisible.value = false;
+        };
+
+        const saveItem = async () => {
+            if (!formRef.value) return;
+            try {
+                await formRef.value.validate();
+            } catch (error) {
+                ElMessage.warning('请检查表单输入。');
                 return;
             }
-            data.db_password = password;
-        }
 
-        const url = id ? `/api/databases/${id}` : '/api/databases';
-        const method = id ? 'PUT' : 'POST';
+            loading.value = true;
+            // (新) 使用 idKey
+            const url = isEdit.value ? `${apiEndpoint}/${currentItem[idKey]}` : apiEndpoint;
+            const method = isEdit.value ? 'put' : 'post';
 
-        try {
-            await apiFetch(url, {method, body: JSON.stringify(data)});
-            closeModal('database-modal');
-            navigateTo('databases');
-            await loadTenantDatabasesCache(); // 刷新数据库缓存
-        } catch (error) {
-            console.error("Save database error:", error);
-            alert(`保存失败: ${error.message}`);
-        }
-    });
+            try {
+                const dataToSend = {...currentItem};
 
-    // JdyKey 提交
-    document.getElementById('jdy-key-form').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const id = document.getElementById('jdy-key-id-hidden').value;
-        const data = {
-            department_id: document.getElementById('jdy-key-department-id').value,
-            api_key: document.getElementById('jdy-key-api-key').value,
+                // (新) 清理前端临时字段
+                if ('full_replace_time_temp' in dataToSend) {
+                    dataToSend.full_replace_time = dataToSend.full_replace_time_temp || null;
+                    delete dataToSend.full_replace_time_temp;
+                }
+                // (新) 清理密码
+                if (method === 'put' && 'password' in dataToSend && !dataToSend.password) {
+                    delete dataToSend.password;
+                }
+
+                const response = await apiClient[method](url, dataToSend);
+
+                if (isEdit.value) {
+                    const index = items.value.findIndex(i => i[idKey] === currentItem[idKey]);
+                    if (index !== -1) items.value.splice(index, 1, response.data);
+                } else {
+                    items.value.push(response.data);
+                }
+                closeDialog();
+                ElMessage.success(`${itemName} 保存成功！`);
+            } catch (error) {
+                console.error(`保存 ${itemName} 失败:`, error);
+            } finally {
+                loading.value = false;
+            }
         };
 
-        const url = id ? `/api/jdy-keys/${id}` : '/api/jdy-keys';
-        const method = id ? 'PUT' : 'POST';
-
-        try {
-            await apiFetch(url, {method, body: JSON.stringify(data)});
-            closeModal('jdy-key-modal');
-            navigateTo('jdy-keys');
-        } catch (error) {
-            console.error("Save jdy-key error:", error);
-            alert(`保存失败: ${error.message}`);
-        }
-    });
-
-    // SyncTask 提交
-    document.getElementById('sync-task-form').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const id = document.getElementById('sync-task-id-hidden').value;
-        const data = {
-            department_id: document.getElementById('sync-task-department-id').value,
-            task_name: document.getElementById('sync-task-task-name').value,
-            source_db_id: document.getElementById('sync-task-source-db-id').value, //
-            source_table: document.getElementById('sync-task-source-table').value,
-            pk_field_names: document.getElementById('sync-task-pk-field-names').value,
-            jdy_app_id: document.getElementById('sync-task-jdy-app-id').value,
-            jdy_entry_id: document.getElementById('sync-task-jdy-entry-id').value,
-            sync_mode: document.getElementById('sync-task-sync-mode').value,
-            is_active: document.getElementById('sync-task-is-active').checked,
+        const deleteItem = async (id) => {
+            try {
+                await ElMessageBox.confirm(`确定要删除这个 ${itemName} (ID: ${id}) 吗?`, '警告', {
+                    confirmButtonText: '确定',
+                    cancelButtonText: '取消',
+                    type: 'warning'
+                });
+                loading.value = true;
+                await apiClient.delete(`${apiEndpoint}/${id}`);
+                items.value = items.value.filter(i => i[idKey] !== id);
+                ElMessage.success(`${itemName} 删除成功！`);
+            } catch (error) {
+                if (error !== 'cancel') console.error(`删除 ${itemName} 失败:`, error);
+            } finally {
+                loading.value = false;
+            }
         };
+        onMounted(fetchItems);
+        return { items, loading, dialogVisible, isEdit, currentItem, formRef, fetchItems, openDialog, closeDialog, saveItem, deleteItem };
+    }
 
-        const url = id ? `/api/sync-tasks/${id}` : '/api/sync-tasks';
-        const method = id ? 'PUT' : 'POST';
+    // --- (新) Login Component (适配 /api/login 和 JWT) ---
+    const LoginView = {
+        template: `
+          <el-card class="login-card">
+            <h1 class="login-title">MySQL -> 简道云 数据同步系统</h1>
+            <h2>登录</h2>
+            <el-form @submit.prevent="submitLogin" ref="loginFormRef" :model="loginForm" :rules="loginRules" label-position="top">
+              <el-form-item label="用户名" prop="username">
+                <el-input v-model="loginForm.username" placeholder="请输入用户名"></el-input>
+              </el-form-item>
+              <el-form-item label="密码" prop="password">
+                <el-input type="password" v-model="loginForm.password" placeholder="请输入密码" show-password></el-input>
+              </el-form-item>
+              <el-form-item>
+                <el-button type="primary" native-type="submit" :loading="loading" style="width: 100%;">登录</el-button>
+              </el-form-item>
+            </el-form>
+          </el-card>
+        `,
+        emits: ['login-success'],
+        setup(props, {emit}) {
+            const loginForm = reactive({username: '', password: ''});
+            const loading = ref(false);
+            const loginFormRef = ref(null);
+            const loginRules = {
+                username: [{required: true, message: '请输入用户名', trigger: 'blur'}],
+                password: [{required: true, message: '请输入密码', trigger: 'blur'}],
+            };
+            const submitLogin = async () => {
+                if (!loginFormRef.value) return;
+                try { await loginFormRef.value.validate(); } catch (error) { return; }
+                loading.value = true;
+                try {
+                    // (新) 使用 axios.post 访问 /api/login
+                    const response = await axios.post('/api/login', loginForm);
+                    const data = response.data;
 
-        try {
-            await apiFetch(url, {method, body: JSON.stringify(data)});
-            closeModal('sync-task-modal');
-            navigateTo('sync-tasks');
-        } catch (error) {
-            console.error("Save sync-task error:", error);
-            alert(`保存失败: ${error.message}`);
+                    // (新) 存储所有 Token 和用户信息
+                    localStorage.setItem('access_token', data.access_token);
+                    localStorage.setItem('refresh_token', data.refresh_token);
+                    localStorage.setItem('username', data.username);
+                    localStorage.setItem('is_superuser', data.is_superuser);
+                    localStorage.setItem('department_name', data.department_name || 'N/A');
+
+                    emit('login-success', data); // (新) 传递所有用户数据
+                    ElMessage.success('登录成功!');
+                } catch (error) {
+                    console.error("登录失败:", error);
+                    // (新) 显示后端错误
+                    const msg = error.response?.data?.msg || '登录失败，请检查用户名或密码';
+                    ElMessage.error(msg);
+                } finally {
+                    loading.value = false;
+                }
+            };
+            return {loginForm, loading, loginFormRef, loginRules, submitLogin};
         }
-    });
+    };
 
-    // 修改密码 (非超管) 提交
-    document.getElementById('change-password-form').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const old_password = document.getElementById('old-password').value;
-        const new_password = document.getElementById('new-password').value;
-        const statusEl = document.getElementById('change-password-status');
-        statusEl.textContent = '正在修改...';
-        statusEl.style.color = 'blue';
+    // --- (新) Department Component ---
+    const DepartmentView = {
+        template: `
+          <el-card class="config-card">
+            <template #header>
+              <div class="card-header"><span>部门管理 (租户)</span>
+                <el-button type="primary" @click="openDialog()" :icon="ElementPlusIcons.Plus">添加部门</el-button>
+              </div>
+            </template>
+            <el-table :data="items" v-loading="loading" style="width: 100%">
+              <el-table-column prop="id" label="部门ID (外部)" width="120" sortable></el-table-column>
+              <el-table-column prop="department_name" label="部门简称 (英文)" sortable></el-table-column>
+              <el-table-column prop="is_active" label="是否激活" width="100">
+                <template #default="scope"> <el-tag :type="scope.row.is_active ? 'success' : 'info'">{{ scope.row.is_active ? '是' : '否' }}</el-tag> </template>
+              </el-table-column>
+              <el-table-column label="操作" width="180" fixed="right">
+                <template #default="scope">
+                  <el-button size="small" @click="openDialog(scope.row)" :icon="ElementPlusIcons.Edit">编辑</el-button>
+                  <el-button size="small" type="danger" @click="deleteItem(scope.row.id)" :icon="ElementPlusIcons.Delete">删除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑部门' : '添加部门'" width="500px" @close="closeDialog" class="form-dialog">
+              <el-form ref="formRef" :model="currentItem" :rules="formRules" label-position="top">
+                <el-form-item label="部门ID (外部)" prop="id">
+                  <el-input v-model.number="currentItem.id" placeholder="唯一的数字ID" :disabled="isEdit"></el-input>
+                </el-form-item>
+                <el-form-item label="部门简称 (英文)" prop="department_name">
+                  <el-input v-model="currentItem.department_name" placeholder="例如：sales_dept (唯一)"></el-input>
+                </el-form-item>
+                 <el-form-item label="是否激活">
+                   <el-switch v-model="currentItem.is_active"></el-switch>
+                 </el-form-item>
+              </el-form>
+              <template #footer>
+                <el-button @click="closeDialog">取消</el-button>
+                <el-button type="primary" @click="saveItem" :loading="loading">保存</el-button>
+              </template>
+            </el-dialog>
+          </el-card>
+        `,
+        setup() {
+            const defaultItem = { id: null, department_name: '', is_active: true };
+            const crud = useCrud('/departments', '部门', defaultItem, 'id');
+            const formRules = {
+                id: [{required: true, message: '请输入部门ID', trigger: 'blur'}],
+                department_name: [{required: true, message: '请输入部门简称', trigger: 'blur'}],
+            };
+            return {...crud, formRules, ElementPlusIcons};
+        }
+    };
 
-        try {
-            await apiFetch('/api/users/change-password', {
-                method: 'PATCH',
-                body: JSON.stringify({old_password, new_password})
+    // --- (新) User Component ---
+    const UserView = {
+        template: `
+          <el-card class="config-card">
+            <template #header>
+              <div class="card-header"><span>用户管理</span>
+                <el-button type="primary" @click="openDialog()" :icon="ElementPlusIcons.Plus">添加用户</el-button>
+              </div>
+            </template>
+            <el-table :data="items" v-loading="loading" style="width: 100%">
+              <el-table-column prop="id" label="ID" width="80" sortable></el-table-column>
+              <el-table-column prop="username" label="用户名" sortable></el-table-column>
+              <el-table-column prop="department_id" label="所属部门ID" sortable></el-table-column>
+              <el-table-column prop="is_superuser" label="超级管理员" width="120">
+                <template #default="scope"> <el-tag :type="scope.row.is_superuser ? 'danger' : 'info'">{{ scope.row.is_superuser ? '是' : '否' }}</el-tag> </template>
+              </el-table-column>
+              <el-table-column prop="is_active" label="是否激活" width="100">
+                <template #default="scope"> <el-tag :type="scope.row.is_active ? 'success' : 'info'">{{ scope.row.is_active ? '是' : '否' }}</el-tag> </template>
+              </el-table-column>
+              <el-table-column label="操作" width="250" fixed="right">
+                <template #default="scope">
+                  <el-button size="small" @click="openResetPassword(scope.row)" :icon="ElementPlusIcons.RefreshLeft">重置密码</el-button>
+                  <el-button size="small" @click="openDialog(scope.row)" :icon="ElementPlusIcons.Edit">编辑</el-button>
+                  <el-button size="small" type="danger" @click="deleteItem(scope.row.id)" :icon="ElementPlusIcons.Delete">删除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+
+            <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑用户' : '添加用户'" width="500px" @close="closeDialog" class="form-dialog">
+              <el-form ref="formRef" :model="currentItem" :rules="formRules" label-position="top">
+                <el-form-item label="用户名" prop="username">
+                  <el-input v-model="currentItem.username" placeholder="登录用户名"></el-input>
+                </el-form-item>
+                <el-form-item label="密码" prop="password" v-if="!isEdit">
+                  <el-input type="password" v-model="currentItem.password" placeholder="新增时必填" show-password></el-input>
+                </el-form-item>
+                <el-form-item label="所属部门" prop="department_id">
+                   <el-select v-model="currentItem.department_id" placeholder="选择所属部门">
+                    <el-option v-for="dept in departments" :key="dept.id" :label="dept.department_name + ' (ID: ' + dept.id + ')'" :value="dept.id"></el-option>
+                   </el-select>
+                </el-form-item>
+                <el-row :gutter="20">
+                   <el-col :span="12">
+                     <el-form-item label="超级管理员">
+                       <el-switch v-model="currentItem.is_superuser"></el-switch>
+                     </el-form-item>
+                   </el-col>
+                   <el-col :span="12">
+                     <el-form-item label="是否激活">
+                       <el-switch v-model="currentItem.is_active"></el-switch>
+                     </el-form-item>
+                   </el-col>
+                </el-row>
+              </el-form>
+              <template #footer>
+                <el-button @click="closeDialog">取消</el-button>
+                <el-button type="primary" @click="saveItem" :loading="loading">保存</el-button>
+              </template>
+            </el-dialog>
+
+            <el-dialog v-model="resetPasswordDialogVisible" title="重置密码" width="400px" class="form-dialog">
+               <el-form ref="resetFormRef" :model="resetPasswordData" :rules="resetPasswordRules" label-position="top">
+                 <p>正在为用户 <strong>{{ currentItem.username }}</strong> 重置密码。</p>
+                 <el-form-item label="新密码" prop="new_password">
+                   <el-input type="password" v-model="resetPasswordData.new_password" placeholder="请输入新密码" show-password></el-input>
+                 </el-form-item>
+               </el-form>
+               <template #footer>
+                <el-button @click="resetPasswordDialogVisible = false">取消</el-button>
+                <el-button type="primary" @click="submitResetPassword" :loading="loading">确认重置</el-button>
+              </template>
+             </el-dialog>
+          </el-card>
+        `,
+        setup() {
+            const defaultItem = { username: '', password: '', department_id: null, is_superuser: false, is_active: true };
+            const crud = useCrud('/users', '用户', defaultItem, 'id');
+            const departments = ref([]);
+
+            // (新) 重置密码状态
+            const resetPasswordDialogVisible = ref(false);
+            const resetPasswordData = reactive({ new_password: '' });
+            const resetFormRef = ref(null);
+
+            const formRules = {
+                username: [{required: true, message: '请输入用户名', trigger: 'blur'}],
+                password: [{required: crud.isEdit.value ? false : true, message: '请输入密码', trigger: 'blur'}],
+                department_id: [{required: true, message: '请选择部门', trigger: 'change'}],
+            };
+            const resetPasswordRules = {
+                new_password: [{required: true, message: '请输入新密码', trigger: 'blur'}],
+            };
+
+            const fetchDepartments = async () => {
+                try { departments.value = (await apiClient.get('/departments')).data; } catch (e) { console.error(e); }
+            };
+
+            const openResetPassword = (user) => {
+                Object.assign(crud.currentItem, user); // 锁定当前用户
+                resetPasswordData.new_password = '';
+                resetPasswordDialogVisible.value = true;
+                Vue.nextTick(() => resetFormRef.value?.clearValidate());
+            };
+
+            const submitResetPassword = async () => {
+                if (!resetFormRef.value) return;
+                try { await resetFormRef.value.validate(); } catch (e) { return; }
+
+                crud.loading.value = true;
+                try {
+                    await apiClient.patch(`/users/${crud.currentItem.id}/reset-password`, resetPasswordData);
+                    ElMessage.success(`用户 ${crud.currentItem.username} 的密码重置成功！`);
+                    resetPasswordDialogVisible.value = false;
+                } catch (error) {
+                    console.error("重置密码失败:", error);
+                } finally {
+                    crud.loading.value = false;
+                }
+            };
+
+            onMounted(fetchDepartments);
+
+            return {
+                ...crud, formRules, departments,
+                resetPasswordDialogVisible, resetPasswordData, resetFormRef, resetPasswordRules,
+                openResetPassword, submitResetPassword,
+                ElementPlusIcons
+            };
+        }
+    };
+
+    // --- (新) Database Component ---
+    const DatabaseView = {
+        props: ['isSuperuser'],
+        template: `
+          <el-card class="config-card">
+            <template #header>
+              <div class="card-header"><span>源数据库管理</span>
+                <el-button type="primary" @click="openDialog()" :icon="ElementPlusIcons.Plus">添加数据库</el-button>
+              </div>
+            </template>
+            <el-table :data="items" v-loading="loading" style="width: 100%">
+              <el-table-column prop="id" label="ID" width="60" sortable></el-table-column>
+              <el-table-column v-if="isSuperuser" prop="department_id" label="部门ID" width="100" sortable></el-table-column>
+              <el-table-column prop="db_show_name" label="显示名称" sortable></el-table-column>
+              <el-table-column prop="db_type" label="类型" width="100"></el-table-column>
+              <el-table-column prop="db_host" label="主机"></el-table-column>
+              <el-table-column prop="db_port" label="端口" width="80"></el-table-column>
+              <el-table-column prop="db_name" label="库名"></el-table-column>
+              <el-table-column prop="db_user" label="用户"></el-table-column>
+              <el-table-column prop="is_active" label="激活" width="80">
+                <template #default="scope"> <el-tag :type="scope.row.is_active ? 'success' : 'info'">{{ scope.row.is_active ? '是' : '否' }}</el-tag> </template>
+              </el-table-column>
+              <el-table-column label="操作" width="180" fixed="right">
+                <template #default="scope">
+                  <el-button size="small" @click="openDialog(scope.row)" :icon="ElementPlusIcons.Edit">编辑</el-button>
+                  <el-button size="small" type="danger" @click="deleteItem(scope.row.id)" :icon="ElementPlusIcons.Delete">删除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+
+            <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑数据库' : '添加数据库'" width="600px" @close="closeDialog" class="form-dialog">
+              <el-form ref="formRef" :model="currentItem" :rules="formRules" label-position="top">
+                <el-form-item label="所属部门" prop="department_id" v-if="isSuperuser">
+                   <el-select v-model="currentItem.department_id" placeholder="选择所属部门">
+                    <el-option v-for="dept in departments" :key="dept.id" :label="dept.department_name + ' (ID: ' + dept.id + ')'" :value="dept.id"></el-option>
+                   </el-select>
+                </el-form-item>
+                 <el-form-item label="显示名称" prop="db_show_name">
+                  <el-input v-model="currentItem.db_show_name" placeholder="例如：生产库"></el-input>
+                </el-form-item>
+                <el-row :gutter="20">
+                   <el-col :span="12">
+                     <el-form-item label="数据库类型" prop="db_type">
+                      <el-input v-model="currentItem.db_type" placeholder="mysql"></el-input>
+                    </el-form-item>
+                   </el-col>
+                   <el-col :span="12">
+                     <el-form-item label="主机" prop="db_host">
+                      <el-input v-model="currentItem.db_host" placeholder="localhost 或 IP"></el-input>
+                    </el-form-item>
+                   </el-col>
+                </el-row>
+                 <el-row :gutter="20">
+                   <el-col :span="12">
+                     <el-form-item label="端口" prop="db_port">
+                      <el-input-number v-model.number="currentItem.db_port" :min="1" :max="65535" style="width: 100%;"></el-input-number>
+                    </el-form-item>
+                   </el-col>
+                   <el-col :span="12">
+                     <el-form-item label="数据库名称" prop="db_name">
+                      <el-input v-model="currentItem.db_name"></el-input>
+                    </el-form-item>
+                   </el-col>
+                </el-row>
+                 <el-row :gutter="20">
+                   <el-col :span="12">
+                     <el-form-item label="用户名" prop="db_user">
+                      <el-input v-model="currentItem.db_user"></el-input>
+                    </el-form-item>
+                   </el-col>
+                   <el-col :span="12">
+                     <el-form-item label="密码" prop="db_password">
+                      <el-input type="password" v-model="currentItem.db_password" :placeholder="isEdit ? '如需修改请输入新密码' : '请输入密码'" show-password></el-input>
+                     </el-form-item>
+                   </el-col>
+                </el-row>
+                 <el-form-item label="是否激活">
+                   <el-switch v-model="currentItem.is_active"></el-switch>
+                 </el-form-item>
+              </el-form>
+              <template #footer>
+                <el-button @click="closeDialog">取消</el-button>
+                <el-button type="primary" @click="saveItem" :loading="loading">保存</el-button>
+              </template>
+            </el-dialog>
+          </el-card>
+        `,
+        props: ['isSuperuser'],
+        setup(props) {
+            const defaultItem = { db_show_name: '', db_type: 'mysql', db_host: 'localhost', db_port: 3306, db_name: '', db_user: '', db_password: '', is_active: true, department_id: null };
+            const crud = useCrud('/databases', '数据库', defaultItem, 'id');
+            const departments = ref([]);
+
+            const formRules = {
+                department_id: [{required: props.isSuperuser, message: '请选择部门', trigger: 'change'}],
+                db_show_name: [{required: true, message: '请输入显示名称', trigger: 'blur'}],
+                db_type: [{required: true, message: '请输入类型', trigger: 'blur'}],
+                db_host: [{required: true, message: '请输入主机', trigger: 'blur'}],
+                db_port: [{required: true, message: '请输入端口', trigger: 'blur'}],
+                db_name: [{required: true, message: '请输入库名', trigger: 'blur'}],
+                db_user: [{required: true, message: '请输入用户名', trigger: 'blur'}],
+                db_password: [{required: !crud.isEdit.value, message: '请输入密码', trigger: 'blur'}],
+            };
+
+            const fetchDepartments = async () => {
+                if (props.isSuperuser) {
+                    try { departments.value = (await apiClient.get('/departments')).data; } catch (e) { console.error(e); }
+                }
+            };
+
+            onMounted(fetchDepartments);
+
+            return {...crud, formRules, departments, ElementPlusIcons};
+        }
+    };
+
+    // --- (修改) JdyKeyInfo Component (适配多租户) ---
+    const JdyKeyInfoView = {
+        props: ['isSuperuser'],
+        template: `
+          <el-card class="config-card">
+            <template #header>
+              <div class="card-header"><span>简道云密钥管理</span>
+                <el-button type="primary" @click="openDialog()" :icon="ElementPlusIcons.Plus">添加密钥</el-button>
+              </div>
+            </template>
+            <el-table :data="items" v-loading="loading" style="width: 100%">
+              <el-table-column prop="id" label="ID" width="80"></el-table-column>
+              <el-table-column prop="department_id" label="所属部门ID" v-if="isSuperuser" sortable></el-table-column>
+              <el-table-column label="API Key (部分)">
+                <template #default="scope"> {{ scope.row.api_key.substring(0, 10) }}... </template>
+              </el-table-column>
+              <el-table-column label="操作" width="180" fixed="right">
+                <template #default="scope">
+                  <el-button size="small" @click="openDialog(scope.row)" :icon="ElementPlusIcons.Edit">编辑</el-button>
+                  <el-button size="small" type="danger" @click="deleteItem(scope.row.id)" :icon="ElementPlusIcons.Delete">删除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑密钥' : '添加密钥'" width="500px" @close="closeDialog" class="form-dialog">
+              <el-form ref="formRef" :model="currentItem" :rules="keyRules" label-position="top">
+                <el-form-item label="所属部门" prop="department_id" v-if="isSuperuser">
+                   <el-select v-model="currentItem.department_id" placeholder="选择所属部门 (1:1 关系)">
+                    <el-option v-for="dept in departments" :key="dept.id" :label="dept.department_name + ' (ID: ' + dept.id + ')'" :value="dept.id"></el-option>
+                   </el-select>
+                </el-form-item>
+                <el-form-item label="API Key" prop="api_key">
+                  <el-input v-model="currentItem.api_key" placeholder="请输入简道云 API Key"></el-input>
+                </el-form-item>
+              </el-form>
+              <template #footer>
+                <el-button @click="closeDialog">取消</el-button>
+                <el-button type="primary" @click="saveItem" :loading="loading">保存</el-button>
+              </template>
+            </el-dialog>
+          </el-card>
+        `,
+        props: ['isSuperuser'],
+        setup(props) {
+            const defaultItem = { department_id: null, api_key: '' };
+            const crud = useCrud('/jdy-keys', '密钥', defaultItem, 'id');
+            const departments = ref([]);
+
+            const keyRules = {
+                department_id: [{required: props.isSuperuser, message: '请选择部门', trigger: 'change'}],
+                api_key: [{required: true, message: '请输入 API Key', trigger: 'blur'}],
+            };
+
+            const fetchDepartments = async () => {
+                if (props.isSuperuser) {
+                    try { departments.value = (await apiClient.get('/departments')).data; } catch (e) { console.error(e); }
+                }
+            };
+            onMounted(fetchDepartments);
+
+            return {...crud, keyRules, departments, ElementPlusIcons};
+        }
+    };
+
+    // --- (修改) SyncTask Component (适配多租户) ---
+    const SyncTaskView = {
+        props: ['isSuperuser'],
+        template: `
+          <el-card class="config-card">
+            <template #header>
+              <div class="card-header"><span>同步任务管理</span>
+                <el-button type="primary" @click="openDialog()" :icon="ElementPlusIcons.Plus">添加任务</el-button>
+              </div>
+            </template>
+            <el-table :data="items" v-loading="loading" style="width: 100%" row-key="task_id">
+              <el-table-column prop="task_id" label="ID" width="60"></el-table-column>
+              <el-table-column v-if="isSuperuser" prop="department_id" label="部门ID" width="100" sortable></el-table-column>
+              <el-table-column prop="task_name" label="任务名称" sortable></el-table-column>
+              <el-table-column prop="source_db_name" label="源数据库" sortable>
+                <template #default="scope"> <el-tag>{{ scope.row.source_db_name || 'N/A' }} (ID: {{ scope.row.source_db_id }})</el-tag> </template>
+              </el-table-column>
+              <el-table-column prop="source_table" label="源表名" sortable></el-table-column>
+              <el-table-column prop="jdy_app_id" label="App ID"></el-table-column>
+              <el-table-column prop="jdy_entry_id" label="Entry ID"></el-table-column>
+              <el-table-column prop="sync_mode" label="同步模式" width="130"></el-table-column>
+              <el-table-column prop="is_active" label="激活" width="70">
+                <template #default="scope">
+                  <el-tag :type="scope.row.is_active ? 'success' : 'info'">{{ scope.row.is_active ? '是' : '否' }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="status" label="运行状态" width="100">
+                 <template #default="scope">
+                  <el-tag :type="statusType(scope.row.status)"> {{ scope.row.status }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="last_sync_time" label="上次同步时间" width="170">
+                <template #default="scope">{{ formatDateTime(scope.row.last_sync_time) }}</template>
+              </el-table-column>
+              <el-table-column label="操作" width="180" fixed="right">
+                <template #default="scope">
+                  <el-button size="small" @click="openDialog(scope.row)" :icon="ElementPlusIcons.Edit">编辑</el-button>
+                  <el-button size="small" type="danger" @click="deleteItem(scope.row.task_id)" :icon="ElementPlusIcons.Delete">删除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+
+            <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑任务' : '添加任务'" width="700px" @close="closeDialog" class="form-dialog">
+              <el-form ref="formRef" :model="currentItem" :rules="taskRules" label-position="top" label-width="150px">
+
+                <el-row :gutter="20">
+                  <el-col :span="12">
+                    <el-form-item label="任务名称" prop="task_name">
+                      <el-input v-model="currentItem.task_name" placeholder="例如：销售订单同步"></el-input>
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="12">
+                     <el-form-item label="所属部门 (租户)" prop="department_id" v-if="isSuperuser">
+                      <el-select v-model="currentItem.department_id" placeholder="选择所属部门" @change="onDepartmentChange">
+                        <el-option v-for="dept in departments" :key="dept.id"
+                                   :label="dept.department_name + ' (ID: ' + dept.id + ')'" :value="dept.id"></el-option>
+                      </el-select>
+                    </el-form-item>
+                  </el-col>
+                </el-row>
+
+                <el-row :gutter="20">
+                  <el-col :span="12">
+                     <el-form-item label="源数据库" prop="source_db_id">
+                      <el-select v-model="currentItem.source_db_id" placeholder="选择源数据库">
+                        <el-option v-for="db in filteredDatabases" :key="db.id"
+                                   :label="db.name" :value="db.id"></el-option>
+                      </el-select>
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="12">
+                    <el-form-item label="源数据库表名" prop="source_table">
+                      <el-input v-model="currentItem.source_table" placeholder="数据库中的表名或视图名"></el-input>
+                    </el-form-item>
+                  </el-col>
+                </el-row>
+
+                <el-row :gutter="20">
+                  <el-col :span="12">
+                    <el-form-item label="源表主键" prop="pk_field_names">
+                      <el-input v-model="currentItem.pk_field_names" placeholder="e.g., id (复合主键用英文逗号分隔)"></el-input>
+                    </el-form-item>
+                  </el-col>
+                </el-row>
+
+                <el-row :gutter="20">
+                  <el-col :span="12">
+                    <el-form-item label="简道云 App ID" prop="jdy_app_id">
+                      <el-input v-model="currentItem.jdy_app_id"></el-input>
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="12">
+                    <el-form-item label="简道云 Entry ID" prop="jdy_entry_id">
+                      <el-input v-model="currentItem.jdy_entry_id"></el-input>
+                    </el-form-item>
+                  </el-col>
+                </el-row>
+
+                <el-divider>同步模式配置</el-divider>
+
+                <el-row :gutter="20">
+                    <el-col :span="12">
+                        <el-form-item label="同步模式" prop="sync_mode">
+                          <el-select v-model="currentItem.sync_mode" placeholder="选择同步模式">
+                            <el-option label="INCREMENTAL (增量)" value="INCREMENTAL"></el-option>
+                            <el-option label="FULL_REPLACE (全量覆盖)" value="FULL_REPLACE"></el-option>
+                            <el-option label="BINLOG (实时)" value="BINLOG"></el-option>
+                          </el-select>
+                        </el-form-item>
+                    </el-col>
+                    <el-col :span="12">
+                         <el-form-item label="任务激活">
+                           <el-switch v-model="currentItem.is_active"></el-switch>
+                         </el-form-item>
+                    </el-col>
+                </el-row>
+
+                <template v-if="currentItem.sync_mode === 'INCREMENTAL'">
+                  <el-row :gutter="20">
+                    <el-col :span="12">
+                      <el-form-item label="增量时间字段" prop="incremental_field">
+                        <el-input v-model="currentItem.incremental_field" placeholder="e.g., last_modified_time"></el-input>
+                      </el-form-item>
+                    </el-col>
+                    <el-col :span="12">
+                      <el-form-item label="增量间隔 (分钟)" prop="incremental_interval">
+                        <el-input-number v-model="currentItem.incremental_interval" :min="1" style="width: 100%;"></el-input-number>
+                      </el-form-item>
+                    </el-col>
+                  </el-row>
+                </template>
+
+                <template v-if="currentItem.sync_mode === 'FULL_REPLACE'">
+                  <el-row :gutter="20">
+                    <el-col :span="12">
+                      <el-form-item label="每日同步时间" prop="full_replace_time">
+                         <el-time-picker v-model="currentItem.full_replace_time_temp" format="HH:mm" value-format="HH:mm:ss"
+                                        placeholder="选择时间"></el-time-picker>
+                      </el-form-item>
+                    </el-col>
+                  </el-row>
+                </template>
+
+                <template v-if="currentItem.sync_mode === 'INCREMENTAL' || currentItem.sync_mode === 'FULL_REPLACE'">
+                   <el-form-item label="SQL 过滤条件 (选填)" prop="source_filter_sql">
+                      <el-input type="textarea" v-model="currentItem.source_filter_sql" placeholder="e.g., status = 'approved' AND amount > 1000"></el-input>
+                   </el-form-item>
+                 </template>
+
+                <template v-if="currentItem.sync_mode === 'INCREMENTAL' || currentItem.sync_mode === 'BINLOG'">
+                   <el-form-item label="首次执行全量同步 (推荐)">
+                      <el-switch v-model="currentItem.is_full_replace_first"></el-switch>
+                   </el-form-item>
+                </template>
+
+                <el-divider>通知配置</el-divider>
+
+                 <el-row :gutter="20">
+                   <el-col :span="12">
+                     <el-form-item label="发送企微错误日志">
+                       <el-switch v-model="currentItem.send_error_log_to_wecom"></el-switch>
+                     </el-form-item>
+                   </el-col>
+                 </el-row>
+                 <el-form-item label="企微机器人 Webhook URL" prop="wecom_robot_webhook_url"
+                               v-if="currentItem.send_error_log_to_wecom">
+                   <el-input type="textarea" v-model="currentItem.wecom_robot_webhook_url"
+                             placeholder="如果打开了企微错误通知，请粘贴机器人 URL"></el-input>
+                 </el-form-item>
+
+              </el-form>
+              <template #footer>
+                <el-button @click="closeDialog">取消</el-button>
+                <el-button type="primary" @click="saveItem" :loading="loading">保存</el-button>
+              </template>
+            </el-dialog>
+          </el-card>
+        `,
+        props: ['isSuperuser'],
+        setup(props) {
+            // (新) 适配 SyncTask 模型的字段
+            const defaultTask = {
+                task_name: '',
+                department_id: null,
+                source_db_id: null, // (新)
+                source_table: '',
+                pk_field_names: '',
+                jdy_app_id: '',
+                jdy_entry_id: '',
+                sync_mode: 'INCREMENTAL',
+                is_active: true,
+                incremental_field: '',
+                incremental_interval: 5,
+                full_replace_time_temp: null,
+                full_replace_time: null,
+                source_filter_sql: null,
+                is_full_replace_first: true,
+                send_error_log_to_wecom: false,
+                wecom_robot_webhook_url: null
+            };
+
+            const crud = useCrud('/sync-tasks', '同步任务', defaultTask, 'task_id');
+            const departments = ref([]);
+            const tenantDatabases = ref([]); // (新) 存储所有数据库
+
+            // (新) 计算属性，用于根据选择的部门过滤数据库下拉框
+            const filteredDatabases = computed(() => {
+                if (props.isSuperuser) {
+                    if (!crud.currentItem.department_id) return []; // 管理员必须先选部门
+                    return tenantDatabases.value.filter(db => db.department_id === crud.currentItem.department_id);
+                }
+                return tenantDatabases.value; // 普通租户直接显示 (后端已过滤)
             });
-            statusEl.textContent = '密码修改成功！';
-            statusEl.style.color = 'green';
-            document.getElementById('change-password-form').reset();
-        } catch (error) {
-            statusEl.textContent = `修改失败: ${error.message}`;
-            statusEl.style.color = 'red';
+
+            // (新)
+            const onDepartmentChange = () => {
+                // 管理员切换部门时，清空已选的数据库
+                if (props.isSuperuser) {
+                    crud.currentItem.source_db_id = null;
+                }
+            };
+
+            // (新) 获取部门 (仅管理员)
+            const fetchDepartments = async () => {
+                if (props.isSuperuser) {
+                    try { departments.value = (await apiClient.get('/departments')).data; } catch (e) { console.error(e); }
+                }
+            };
+
+            // (新) 获取数据库 (所有人)
+            const fetchTenantDatabases = async () => {
+                try {
+                    // /api/tenant-databases 后端会根据用户权限自动过滤
+                    tenantDatabases.value = (await apiClient.get('/tenant-databases')).data;
+                } catch (error) {
+                    console.error("获取数据库列表失败:", error);
+                }
+            };
+
+            const taskRules = {
+                task_name: [{required: true, message: '请输入任务名称', trigger: 'blur'}],
+                department_id: [{required: props.isSuperuser, message: '请选择所属部门', trigger: 'change'}],
+                source_db_id: [{required: true, message: '请选择源数据库', trigger: 'change'}], // (新)
+                source_table: [{required: true, message: '请输入源表名', trigger: 'blur'}],
+                pk_field_names: [{required: true, message: '请输入源表主键', trigger: 'blur'}],
+                jdy_app_id: [{required: true, message: '请输入 App ID', trigger: 'blur'}],
+                jdy_entry_id: [{required: true, message: '请输入 Entry ID', trigger: 'blur'}],
+                // ... (其他规则与原文件相同)
+            };
+
+            const formatDateTime = (isoDateTime) => isoDateTime ? new Date(isoDateTime).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai'}) : '-';
+            const statusType = (status) => status === 'running' ? 'primary' : (status === 'error' ? 'danger' : 'info');
+
+            // (新)
+            watch(() => crud.dialogVisible.value, (newVal) => {
+                if (newVal) {
+                    // (新) 打开弹窗时，确保数据库列表已加载
+                    fetchTenantDatabases();
+                    if (props.isSuperuser) fetchDepartments();
+
+                    // (原) 处理时间回显
+                    if (crud.isEdit.value && crud.currentItem.full_replace_time) {
+                        crud.currentItem.full_replace_time_temp = crud.currentItem.full_replace_time;
+                    } else if (newVal && !crud.isEdit.value) {
+                        crud.currentItem.full_replace_time_temp = null;
+                        // (新) 非管理员自动设置部门ID
+                        if (!props.isSuperuser) {
+                            crud.currentItem.department_id = parseInt(localStorage.getItem('department_id'));
+                        }
+                    }
+                }
+            });
+
+            return {
+                ...crud,
+                taskRules,
+                departments,
+                tenantDatabases,
+                filteredDatabases,
+                onDepartmentChange,
+                formatDateTime,
+                statusType,
+                ElementPlusIcons
+            };
+        }
+    };
+
+    // --- (修改) SyncLog Component (适配多租户) ---
+    const SyncLogView = {
+        props: ['isSuperuser'],
+        template: `
+          <el-card class="config-card">
+            <template #header>
+              <div class="card-header"><span>错误日志查看</span>
+                <el-button @click="fetchItems" :icon="ElementPlusIcons.Refresh" :loading="loading">刷新</el-button>
+              </div>
+            </template>
+            <el-form :inline="true" :model="filters" class="log-filter-form">
+              <el-form-item label="时间范围">
+                <el-date-picker v-model="filters.dateRange" type="datetimerange" range-separator="至"
+                                start-placeholder="开始日期" end-placeholder="结束日期"
+                                value-format="YYYY-MM-DDTHH:mm:ss"
+                                :default-time="[new Date(2000, 1, 1, 0, 0, 0), new Date(2000, 2, 1, 23, 59, 59)]"/>
+              </el-form-item>
+              <el-form-item label="部门ID" v-if="isSuperuser">
+                <el-input v-model.number="filters.departmentIdFilter" placeholder="部门ID (数字)" clearable></el-input>
+              </el-form-item>
+              <el-form-item label="任务ID">
+                <el-input v-model.number="filters.taskIdFilter" placeholder="任务ID (数字)" clearable></el-input>
+              </el-form-item>
+              <el-form-item>
+                <el-button @click="clearFilters" :icon="ElementPlusIcons.CircleClose">清空筛选</el-button>
+              </el-form-item>
+            </el-form>
+            <el-table :data="filteredLogs" v-loading="loading" style="width: 100%" height="calc(100vh - 270px)">
+              <el-table-column type="expand">
+                <template #default="props">
+                  <div style="padding: 10px; background-color: #f9f9f9;"><p><strong>Traceback:</strong></p>
+                    <pre style="white-space: pre-wrap; word-wrap: break-word;">{{ props.row.traceback || 'N/A' }}</pre>
+                    <p><strong>Payload:</strong></p>
+                    <pre style="white-space: pre-wrap; word-wrap: break-word; max-height: 300px; overflow-y: auto;">{{ formatPayload(props.row.payload) }}</pre>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column prop="id" label="ID" width="70"></el-table-column>
+              <el-table-column prop="timestamp" label="时间" width="170" sortable>
+                <template #default="scope">{{ formatDateTime(scope.row.timestamp) }}</template>
+              </el-table-column>
+              <el-table-column prop="department_id" label="部门ID" width="100" v-if="isSuperuser" sortable></el-table-column>
+              <el-table-column prop="task_id" label="任务ID" width="100" sortable></el-table-column>
+              <el-table-column prop="table_name" label="表名" width="150" sortable></el-table-column>
+              <el-table-column prop="app_id" label="App ID" width="120"></el-table-column>
+              <el-table-column prop="entry_id" label="Entry ID" width="120"></el-table-column>
+              <el-table-column prop="error_message" label="错误信息" min-width="250">
+                <template #default="scope"> <div style="white-space: pre-wrap;">{{ scope.row.error_message }}</div> </template>
+              </el-table-column>
+            </el-table>
+          </el-card>
+        `,
+        props: ['isSuperuser'],
+        setup(props) {
+            // (新) API 适配
+            const {items, loading, fetchItems} = useCrud('/error-logs', '日志');
+
+            // (新) 适配多租户
+            const filters = reactive({dateRange: null, departmentIdFilter: '', taskIdFilter: ''});
+
+            const filteredLogs = computed(() => {
+                let logs = items.value;
+                if (filters.dateRange?.length === 2) {
+                    const [start, end] = [new Date(filters.dateRange[0]).getTime(), new Date(filters.dateRange[1]).getTime()];
+                    logs = logs.filter(log => {
+                        const t = new Date(log.timestamp).getTime();
+                        return t >= start && t <= end;
+                    });
+                }
+                // (新) 适配多租户
+                if (props.isSuperuser && filters.departmentIdFilter) {
+                    logs = logs.filter(log => log.department_id === filters.departmentIdFilter);
+                }
+                if (filters.taskIdFilter) {
+                    logs = logs.filter(log => log.task_id === filters.taskIdFilter);
+                }
+                return logs;
+            });
+            const clearFilters = () => {
+                filters.dateRange = null;
+                filters.departmentIdFilter = '';
+                filters.taskIdFilter = '';
+            };
+            const formatDateTime = (isoDateTime) => isoDateTime ? new Date(isoDateTime).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai'}) : '-';
+            const formatPayload = (payloadStr) => {
+                if (!payloadStr) return 'N/A';
+                try { return JSON.stringify(JSON.parse(payloadStr), null, 2); } catch (e) { return payloadStr; }
+            };
+            return { items, loading, fetchItems, filters, filteredLogs, clearFilters, formatDateTime, formatPayload, ElementPlusIcons };
+        }
+    };
+
+    // --- (新) Router Setup (适配多租户) ---
+    const routes = [
+        {path: '/', redirect: '/sync-tasks'},
+        {path: '/departments', component: DepartmentView},
+        {path: '/users', component: UserView},
+        {path: '/databases', component: DatabaseView},
+        {path: '/jdy-keys', component: JdyKeyInfoView},
+        {path: '/sync-tasks', component: SyncTaskView},
+        {path: '/error-logs', component: SyncLogView}
+    ];
+    const router = VueRouter.createRouter({history: VueRouter.createWebHashHistory(), routes});
+
+    // --- (新) App Setup (适配 JWT) ---
+    const app = createApp({
+        setup() {
+            const isAuthenticated = ref(false);
+            const username = ref('');
+            const isSuperuser = ref(false);
+            const departmentName = ref('');
+
+            const route = useRoute();
+            const routerInstance = useRouter();
+
+            // (新) 检查 localStorage
+            const checkAuthentication = () => {
+                const token = localStorage.getItem('access_token');
+                if (token) {
+                    isAuthenticated.value = true;
+                    username.value = localStorage.getItem('username') || '';
+                    isSuperuser.value = localStorage.getItem('is_superuser') === 'true';
+                    departmentName.value = localStorage.getItem('department_name') || 'N/A';
+                } else {
+                    isAuthenticated.value = false;
+                }
+            };
+
+            // (新) 登录成功处理器
+            const handleLoginSuccess = (userData) => {
+                isAuthenticated.value = true;
+                username.value = userData.username;
+                isSuperuser.value = userData.is_superuser;
+                departmentName.value = userData.department_name || 'N/A';
+                routerInstance.push('/');
+            };
+
+            // (新) 登出处理器
+            const handleLogout = async (force = false) => {
+                if (!force) {
+                    try {
+                        // (新) 调用 /api/logout (DELETE) 来吊销Token
+                        await apiClient.delete('/logout');
+                    } catch (error) {
+                        console.error("Logout failed, proceeding with client-side cleanup:", error);
+                    }
+                }
+
+                // (新) 清理 localStorage
+                localStorage.clear();
+                isAuthenticated.value = false;
+                username.value = '';
+                isSuperuser.value = false;
+                departmentName.value = '';
+
+                if (!force) {
+                    ElMessage.info('已退出登录。');
+                }
+            };
+
+            const activeMenu = computed(() => route.path);
+
+            onMounted(checkAuthentication); // (新) 启动时检查
+
+            // (新) 将登出函数暴露给拦截器
+            window.appInstance = {handleLogout};
+
+            return {
+                isAuthenticated,
+                username,
+                isSuperuser,
+                departmentName,
+                activeMenu,
+                handleLoginSuccess,
+                logout: handleLogout, // 暴露给模板
+                zhCn: ElementPlusLocaleZhCn.default
+            };
         }
     });
 
-    // --- 页面初始化 ---
-    document.addEventListener('DOMContentLoaded', () => {
-        showAppUI();
-    });
+    // Register components globally
+    app.component('login-view', LoginView);
+    // (新) 注册新组件
+    app.component('DepartmentView', DepartmentView);
+    app.component('UserView', UserView);
+    app.component('DatabaseView', DatabaseView);
+    app.component('JdyKeyInfoView', JdyKeyInfoView);
+    app.component('SyncTaskView', SyncTaskView);
+    app.component('SyncLogView', SyncLogView);
 
+    for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
+        app.component(key, component)
+    }
+    app.use(router);
+    app.use(ElementPlus, {locale: ElementPlusLocaleZhCn.default});
+    app.mount('#app');
 </script>
 </body>
 </html>
