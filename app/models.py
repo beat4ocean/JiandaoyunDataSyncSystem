@@ -82,6 +82,10 @@ class User(ConfigBase):
         """校验密码"""
         return sha256.verify(password, self.password)
 
+    def set_is_superuser(self, is_superuser):
+        """是否超级管理员"""
+        return is_superuser
+
 
 # --- 数据库模型 ---
 

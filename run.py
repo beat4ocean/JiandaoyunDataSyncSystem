@@ -3,6 +3,7 @@ import os
 import sys
 import traceback
 
+import dotenv
 from flask import Flask
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
@@ -13,11 +14,13 @@ from app.config import DB_CONNECT_ARGS, Config
 # 确保 app 目录在 sys.path 中
 sys.path.append(os.path.join(os.path.dirname(__file__), 'app'))
 
+dotenv.load_dotenv()
+
 try:
     from app import create_app
     from app.models import (
-        config_engine, config_metadata, ConfigSession, User
-    )
+        config_engine, config_metadata, ConfigSession, User, Department
+)
     from app.scheduler import scheduler, start_scheduler
     from app.utils import log_sync_error
 except ImportError as e:
@@ -84,38 +87,47 @@ def initialize_databases(app: Flask):
         print("Database initialization complete.")
 
 
-# 此功能已移至 'flask create-admin' CLI 命令 (在 app/__init__.py 中)
-# def create_first_admin(app: Flask):
-#     """
-#     检查是否已有用户，如果没有，则根据 .env 文件创建第一个管理员。
-#     """
-#     admin_user = os.environ.get("ADMIN_USER")
-#     admin_pass = os.environ.get("ADMIN_PASSWORD")
-#
-#     if not admin_user or not admin_pass:
-#         print("警告：未在 .env 文件中设置 ADMIN_USER 或 ADMIN_PASSWORD。")
-#         print("如果这是第一次启动，你将无法登录。")
-#         return
-#
-#     session = ConfigSession()
-#     try:
-#         # 检查是否已存在任何用户
-#         user_exists = session.query(User).first()
-#         if not user_exists:
-#             print(f"未找到任何用户，正在创建第一个管理员: {admin_user}")
-#             new_admin = User(username=admin_user)
-#             new_admin.set_password(admin_pass)
-#             new_admin.set_is_superuser(True)
-#             session.add(new_admin)
-#             session.commit()
-#             print(f"管理员 '{admin_user}' 创建成功。")
-#         else:
-#             print("数据库中已存在用户，跳过创建管理员。")
-#     except Exception as e:
-#         session.rollback()
-#         print(f"创建第一个管理员时出错: {e}")
-#     finally:
-#         session.close()
+def create_first_admin():
+    """创建第一个管理员和默认部门"""
+    print("Creating default department and admin user...")
+    session = ConfigSession()
+    try:
+        # 1. 检查/创建默认部门
+        default_dept = session.query(Department).filter_by(department_name="default_admin_dept").first()
+        if not default_dept:
+            default_dept = Department(
+                department_name="default_admin_dept",
+                is_active=True
+            )
+            session.add(default_dept)
+            session.commit()
+            print(f"Created default department (ID: {default_dept.id}).")
+        else:
+            print("Default department already exists.")
+
+        # 2. 检查/创建管理员
+        admin_user = session.query(User).filter_by(is_superuser=True, is_active=True).first()
+        if not admin_user:
+            admin_username = os.environ.get("ADMIN_USER", "admin")  # 从 .env 或使用默认
+            admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")  # 从 .env 或使用默认
+            new_admin = User(
+                username=admin_username,
+                department_id=default_dept.id,  # 关联到默认部门
+                is_superuser=True,
+                is_active=True
+            )
+            new_admin.set_password(admin_password)
+            session.add(new_admin)
+            session.commit()
+            # print(f"Created admin user '{admin_username}' with password '{admin_password}'.")
+        # else:
+        #     print("Admin user already exists.")
+
+    except Exception as e:
+        session.rollback()
+        print(f"Error creating admin: {e}")
+    finally:
+        session.close()
 
 
 def shutdown_scheduler():
@@ -133,8 +145,8 @@ if __name__ == "__main__":
     with app.app_context():
         # 1. 初始化数据库
         initialize_databases(app)
-        # # 2. 检查并创建第一个管理员
-        # create_first_admin()
+        # 2. 检查并创建第一个管理员
+        create_first_admin()
 
     # 3. 注册一个钩子，在程序退出时调用 shutdown_scheduler
     atexit.register(shutdown_scheduler)

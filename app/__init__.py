@@ -89,49 +89,49 @@ def create_app():
     from app.routes import api_bp
     app.register_blueprint(api_bp)  # api_bp 现在包含所有 /api/... 路由
 
-    # 注册一个 CLI 命令来创建第一个超管
-    @app.cli.command("create-admin")
-    def create_admin():
-        """创建第一个管理员和默认部门"""
-        print("Creating default department and admin user...")
-        session = ConfigSession()
-        try:
-            # 1. 检查/创建默认部门
-            default_dept = session.query(Department).filter_by(department_name="default_admin_dept").first()
-            if not default_dept:
-                default_dept = Department(
-                    department_name="default_admin_dept",
-                    is_active=True
-                )
-                session.add(default_dept)
-                session.commit()
-                print(f"Created default department (ID: {default_dept.id}).")
-            else:
-                print("Default department already exists.")
-
-            # 2. 检查/创建管理员
-            admin_user = session.query(User).filter_by(is_superuser=True, is_active=True).first()
-            if not admin_user:
-                admin_username = os.environ.get("ADMIN_USER", "admin")  # 从 .env 或使用默认
-                admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")  # 从 .env 或使用默认
-                new_admin = User(
-                    username=admin_username,
-                    department_id=default_dept.id,  # 关联到默认部门
-                    is_superuser=True,
-                    is_active=True
-                )
-                new_admin.set_password(admin_password)
-                session.add(new_admin)
-                session.commit()
-                # print(f"Created admin user '{admin_username}' with password '{admin_password}'.")
-            # else:
-            #     print("Admin user already exists.")
-
-        except Exception as e:
-            session.rollback()
-            print(f"Error creating admin: {e}")
-        finally:
-            session.close()
+    # # 注册一个 CLI 命令来创建第一个超管
+    # @app.cli.command("create-admin")
+    # def create_admin():
+    #     """创建第一个管理员和默认部门"""
+    #     print("Creating default department and admin user...")
+    #     session = ConfigSession()
+    #     try:
+    #         # 1. 检查/创建默认部门
+    #         default_dept = session.query(Department).filter_by(department_name="default_admin_dept").first()
+    #         if not default_dept:
+    #             default_dept = Department(
+    #                 department_name="default_admin_dept",
+    #                 is_active=True
+    #             )
+    #             session.add(default_dept)
+    #             session.commit()
+    #             print(f"Created default department (ID: {default_dept.id}).")
+    #         else:
+    #             print("Default department already exists.")
+    #
+    #         # 2. 检查/创建管理员
+    #         admin_user = session.query(User).filter_by(is_superuser=True, is_active=True).first()
+    #         if not admin_user:
+    #             admin_username = os.environ.get("ADMIN_USER", "admin")  # 从 .env 或使用默认
+    #             admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")  # 从 .env 或使用默认
+    #             new_admin = User(
+    #                 username=admin_username,
+    #                 department_id=default_dept.id,  # 关联到默认部门
+    #                 is_superuser=True,
+    #                 is_active=True
+    #             )
+    #             new_admin.set_password(admin_password)
+    #             session.add(new_admin)
+    #             session.commit()
+    #             # print(f"Created admin user '{admin_username}' with password '{admin_password}'.")
+    #         # else:
+    #         #     print("Admin user already exists.")
+    #
+    #     except Exception as e:
+    #         session.rollback()
+    #         print(f"Error creating admin: {e}")
+    #     finally:
+    #         session.close()
 
     # 3. (关键) 设置请求生命周期内的会话管理
     # --- 移除此处的 config_session_scoped 定义，因为它已移至顶层 ---
