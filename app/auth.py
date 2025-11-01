@@ -55,10 +55,8 @@ def login():
             if not user.is_active:
                 return jsonify({"msg": "User account is disabled"}), 401
 
-            # --- START FIX: 'Subject must be a string' ---
             # JWT 的 identity 必须是字符串
             identity = str(user.id)
-            # --- END FIX ---
 
             additional_claims = {
                 "user_id": user.id,

@@ -59,7 +59,11 @@
                 <el-container class="full-height-container">
                     <el-aside width="200px">
 
-                        <el-menu :default-active="activeMenu" router>
+                        <el-menu
+                            :default-active="activeMenu"
+                            router
+                            :default-openeds="['user-management', 'system-management', 'log-management']"
+                        >
 
                             <el-sub-menu index="user-management" v-if="isSuperuser">
                                 <template #title>
@@ -72,7 +76,7 @@
                                 </el-menu-item>
                                 <el-menu-item index="/users">
                                     <el-icon><Avatar/></el-icon>
-                                    <span>用户管理</span>
+                                    <span>用户列表</span>
                                 </el-menu-item>
                             </el-sub-menu>
 
@@ -393,7 +397,7 @@
         template: `
           <el-card class="config-card">
             <template #header>
-              <div class="card-header"><span>部门管理 (租户)</span>
+              <div class="card-header"><span>部门管理</span>
                 <el-button type="primary" @click="openDialog()" :icon="ElementPlusIcons.Plus">添加部门</el-button>
               </div>
             </template>
@@ -445,14 +449,14 @@
         template: `
           <el-card class="config-card">
             <template #header>
-              <div class="card-header"><span>用户管理</span>
+              <div class="card-header"><span>用户列表</span>
                 <el-button type="primary" @click="openDialog()" :icon="ElementPlusIcons.Plus">添加用户</el-button>
               </div>
             </template>
             <el-table :data="items" v-loading="loading" style="width: 100%">
               <el-table-column prop="id" label="ID" width="100" sortable></el-table-column>
               <el-table-column prop="username" label="用户名" sortable></el-table-column>
-              <el-table-column prop="department_id" label="所属部门ID" sortable></el-table-column>
+              <el-table-column prop="department_name" label="所属部门" sortable></el-table-column>
               <el-table-column prop="is_superuser" label="超级管理员" width="200">
                 <template #default="scope"> <el-tag :type="scope.row.is_superuser ? 'danger' : 'info'">{{ scope.row.is_superuser ? '是' : '否' }}</el-tag> </template>
               </el-table-column>
@@ -478,7 +482,7 @@
                 </el-form-item>
                 <el-form-item label="所属部门" prop="department_id">
                    <el-select v-model="currentItem.department_id" placeholder="选择所属部门">
-                    <el-option v-for="dept in departments" :key="dept.id" :label="dept.department_name + ' (ID: ' + dept.id + ')'" :value="dept.id"></el-option>
+                    <el-option v-for="dept in departments" :key="dept.id" :label="dept.department_name" :value="dept.id"></el-option>
                    </el-select>
                 </el-form-item>
                 <el-row :gutter="20">
@@ -583,7 +587,7 @@
             </template>
             <el-table :data="items" v-loading="loading" style="width: 100%">
               <el-table-column prop="id" label="ID" width="60" sortable></el-table-column>
-              <el-table-column v-if="isSuperuser" prop="department_id" label="部门ID" width="100" sortable></el-table-column>
+              <el-table-column v-if="isSuperuser" prop="department_name" label="所属部门" width="200" sortable></el-table-column>
               <el-table-column prop="db_show_name" label="显示名称" sortable></el-table-column>
               <el-table-column prop="db_type" label="类型" width="100"></el-table-column>
               <el-table-column prop="db_host" label="主机"></el-table-column>
@@ -605,7 +609,7 @@
               <el-form ref="formRef" :model="currentItem" :rules="formRules" label-position="top">
                 <el-form-item label="所属部门" prop="department_id" v-if="isSuperuser">
                    <el-select v-model="currentItem.department_id" placeholder="选择所属部门">
-                    <el-option v-for="dept in departments" :key="dept.id" :label="dept.department_name + ' (ID: ' + dept.id + ')'" :value="dept.id"></el-option>
+                    <el-option v-for="dept in departments" :key="dept.id" :label="dept.department_name" :value="dept.id"></el-option>
                    </el-select>
                 </el-form-item>
                  <el-form-item label="显示名称" prop="db_show_name">
@@ -698,9 +702,9 @@
               </div>
             </template>
             <el-table :data="items" v-loading="loading" style="width: 100%">
-              <el-table-column prop="id" label="ID" width="80"></el-table-column>
-              <el-table-column prop="department_id" label="所属部门ID" v-if="isSuperuser" sortable></el-table-column>
-              <el-table-column label="API Key (部分)">
+              <el-table-column prop="id" label="ID" width="200"></el-table-column>
+              <el-table-column prop="department_name" label="所属部门名称" v-if="isSuperuser" sortable></el-table-column>
+              <el-table-column label="API Key">
                 <template #default="scope"> {{ scope.row.api_key.substring(0, 10) }}... </template>
               </el-table-column>
               <el-table-column label="操作" width="300" fixed="right">
@@ -714,7 +718,7 @@
               <el-form ref="formRef" :model="currentItem" :rules="keyRules" label-position="top">
                 <el-form-item label="所属部门" prop="department_id" v-if="isSuperuser">
                    <el-select v-model="currentItem.department_id" placeholder="选择所属部门 (1:1 关系)">
-                    <el-option v-for="dept in departments" :key="dept.id" :label="dept.department_name + ' (ID: ' + dept.id + ')'" :value="dept.id"></el-option>
+                    <el-option v-for="dept in departments" :key="dept.id" :label="dept.department_name" :value="dept.id"></el-option>
                    </el-select>
                 </el-form-item>
                 <el-form-item label="API Key" prop="api_key">
@@ -762,7 +766,7 @@
             </template>
             <el-table :data="items" v-loading="loading" style="width: 100%" row-key="task_id">
               <el-table-column prop="task_id" label="ID" width="60"></el-table-column>
-              <el-table-column v-if="isSuperuser" prop="department_id" label="部门ID" width="100" sortable></el-table-column>
+              <el-table-column v-if="isSuperuser" prop="department_name" label="所属部门" sortable></el-table-column>
               <el-table-column prop="task_name" label="任务名称" sortable></el-table-column>
               <el-table-column prop="source_db_name" label="源数据库" sortable>
                 <template #default="scope"> <el-tag>{{ scope.row.source_db_name || 'N/A' }} (ID: {{ scope.row.source_db_id }})</el-tag> </template>
@@ -805,7 +809,7 @@
                      <el-form-item label="所属部门 (租户)" prop="department_id" v-if="isSuperuser">
                       <el-select v-model="currentItem.department_id" placeholder="选择所属部门" @change="onDepartmentChange">
                         <el-option v-for="dept in departments" :key="dept.id"
-                                   :label="dept.department_name + ' (ID: ' + dept.id + ')'" :value="dept.id"></el-option>
+                                   :label="dept.department_name" :value="dept.id"></el-option>
                       </el-select>
                     </el-form-item>
                   </el-col>
@@ -1054,7 +1058,7 @@
                                 value-format="YYYY-MM-DDTHH:mm:ss"
                                 :default-time="[new Date(2000, 1, 1, 0, 0, 0), new Date(2000, 2, 1, 23, 59, 59)]"/>
               </el-form-item>
-              <el-form-item label="部门ID" v-if="isSuperuser">
+              <el-form-item label="部门" v-if="isSuperuser">
                 <el-input v-model.number="filters.departmentIdFilter" placeholder="部门ID (数字)" clearable></el-input>
               </el-form-item>
               <el-form-item label="任务ID">
@@ -1078,7 +1082,7 @@
               <el-table-column prop="timestamp" label="时间" width="170" sortable>
                 <template #default="scope">{{ formatDateTime(scope.row.timestamp) }}</template>
               </el-table-column>
-              <el-table-column prop="department_id" label="部门ID" width="100" v-if="isSuperuser" sortable></el-table-column>
+              <el-table-column prop="department_name" label="所属部门" width="120" v-if="isSuperuser" sortable></el-table-column>
               <el-table-column prop="task_id" label="任务ID" width="100" sortable></el-table-column>
               <el-table-column prop="table_name" label="表名" width="150" sortable></el-table-column>
               <el-table-column prop="app_id" label="App ID" width="120"></el-table-column>
