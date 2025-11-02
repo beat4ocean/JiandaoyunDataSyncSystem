@@ -56,15 +56,15 @@ def get_dynamic_session(task: SyncTask) -> Generator[Any, Any, None]:
         )
 
         engine = create_engine(db_url, pool_recycle=3600, connect_args=DB_CONNECT_ARGS)
-        SessionLocal = sessionmaker(bind=engine)
+        session_local = sessionmaker(bind=engine)
 
         # 缓存引擎和会话工厂
-        dynamic_engine_cache[db_id] = (engine, SessionLocal)
+        dynamic_engine_cache[db_id] = (engine, session_local)
 
     # 从缓存中获取会话工厂
-    _, SessionLocal = dynamic_engine_cache[db_id]
+    _, session_local = dynamic_engine_cache[db_id]
 
-    session = SessionLocal()
+    session = session_local()
     try:
         yield session
     except Exception:

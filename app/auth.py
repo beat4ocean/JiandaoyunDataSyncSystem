@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 import logging
 from functools import wraps
+
 from flask import Blueprint, request, jsonify, g
 from flask_jwt_extended import (
     create_access_token, create_refresh_token, jwt_required, get_jwt, get_jwt_identity
 )
-from app.models import ConfigSession, User
+
+from app.models import User
 
 # 创建认证蓝图
 auth_bp = Blueprint('auth_bp', __name__)

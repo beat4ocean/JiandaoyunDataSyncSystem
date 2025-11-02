@@ -65,7 +65,7 @@ def create_department():
     session = g.config_session
     try:
         new_dept = Department(
-            id=data.get('id'),
+            # id=data.get('id'),
             department_name=data.get('department_name'),
             is_active=data.get('is_active', True)
         )

@@ -8,9 +8,8 @@ from sqlalchemy import select, update, delete, desc
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-from app.models import ConfigSession, JdyKeyInfo, SyncTask, SyncErrLog, FormFieldMapping
-from app.utils import TZ_UTC_8, test_db_connection
-from app.scheduler import scheduler, add_or_update_task_in_scheduler, remove_task_from_scheduler
+from app.models import JdyKeyInfo, SyncTask, SyncErrLog, FormFieldMapping
+from app.scheduler import add_or_update_task_in_scheduler, remove_task_from_scheduler
 
 api_bp = Blueprint('api', __name__, url_prefix='/api')
 
@@ -36,7 +35,7 @@ def row_to_dict(row):
 def get_jdy_keys():
     session = g.config_session
     try:
-        keys = session.scalars(select(JdyKeyInfo).order_by(JdyKeyInfo.department_name)).all()
+        keys = session.scalars(select(JdyKeyInfo).order_by(JdyKeyInfo.department.department_name)).all()
         return jsonify([row_to_dict(key) for key in keys])
     except Exception as e:
         print(f"Error getting JdyKeyInfo: {e}\n{traceback.format_exc()}")
