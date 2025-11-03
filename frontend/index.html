@@ -186,14 +186,14 @@
                                 :default-openeds="['user-management', 'system-management', 'task-management', 'log-management']"
                         >
 
-                            <el-sub-menu index="user-management" v-if="isSuperuser">
+                            <el-sub-menu index="user-management">
                                 <template #title>
                                     <el-icon>
                                         <User/>
                                     </el-icon>
                                     <span>用户管理</span>
                                 </template>
-                                <el-menu-item index="/departments">
+                                <el-menu-item index="/departments" v-if="isSuperuser">
                                     <!--<el-icon><OfficeBuilding/></el-icon>--> <!--不能正常显示-->
                                     <el-icon>
                                         <Memo/>
@@ -622,14 +622,17 @@
 
     // --- User Component ---
     const UserView = {
+        props: ['isSuperuser'], // <-- ADDED PROPS
         template: `
           <el-card class="config-card">
             <template #header>
               <div class="card-header"><span>用户列表</span>
-                <el-button type="primary" @click="openDialog()" :icon="ElementPlusIcons.Plus">添加用户</el-button>
+                <el-button type="primary" @click="openDialog()" :icon="ElementPlusIcons.Plus" v-if="isSuperuser">
+                  添加用户
+                </el-button>
               </div>
             </template>
-            <el-table :data="items" v-loading="loading" style="width: 100%">
+            <el-table :data="displayedItems" v-loading="loading" style="width: 100%">
               <el-table-column prop="id" label="ID" width="100" sortable></el-table-column>
               <el-table-column prop="username" label="用户名" sortable></el-table-column>
               <el-table-column prop="department_name" label="所属部门" sortable></el-table-column>
@@ -651,9 +654,11 @@
                   <el-button size="small" @click="openResetPassword(scope.row)" :icon="ElementPlusIcons.RefreshLeft">
                     重置密码
                   </el-button>
-                  <el-button size="small" @click="openDialog(scope.row)" :icon="ElementPlusIcons.Edit">编辑</el-button>
+                  <el-button size="small" @click="openDialog(scope.row)" :icon="ElementPlusIcons.Edit"
+                             v-if="isSuperuser">编辑
+                  </el-button>
                   <el-button size="small" type="danger" @click="deleteItem(scope.row.id)"
-                             :icon="ElementPlusIcons.Delete">删除
+                             :icon="ElementPlusIcons.Delete" v-if="isSuperuser">删除
                   </el-button>
                 </template>
               </el-table-column>
@@ -709,10 +714,21 @@
             </el-dialog>
           </el-card>
         `,
-        setup() {
+        setup(props) { // <-- ADDED props
             const defaultItem = {username: '', password: '', department_id: null, is_superuser: false, is_active: true};
             const crud = useCrud('/users', '用户', defaultItem, 'id');
             const departments = ref([]);
+
+            // ADDED: Computed property to filter items
+            const displayedItems = computed(() => {
+                if (props.isSuperuser) {
+                    return crud.items.value;
+                }
+                // Filter for non-superuser
+                const currentUsername = localStorage.getItem('username');
+                if (!currentUsername) return [];
+                return crud.items.value.filter(user => user.username === currentUsername);
+            });
 
             // 重置密码状态
             const resetPasswordDialogVisible = ref(false);
@@ -729,10 +745,13 @@
             };
 
             const fetchDepartments = async () => {
-                try {
-                    departments.value = (await apiClient.get('/departments')).data;
-                } catch (e) {
-                    console.error(e);
+                // ADDED: Only fetch depts if superuser
+                if (props.isSuperuser) {
+                    try {
+                        departments.value = (await apiClient.get('/departments')).data;
+                    } catch (e) {
+                        console.error(e);
+                    }
                 }
             };
 
@@ -766,9 +785,16 @@
             onMounted(fetchDepartments);
 
             return {
-                ...crud, formRules, departments,
-                resetPasswordDialogVisible, resetPasswordData, resetFormRef, resetPasswordRules,
-                openResetPassword, submitResetPassword,
+                ...crud,
+                displayedItems, // <-- ADDED
+                formRules,
+                departments,
+                resetPasswordDialogVisible,
+                resetPasswordData,
+                resetFormRef,
+                resetPasswordRules,
+                openResetPassword,
+                submitResetPassword,
                 ElementPlusIcons
             };
         }
@@ -1053,7 +1079,8 @@
             </template>
             <el-table :data="items" v-loading="loading" style="width: 100%" row-key="task_id">
               <el-table-column prop="task_id" label="ID" width="60"></el-table-column>
-              <el-table-column v-if="isSuperuser" prop="department_name" label="所属部门" width="180" sortable></el-table-column>
+              <el-table-column v-if="isSuperuser" prop="department_name" label="所属部门" width="180"
+                               sortable></el-table-column>
               <el-table-column prop="task_name" label="任务名称" sortable></el-table-column>
               <el-table-column prop="source_db_name" label="源数据库" width="150" sortable>
                 <template #default="scope">
@@ -1266,15 +1293,15 @@
                 return tenantDatabases.value; // 普通租户直接显示 (后端已过滤)
             });
 
-            // // Custom validator for primary key
-            // const validatePkField = (rule, value, callback) => {
-            //     // crud.currentItem is available here
-            //     if (crud.currentItem.sync_mode !== 'FULL_REPLACE' && !value) {
-            //         callback(new Error('请输入源表主键 (INCREMENTAL 和 BINLOG 模式必填)'));
-            //     } else {
-            //         callback();
-            //     }
-            // };
+
+            const validatePkField = (rule, value, callback) => {
+                if (crud.currentItem.sync_mode !== 'FULL_REPLACE' && !value) {
+                    callback(new Error('请输入源表主键 (INCREMENTAL 和 BINLOG 模式必填)'));
+                } else {
+                    callback();
+                }
+            };
+
 
             const onDepartmentChange = () => {
                 // 管理员切换部门时，清空已选的数据库
@@ -1309,10 +1336,9 @@
                 department_id: [{required: props.isSuperuser, message: '请选择所属部门', trigger: 'change'}],
                 source_db_id: [{required: true, message: '请选择源数据库', trigger: 'change'}],
                 source_table: [{required: true, message: '请输入源表名', trigger: 'blur'}],
-                k_field_names: [{required: true, message: '请输入源表主键', trigger: 'blur'}],
+                pk_field_names: [{validator: validatePkField, trigger: 'blur'}], // MODIFIED
                 jdy_app_id: [{required: true, message: '请输入 App ID', trigger: 'blur'}],
                 jdy_entry_id: [{required: true, message: '请输入 Entry ID', trigger: 'blur'}],
-                // ... (其他规则与原文件相同)
             };
 
             const formatDateTime = (isoDateTime) => isoDateTime ? new Date(isoDateTime).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai'}) : '-';
