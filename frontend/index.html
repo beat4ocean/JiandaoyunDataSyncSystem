@@ -13,30 +13,151 @@
     <script src="/vendor/vue-router.global.js"></script>
     <script src="/vendor/axios.min.js"></script>
     <style>
-        html, body { height: 100%; width: 100%; margin: 0; padding: 0; overflow: hidden; }
-        body { font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', Arial, sans-serif; background-color: #f4f4f5; }
-        #app { height: 100%; display: flex; flex-direction: column; }
-        .login-container { flex-grow: 1; display: flex; justify-content: center; align-items: center; background-color: #f4f4f5; }
-        .login-card { width: 400px; padding: 40px 30px; border-radius: 8px; box-shadow: 0 2px 12px 0 rgba(0, 0, 0, .1); background-color: #fff; text-align: center; }
-        .login-title { font-size: 24px; font-weight: bold; color: #303133; margin-bottom: 25px; }
-        .login-card h2 { font-size: 18px; color: #606266; margin-top: 0; margin-bottom: 20px; }
-        .app-container { flex-grow: 1; display: flex; flex-direction: column; overflow: hidden; background-color: #fff; }
-        .full-height-container { flex-grow: 1; display: flex; overflow: hidden; }
-        .el-main { padding: 0; flex-grow: 1; overflow-y: auto; background-color: #f4f4f5; }
-        .el-header { background-color: #fff; color: #303133; display: flex; justify-content: space-between; align-items: center; padding: 0 20px; flex-shrink: 0; border-bottom: 1px solid #e4e7ed; }
-        .el-header h2 { font-size: 20px; }
-        .el-menu { border-right: none; }
-        .el-menu-item.is-active { background-color: #ecf5ff; }
-        .config-card { margin: 20px; }
-        .form-dialog .el-input, .form-dialog .el-select, .form-dialog .el-time-picker { width: 100%; }
-        .form-dialog .el-form-item { margin-bottom: 15px; }
-        .el-table .cell { white-space: pre-wrap; }
-        .card-header { display: flex; justify-content: space-between; align-items: center; }
-        .el-aside { flex-shrink: 0; background-color: #fff; border-right: 1px solid #eee; padding-top: 10px; }
-        .log-filter-form { padding: 15px 0 0 0; display: flex; gap: 15px; align-items: center; flex-wrap: wrap; }
-        .log-filter-form .el-form-item { margin-bottom: 0; }
-        .visibility-toggle-btn { margin-left: 8px; }
-        .form-item-note { font-size: 12px; color: #909399; margin-top: -5px; line-height: 1.2; }
+        html, body {
+            height: 100%;
+            width: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+
+        body {
+            font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', Arial, sans-serif;
+            background-color: #f4f4f5;
+        }
+
+        #app {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .login-container {
+            flex-grow: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #f4f4f5;
+        }
+
+        .login-card {
+            width: 400px;
+            padding: 40px 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 12px 0 rgba(0, 0, 0, .1);
+            background-color: #fff;
+            text-align: center;
+        }
+
+        .login-title {
+            font-size: 24px;
+            font-weight: bold;
+            color: #303133;
+            margin-bottom: 25px;
+        }
+
+        .login-card h2 {
+            font-size: 18px;
+            color: #606266;
+            margin-top: 0;
+            margin-bottom: 20px;
+        }
+
+        .app-container {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            background-color: #fff;
+        }
+
+        .full-height-container {
+            flex-grow: 1;
+            display: flex;
+            overflow: hidden;
+        }
+
+        .el-main {
+            padding: 0;
+            flex-grow: 1;
+            overflow-y: auto;
+            background-color: #f4f4f5;
+        }
+
+        .el-header {
+            background-color: #fff;
+            color: #303133;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 20px;
+            flex-shrink: 0;
+            border-bottom: 1px solid #e4e7ed;
+        }
+
+        .el-header h2 {
+            font-size: 20px;
+        }
+
+        .el-menu {
+            border-right: none;
+        }
+
+        .el-menu-item.is-active {
+            background-color: #ecf5ff;
+        }
+
+        .config-card {
+            margin: 20px;
+        }
+
+        .form-dialog .el-input, .form-dialog .el-select, .form-dialog .el-time-picker {
+            width: 100%;
+        }
+
+        .form-dialog .el-form-item {
+            margin-bottom: 15px;
+        }
+
+        .el-table .cell {
+            white-space: pre-wrap;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .el-aside {
+            flex-shrink: 0;
+            background-color: #fff;
+            border-right: 1px solid #eee;
+            padding-top: 10px;
+        }
+
+        .log-filter-form {
+            padding: 15px 0 0 0;
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .log-filter-form .el-form-item {
+            margin-bottom: 0;
+        }
+
+        .visibility-toggle-btn {
+            margin-left: 8px;
+        }
+
+        .form-item-note {
+            font-size: 12px;
+            color: #909399;
+            margin-top: -5px;
+            line-height: 1.2;
+        }
     </style>
 </head>
 <body>
@@ -60,64 +181,90 @@
                     <el-aside width="200px">
 
                         <el-menu
-                            :default-active="activeMenu"
-                            router
-                            :default-openeds="['user-management', 'system-management', 'log-management']"
+                                :default-active="activeMenu"
+                                router
+                                :default-openeds="['user-management', 'system-management', 'task-management', 'log-management']"
                         >
 
                             <el-sub-menu index="user-management" v-if="isSuperuser">
                                 <template #title>
-                                    <el-icon><User/></el-icon>
+                                    <el-icon>
+                                        <User/>
+                                    </el-icon>
                                     <span>用户管理</span>
                                 </template>
                                 <el-menu-item index="/departments">
                                     <!--<el-icon><OfficeBuilding/></el-icon>--> <!--不能正常显示-->
-                                    <el-icon><Memo/></el-icon>
+                                    <el-icon>
+                                        <Memo/>
+                                    </el-icon>
                                     <span>部门管理</span>
                                 </el-menu-item>
                                 <el-menu-item index="/users">
-                                    <el-icon><Avatar/></el-icon>
+                                    <el-icon>
+                                        <Avatar/>
+                                    </el-icon>
                                     <span>用户列表</span>
                                 </el-menu-item>
                             </el-sub-menu>
 
                             <el-sub-menu index="system-management">
                                 <template #title>
-                                    <el-icon><Setting/></el-icon>
+                                    <el-icon>
+                                        <Setting/>
+                                    </el-icon>
                                     <span>系统管理</span>
                                 </template>
                                 <el-menu-item index="/jdy-keys">
-                                    <el-icon><Key/></el-icon>
+                                    <el-icon>
+                                        <Key/>
+                                    </el-icon>
                                     <span>密钥管理</span>
                                 </el-menu-item>
                                 <el-menu-item index="/databases">
-                                    <el-icon><Coin/></el-icon>
+                                    <el-icon>
+                                        <Coin/>
+                                    </el-icon>
                                     <span>源库管理</span>
                                 </el-menu-item>
                             </el-sub-menu>
 
-                            <el-menu-item index="/sync-tasks">
-                                <el-icon><Tickets/></el-icon>
-                                <span>任务管理</span>
-                            </el-menu-item>
+                            <el-sub-menu index="task-management">
+                                <template #title>
+                                    <el-icon>
+                                        <Tickets/>
+                                    </el-icon>
+                                    <span>任务管理</span>
+                                </template>
+                                <el-menu-item index="/sync-tasks">
+                                    <el-icon>
+                                        <Tickets/>
+                                    </el-icon>
+                                    <span>数据库->简道云</span>
+                                </el-menu-item>
+                            </el-sub-menu>
 
                             <el-sub-menu index="log-management">
                                 <template #title>
-                                    <el-icon><Document/></el-icon>
+                                    <el-icon>
+                                        <Document/>
+                                    </el-icon>
                                     <span>日志管理</span>
                                 </template>
                                 <el-menu-item index="/error-logs">
-                                    <el-icon><Warning/></el-icon>
+                                    <el-icon>
+                                        <Warning/>
+                                    </el-icon>
                                     <span>错误日志</span>
                                 </el-menu-item>
                             </el-sub-menu>
 
                         </el-menu>
-                        </el-aside>
+                    </el-aside>
                     <el-main>
                         <router-view
-                            :is-superuser="isSuperuser"
-                            :key="activeMenu"
+                                :is-superuser="isSuperuser"
+                                :key="activeMenu"
                         ></router-view>
                     </el-main>
                 </el-container>
@@ -171,7 +318,7 @@
                 if (isRefreshingToken) {
                     // 如果正在刷新，将失败的请求存入队列
                     return new Promise((resolve, reject) => {
-                        failedRequestQueue.push({ resolve, reject, config: originalRequest });
+                        failedRequestQueue.push({resolve, reject, config: originalRequest});
                     });
                 }
 
@@ -185,7 +332,7 @@
                 try {
                     // 3. 尝试获取新 Token
                     const refreshResponse = await axios.post('/api/refresh', {}, {
-                        headers: { 'Authorization': `Bearer ${refreshToken}` }
+                        headers: {'Authorization': `Bearer ${refreshToken}`}
                     });
 
                     const newAccessToken = refreshResponse.data.access_token;
@@ -219,7 +366,7 @@
             if (error.response?.data?.error) {
                 ElMessage.error(`操作失败: ${error.response.data.error}`);
             } else if (error.response?.data?.msg) {
-                 ElMessage.error(`操作失败: ${error.response.data.msg}`);
+                ElMessage.error(`操作失败: ${error.response.data.msg}`);
             } else if (error.message) {
                 ElMessage.error(`请求错误: ${error.message}`);
             } else {
@@ -335,7 +482,19 @@
             }
         };
         onMounted(fetchItems);
-        return { items, loading, dialogVisible, isEdit, currentItem, formRef, fetchItems, openDialog, closeDialog, saveItem, deleteItem };
+        return {
+            items,
+            loading,
+            dialogVisible,
+            isEdit,
+            currentItem,
+            formRef,
+            fetchItems,
+            openDialog,
+            closeDialog,
+            saveItem,
+            deleteItem
+        };
     }
 
     // --- Login Component (适配 /api/login 和 JWT) ---
@@ -344,12 +503,14 @@
           <el-card class="login-card">
             <h1 class="login-title">MySQL -> 简道云 数据同步系统</h1>
             <h2>登录</h2>
-            <el-form @submit.prevent="submitLogin" ref="loginFormRef" :model="loginForm" :rules="loginRules" label-position="top">
+            <el-form @submit.prevent="submitLogin" ref="loginFormRef" :model="loginForm" :rules="loginRules"
+                     label-position="top">
               <el-form-item label="用户名" prop="username">
                 <el-input v-model="loginForm.username" placeholder="请输入用户名"></el-input>
               </el-form-item>
               <el-form-item label="密码" prop="password">
-                <el-input type="password" v-model="loginForm.password" placeholder="请输入密码" show-password></el-input>
+                <el-input type="password" v-model="loginForm.password" placeholder="请输入密码"
+                          show-password></el-input>
               </el-form-item>
               <el-form-item>
                 <el-button type="primary" native-type="submit" :loading="loading" style="width: 100%;">登录</el-button>
@@ -368,7 +529,11 @@
             };
             const submitLogin = async () => {
                 if (!loginFormRef.value) return;
-                try { await loginFormRef.value.validate(); } catch (error) { return; }
+                try {
+                    await loginFormRef.value.validate();
+                } catch (error) {
+                    return;
+                }
                 loading.value = true;
                 try {
                     // 使用 axios.post 访问 /api/login
@@ -410,16 +575,22 @@
               <el-table-column prop="id" label="部门ID" width="200" sortable></el-table-column>
               <el-table-column prop="department_name" label="部门简称 (英文)" sortable></el-table-column>
               <el-table-column prop="is_active" label="是否激活" width="200">
-                <template #default="scope"> <el-tag :type="scope.row.is_active ? 'success' : 'info'">{{ scope.row.is_active ? '是' : '否' }}</el-tag> </template>
+                <template #default="scope">
+                  <el-tag :type="scope.row.is_active ? 'success' : 'info'">{{ scope.row.is_active ? '是' : '否' }}
+                  </el-tag>
+                </template>
               </el-table-column>
               <el-table-column label="操作" width="300" fixed="right">
                 <template #default="scope">
                   <el-button size="small" @click="openDialog(scope.row)" :icon="ElementPlusIcons.Edit">编辑</el-button>
-                  <el-button size="small" type="danger" @click="deleteItem(scope.row.id)" :icon="ElementPlusIcons.Delete">删除</el-button>
+                  <el-button size="small" type="danger" @click="deleteItem(scope.row.id)"
+                             :icon="ElementPlusIcons.Delete">删除
+                  </el-button>
                 </template>
               </el-table-column>
             </el-table>
-            <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑部门' : '添加部门'" width="500px" @close="closeDialog" class="form-dialog">
+            <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑部门' : '添加部门'" width="500px"
+                       @close="closeDialog" class="form-dialog">
               <el-form ref="formRef" :model="currentItem" :rules="formRules" label-position="top">
                 <!--<el-form-item label="部门ID (外部)" prop="id">
                   <el-input v-model.number="currentItem.id" placeholder="唯一的数字ID" :disabled="isEdit"></el-input>
@@ -427,9 +598,9 @@
                 <el-form-item label="部门简称 (英文)" prop="department_name">
                   <el-input v-model="currentItem.department_name" placeholder="例如：sales_dept (唯一)"></el-input>
                 </el-form-item>
-                 <el-form-item label="是否激活">
-                   <el-switch v-model="currentItem.is_active"></el-switch>
-                 </el-form-item>
+                <el-form-item label="是否激活">
+                  <el-switch v-model="currentItem.is_active"></el-switch>
+                </el-form-item>
               </el-form>
               <template #footer>
                 <el-button @click="closeDialog">取消</el-button>
@@ -439,7 +610,7 @@
           </el-card>
         `,
         setup() {
-            const defaultItem = { id: null, department_name: '', is_active: true };
+            const defaultItem = {id: null, department_name: '', is_active: true};
             const crud = useCrud('/departments', '部门', defaultItem, 'id');
             const formRules = {
                 id: [{required: true, message: '请输入部门ID', trigger: 'blur'}],
@@ -463,44 +634,58 @@
               <el-table-column prop="username" label="用户名" sortable></el-table-column>
               <el-table-column prop="department_name" label="所属部门" sortable></el-table-column>
               <el-table-column prop="is_superuser" label="超级管理员" width="200">
-                <template #default="scope"> <el-tag :type="scope.row.is_superuser ? 'danger' : 'info'">{{ scope.row.is_superuser ? '是' : '否' }}</el-tag> </template>
+                <template #default="scope">
+                  <el-tag :type="scope.row.is_superuser ? 'danger' : 'info'">
+                    {{ scope.row.is_superuser ? '是' : '否' }}
+                  </el-tag>
+                </template>
               </el-table-column>
               <el-table-column prop="is_active" label="是否激活" width="200">
-                <template #default="scope"> <el-tag :type="scope.row.is_active ? 'success' : 'info'">{{ scope.row.is_active ? '是' : '否' }}</el-tag> </template>
+                <template #default="scope">
+                  <el-tag :type="scope.row.is_active ? 'success' : 'info'">{{ scope.row.is_active ? '是' : '否' }}
+                  </el-tag>
+                </template>
               </el-table-column>
               <el-table-column label="操作" width="300" fixed="right">
                 <template #default="scope">
-                  <el-button size="small" @click="openResetPassword(scope.row)" :icon="ElementPlusIcons.RefreshLeft">重置密码</el-button>
+                  <el-button size="small" @click="openResetPassword(scope.row)" :icon="ElementPlusIcons.RefreshLeft">
+                    重置密码
+                  </el-button>
                   <el-button size="small" @click="openDialog(scope.row)" :icon="ElementPlusIcons.Edit">编辑</el-button>
-                  <el-button size="small" type="danger" @click="deleteItem(scope.row.id)" :icon="ElementPlusIcons.Delete">删除</el-button>
+                  <el-button size="small" type="danger" @click="deleteItem(scope.row.id)"
+                             :icon="ElementPlusIcons.Delete">删除
+                  </el-button>
                 </template>
               </el-table-column>
             </el-table>
 
-            <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑用户' : '添加用户'" width="500px" @close="closeDialog" class="form-dialog">
+            <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑用户' : '添加用户'" width="500px"
+                       @close="closeDialog" class="form-dialog">
               <el-form ref="formRef" :model="currentItem" :rules="formRules" label-position="top">
                 <el-form-item label="用户名" prop="username">
                   <el-input v-model="currentItem.username" placeholder="登录用户名"></el-input>
                 </el-form-item>
                 <el-form-item label="密码" prop="password" v-if="!isEdit">
-                  <el-input type="password" v-model="currentItem.password" placeholder="新增时必填" show-password></el-input>
+                  <el-input type="password" v-model="currentItem.password" placeholder="新增时必填"
+                            show-password></el-input>
                 </el-form-item>
                 <el-form-item label="所属部门" prop="department_id">
-                   <el-select v-model="currentItem.department_id" placeholder="选择所属部门">
-                    <el-option v-for="dept in departments" :key="dept.id" :label="dept.department_name" :value="dept.id"></el-option>
-                   </el-select>
+                  <el-select v-model="currentItem.department_id" placeholder="选择所属部门">
+                    <el-option v-for="dept in departments" :key="dept.id" :label="dept.department_name"
+                               :value="dept.id"></el-option>
+                  </el-select>
                 </el-form-item>
                 <el-row :gutter="20">
-                   <el-col :span="12">
-                     <el-form-item label="超级管理员">
-                       <el-switch v-model="currentItem.is_superuser"></el-switch>
-                     </el-form-item>
-                   </el-col>
-                   <el-col :span="12">
-                     <el-form-item label="是否激活">
-                       <el-switch v-model="currentItem.is_active"></el-switch>
-                     </el-form-item>
-                   </el-col>
+                  <el-col :span="12">
+                    <el-form-item label="超级管理员">
+                      <el-switch v-model="currentItem.is_superuser"></el-switch>
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="12">
+                    <el-form-item label="是否激活">
+                      <el-switch v-model="currentItem.is_active"></el-switch>
+                    </el-form-item>
+                  </el-col>
                 </el-row>
               </el-form>
               <template #footer>
@@ -510,27 +695,28 @@
             </el-dialog>
 
             <el-dialog v-model="resetPasswordDialogVisible" title="重置密码" width="400px" class="form-dialog">
-               <el-form ref="resetFormRef" :model="resetPasswordData" :rules="resetPasswordRules" label-position="top">
-                 <p>正在为用户 <strong>{{ currentItem.username }}</strong> 重置密码。</p>
-                 <el-form-item label="新密码" prop="new_password">
-                   <el-input type="password" v-model="resetPasswordData.new_password" placeholder="请输入新密码" show-password></el-input>
-                 </el-form-item>
-               </el-form>
-               <template #footer>
+              <el-form ref="resetFormRef" :model="resetPasswordData" :rules="resetPasswordRules" label-position="top">
+                <p>正在为用户 <strong>{{ currentItem.username }}</strong> 重置密码。</p>
+                <el-form-item label="新密码" prop="new_password">
+                  <el-input type="password" v-model="resetPasswordData.new_password" placeholder="请输入新密码"
+                            show-password></el-input>
+                </el-form-item>
+              </el-form>
+              <template #footer>
                 <el-button @click="resetPasswordDialogVisible = false">取消</el-button>
                 <el-button type="primary" @click="submitResetPassword" :loading="loading">确认重置</el-button>
               </template>
-             </el-dialog>
+            </el-dialog>
           </el-card>
         `,
         setup() {
-            const defaultItem = { username: '', password: '', department_id: null, is_superuser: false, is_active: true };
+            const defaultItem = {username: '', password: '', department_id: null, is_superuser: false, is_active: true};
             const crud = useCrud('/users', '用户', defaultItem, 'id');
             const departments = ref([]);
 
             // 重置密码状态
             const resetPasswordDialogVisible = ref(false);
-            const resetPasswordData = reactive({ new_password: '' });
+            const resetPasswordData = reactive({new_password: ''});
             const resetFormRef = ref(null);
 
             const formRules = {
@@ -543,7 +729,11 @@
             };
 
             const fetchDepartments = async () => {
-                try { departments.value = (await apiClient.get('/departments')).data; } catch (e) { console.error(e); }
+                try {
+                    departments.value = (await apiClient.get('/departments')).data;
+                } catch (e) {
+                    console.error(e);
+                }
             };
 
             const openResetPassword = (user) => {
@@ -555,7 +745,11 @@
 
             const submitResetPassword = async () => {
                 if (!resetFormRef.value) return;
-                try { await resetFormRef.value.validate(); } catch (e) { return; }
+                try {
+                    await resetFormRef.value.validate();
+                } catch (e) {
+                    return;
+                }
 
                 crud.loading.value = true;
                 try {
@@ -592,7 +786,8 @@
             </template>
             <el-table :data="items" v-loading="loading" style="width: 100%">
               <el-table-column prop="id" label="ID" width="60" sortable></el-table-column>
-              <el-table-column v-if="isSuperuser" prop="department_name" label="所属部门" width="200" sortable></el-table-column>
+              <el-table-column v-if="isSuperuser" prop="department_name" label="所属部门" width="200"
+                               sortable></el-table-column>
               <el-table-column prop="db_show_name" label="显示名称" sortable></el-table-column>
               <el-table-column prop="db_type" label="类型" width="200"></el-table-column>
               <el-table-column prop="db_host" label="主机"></el-table-column>
@@ -600,78 +795,88 @@
               <el-table-column prop="db_name" label="库名"></el-table-column>
               <el-table-column prop="db_user" label="用户"></el-table-column>
               <el-table-column prop="is_active" label="激活" width="80">
-                <template #default="scope"> <el-tag :type="scope.row.is_active ? 'success' : 'info'">{{ scope.row.is_active ? '是' : '否' }}</el-tag> </template>
+                <template #default="scope">
+                  <el-tag :type="scope.row.is_active ? 'success' : 'info'">{{ scope.row.is_active ? '是' : '否' }}
+                  </el-tag>
+                </template>
               </el-table-column>
               <el-table-column label="操作" width="300" fixed="right">
                 <template #default="scope">
                   <el-button size="small" @click="openDialog(scope.row)" :icon="ElementPlusIcons.Edit">编辑</el-button>
-                  <el-button size="small" type="danger" @click="deleteItem(scope.row.id)" :icon="ElementPlusIcons.Delete">删除</el-button>
+                  <el-button size="small" type="danger" @click="deleteItem(scope.row.id)"
+                             :icon="ElementPlusIcons.Delete">删除
+                  </el-button>
                 </template>
               </el-table-column>
             </el-table>
 
-            <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑数据库' : '添加数据库'" width="600px" @close="closeDialog" class="form-dialog">
+            <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑数据库' : '添加数据库'" width="600px"
+                       @close="closeDialog" class="form-dialog">
               <el-form ref="formRef" :model="currentItem" :rules="formRules" label-position="top">
                 <el-form-item label="所属部门" prop="department_id" v-if="isSuperuser">
-                   <el-select v-model="currentItem.department_id" placeholder="选择所属部门">
-                    <el-option v-for="dept in departments" :key="dept.id" :label="dept.department_name" :value="dept.id"></el-option>
-                   </el-select>
+                  <el-select v-model="currentItem.department_id" placeholder="选择所属部门">
+                    <el-option v-for="dept in departments" :key="dept.id" :label="dept.department_name"
+                               :value="dept.id"></el-option>
+                  </el-select>
                 </el-form-item>
-                 <el-form-item label="显示名称" prop="db_show_name">
+                <el-form-item label="显示名称" prop="db_show_name">
                   <el-input v-model="currentItem.db_show_name" placeholder="例如：生产库"></el-input>
                 </el-form-item>
                 <el-row :gutter="20">
-                   <el-col :span="12">
-                     <el-form-item label="数据库类型" prop="db_type">
-                       <el-select v-model="currentItem.db_type" placeholder="选择数据库类型">
-                         <el-option label="MySQL" value="mysql+pymysql"></el-option>
-                         <el-option label="PostgreSQL" value="postgresql+psycopg2"></el-option>
-                         <!-- <el-option label="SQL Server" value="mssql+pyodbc"></el-option>-->
-                         <el-option label="Oracle" value="oracle+cx_oracle"></el-option>
-                       </el-select>
-                     </el-form-item>
-                   </el-col>
-                   <el-col :span="12">
-                     <el-form-item label="主机" prop="db_host">
+                  <el-col :span="12">
+                    <el-form-item label="数据库类型" prop="db_type">
+                      <el-select v-model="currentItem.db_type" placeholder="选择数据库类型">
+                        <el-option label="MySQL" value="mysql+pymysql"></el-option>
+                        <el-option label="PostgreSQL" value="postgresql+psycopg2"></el-option>
+                        <!-- <el-option label="SQL Server" value="mssql+pyodbc"></el-option>-->
+                        <el-option label="Oracle" value="oracle+cx_oracle"></el-option>
+                      </el-select>
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="12">
+                    <el-form-item label="主机" prop="db_host">
                       <el-input v-model="currentItem.db_host" placeholder="localhost 或 IP"></el-input>
                     </el-form-item>
-                   </el-col>
+                  </el-col>
                 </el-row>
-                 <el-row :gutter="20">
-                   <el-col :span="12">
-                     <el-form-item label="端口" prop="db_port">
-                      <el-input-number v-model.number="currentItem.db_port" :min="1" :max="65535" style="width: 100%;"></el-input-number>
+                <el-row :gutter="20">
+                  <el-col :span="12">
+                    <el-form-item label="端口" prop="db_port">
+                      <el-input-number v-model.number="currentItem.db_port" :min="1" :max="65535"
+                                       style="width: 100%;"></el-input-number>
                     </el-form-item>
-                   </el-col>
-                   <el-col :span="12">
-                     <el-form-item label="数据库名称" prop="db_name">
+                  </el-col>
+                  <el-col :span="12">
+                    <el-form-item label="数据库名称" prop="db_name">
                       <el-input v-model="currentItem.db_name"></el-input>
                     </el-form-item>
-                   </el-col>
+                  </el-col>
                 </el-row>
-                 <el-row :gutter="20">
-                   <el-col :span="12">
-                     <el-form-item label="用户名" prop="db_user">
+                <el-row :gutter="20">
+                  <el-col :span="12">
+                    <el-form-item label="用户名" prop="db_user">
                       <el-input v-model="currentItem.db_user"></el-input>
                     </el-form-item>
-                   </el-col>
-                   <el-col :span="12">
-                     <el-form-item label="密码" prop="db_password">
-                      <el-input type="password" v-model="currentItem.db_password" :placeholder="isEdit ? '如需修改请输入新密码' : '请输入密码'" show-password></el-input>
-                     </el-form-item>
-                   </el-col>
+                  </el-col>
+                  <el-col :span="12">
+                    <el-form-item label="密码" prop="db_password">
+                      <el-input type="password" v-model="currentItem.db_password"
+                                :placeholder="isEdit ? '如需修改请输入新密码' : '请输入密码'" show-password></el-input>
+                    </el-form-item>
+                  </el-col>
                 </el-row>
                 <el-form-item label="额外连接参数 (选填)" prop="db_args">
-                   <el-input v-model="currentItem.db_args" placeholder="例如: charset=utf8mb4"></el-input>
-                   <!--<div class="form-item-note">例如: MySQL 可填 charset=utf8mb4。 SQL Server (mssql) 可能需要填: driver=ODBC+Driver+17+for+SQL+Server</div>-->
+                  <el-input v-model="currentItem.db_args" placeholder="例如: charset=utf8mb4"></el-input>
+                  <!--<div class="form-item-note">例如: MySQL 可填 charset=utf8mb4。 SQL Server (mssql) 可能需要填: driver=ODBC+Driver+17+for+SQL+Server</div>-->
                 </el-form-item>
-                 <el-form-item label="是否激活">
-                   <el-switch v-model="currentItem.is_active"></el-switch>
-                 </el-form-item>
+                <el-form-item label="是否激活">
+                  <el-switch v-model="currentItem.is_active"></el-switch>
+                </el-form-item>
               </el-form>
               <template #footer>
                 <el-button @click="closeDialog">取消</el-button>
-                <el-button @click="testConnection" :loading="testLoading" :icon="ElementPlusIcons.Connection">测试连接</el-button>
+                <el-button @click="testConnection" :loading="testLoading" :icon="ElementPlusIcons.Connection">测试连接
+                </el-button>
                 <el-button type="primary" @click="saveItem" :loading="loading">保存</el-button>
               </template>
             </el-dialog>
@@ -679,7 +884,18 @@
         `,
         props: ['isSuperuser'],
         setup(props) {
-            const defaultItem = { db_show_name: '', db_type: 'mysql', db_host: 'localhost', db_port: 3306, db_name: '', db_user: '', db_password: '', is_active: true, department_id: null, db_args: '' };
+            const defaultItem = {
+                db_show_name: '',
+                db_type: 'mysql',
+                db_host: 'localhost',
+                db_port: 3306,
+                db_name: '',
+                db_user: '',
+                db_password: '',
+                is_active: true,
+                department_id: null,
+                db_args: ''
+            };
             const crud = useCrud('/databases', '数据库', defaultItem, 'id');
             const departments = ref([]);
             // 测试连接的加载状态
@@ -698,7 +914,11 @@
 
             const fetchDepartments = async () => {
                 if (props.isSuperuser) {
-                    try { departments.value = (await apiClient.get('/departments')).data; } catch (e) { console.error(e); }
+                    try {
+                        departments.value = (await apiClient.get('/departments')).data;
+                    } catch (e) {
+                        console.error(e);
+                    }
                 }
             };
 
@@ -718,14 +938,14 @@
                     const response = await apiClient.post('/databases/test', crud.currentItem);
 
                     if (response.status === 200) {
-                         ElMessage.success(`测试成功: ${response.data.msg}`);
+                        ElMessage.success(`测试成功: ${response.data.msg}`);
                     }
 
                 } catch (error) {
                     console.error("测试连接请求失败:", error);
                     // 如果错误是 400 (Bad Request)，拦截器已经显示了 msg
                     if (error.response?.status !== 400) {
-                         ElMessage.error('测试连接时发生未知错误。');
+                        ElMessage.error('测试连接时发生未知错误。');
                     }
                 } finally {
                     testLoading.value = false;
@@ -751,32 +971,40 @@
             </template>
             <el-table :data="items" v-loading="loading" style="width: 100%">
               <el-table-column prop="id" label="ID" width="200"></el-table-column>
-              <el-table-column prop="department_name" label="所属部门名称" v-if="isSuperuser" sortable></el-table-column>
+              <el-table-column prop="department_name" label="所属部门名称" v-if="isSuperuser"
+                               sortable></el-table-column>
               <el-table-column label="API Key">
-                <template #default="scope"> {{ scope.row.api_key ? scope.row.api_key.substring(0, 10) : '' }}... </template>
+                <template #default="scope"> {{ scope.row.api_key ? scope.row.api_key.substring(0, 10) : '' }}...
+                </template>
               </el-table-column>
               <el-table-column label="API Secret">
-                <template #default="scope"> {{ scope.row.api_secret ? scope.row.api_secret.substring(0, 10) : '' }}... </template>
+                <template #default="scope"> {{ scope.row.api_secret ? scope.row.api_secret.substring(0, 10) : '' }}...
+                </template>
               </el-table-column>
               <el-table-column label="操作" width="300" fixed="right">
                 <template #default="scope">
                   <el-button size="small" @click="openDialog(scope.row)" :icon="ElementPlusIcons.Edit">编辑</el-button>
-                  <el-button size="small" type="danger" @click="deleteItem(scope.row.id)" :icon="ElementPlusIcons.Delete">删除</el-button>
+                  <el-button size="small" type="danger" @click="deleteItem(scope.row.id)"
+                             :icon="ElementPlusIcons.Delete">删除
+                  </el-button>
                 </template>
               </el-table-column>
             </el-table>
-            <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑密钥' : '添加密钥'" width="500px" @close="closeDialog" class="form-dialog">
+            <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑密钥' : '添加密钥'" width="500px"
+                       @close="closeDialog" class="form-dialog">
               <el-form ref="formRef" :model="currentItem" :rules="keyRules" label-position="top">
                 <el-form-item label="所属部门" prop="department_id" v-if="isSuperuser">
-                   <el-select v-model="currentItem.department_id" placeholder="选择所属部门 (1:1 关系)">
-                    <el-option v-for="dept in departments" :key="dept.id" :label="dept.department_name" :value="dept.id"></el-option>
-                   </el-select>
+                  <el-select v-model="currentItem.department_id" placeholder="选择所属部门 (1:1 关系)">
+                    <el-option v-for="dept in departments" :key="dept.id" :label="dept.department_name"
+                               :value="dept.id"></el-option>
+                  </el-select>
                 </el-form-item>
                 <el-form-item label="API Key" prop="api_key">
                   <el-input v-model="currentItem.api_key" placeholder="请输入简道云 API Key"></el-input>
                 </el-form-item>
                 <el-form-item label="API Secret" prop="api_secret">
-                  <el-input v-model="currentItem.api_secret" placeholder="简道云 API Secret，用于接收简道云数据推送，可置空"></el-input>
+                  <el-input v-model="currentItem.api_secret"
+                            placeholder="简道云 API Secret，用于接收简道云数据推送，可置空"></el-input>
                 </el-form-item>
               </el-form>
               <template #footer>
@@ -788,7 +1016,7 @@
         `,
         props: ['isSuperuser'],
         setup(props) {
-            const defaultItem = { department_id: null, api_key: '', api_secret: '' };
+            const defaultItem = {department_id: null, api_key: '', api_secret: ''};
             const crud = useCrud('/jdy-keys', '密钥', defaultItem, 'id');
             const departments = ref([]);
 
@@ -800,7 +1028,11 @@
 
             const fetchDepartments = async () => {
                 if (props.isSuperuser) {
-                    try { departments.value = (await apiClient.get('/departments')).data; } catch (e) { console.error(e); }
+                    try {
+                        departments.value = (await apiClient.get('/departments')).data;
+                    } catch (e) {
+                        console.error(e);
+                    }
                 }
             };
             onMounted(fetchDepartments);
@@ -815,16 +1047,18 @@
         template: `
           <el-card class="config-card">
             <template #header>
-              <div class="card-header"><span>同步任务管理</span>
+              <div class="card-header"><span>数据库->简道云 同步任务管理</span>
                 <el-button type="primary" @click="openDialog()" :icon="ElementPlusIcons.Plus">添加任务</el-button>
               </div>
             </template>
             <el-table :data="items" v-loading="loading" style="width: 100%" row-key="task_id">
               <el-table-column prop="task_id" label="ID" width="60"></el-table-column>
-              <el-table-column v-if="isSuperuser" prop="department_name" label="所属部门" sortable></el-table-column>
+              <el-table-column v-if="isSuperuser" prop="department_name" label="所属部门" width="180" sortable></el-table-column>
               <el-table-column prop="task_name" label="任务名称" sortable></el-table-column>
-              <el-table-column prop="source_db_name" label="源数据库" sortable>
-                <template #default="scope"> <el-tag>{{ scope.row.source_db_name || 'N/A' }}</el-tag> </template>
+              <el-table-column prop="source_db_name" label="源数据库" width="150" sortable>
+                <template #default="scope">
+                  <el-tag>{{ scope.row.source_db_name || 'N/A' }}</el-tag>
+                </template>
               </el-table-column>
               <el-table-column prop="source_table" label="源表名" sortable></el-table-column>
               <el-table-column prop="jdy_app_id" label="App ID"></el-table-column>
@@ -832,11 +1066,12 @@
               <el-table-column prop="sync_mode" label="同步模式" width="150"></el-table-column>
               <el-table-column prop="is_active" label="激活" width="70">
                 <template #default="scope">
-                  <el-tag :type="scope.row.is_active ? 'success' : 'info'">{{ scope.row.is_active ? '是' : '否' }}</el-tag>
+                  <el-tag :type="scope.row.is_active ? 'success' : 'info'">{{ scope.row.is_active ? '是' : '否' }}
+                  </el-tag>
                 </template>
               </el-table-column>
               <el-table-column prop="status" label="运行状态" width="100">
-                 <template #default="scope">
+                <template #default="scope">
                   <el-tag :type="statusType(scope.row.status)"> {{ scope.row.status }}</el-tag>
                 </template>
               </el-table-column>
@@ -846,12 +1081,15 @@
               <el-table-column label="操作" width="300" fixed="right">
                 <template #default="scope">
                   <el-button size="small" @click="openDialog(scope.row)" :icon="ElementPlusIcons.Edit">编辑</el-button>
-                  <el-button size="small" type="danger" @click="deleteItem(scope.row.task_id)" :icon="ElementPlusIcons.Delete">删除</el-button>
+                  <el-button size="small" type="danger" @click="deleteItem(scope.row.task_id)"
+                             :icon="ElementPlusIcons.Delete">删除
+                  </el-button>
                 </template>
               </el-table-column>
             </el-table>
 
-            <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑任务' : '添加任务'" width="700px" @close="closeDialog" class="form-dialog">
+            <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑任务' : '添加任务'" width="700px"
+                       @close="closeDialog" class="form-dialog">
               <el-form ref="formRef" :model="currentItem" :rules="taskRules" label-position="top" label-width="150px">
 
                 <el-row :gutter="20">
@@ -861,8 +1099,9 @@
                     </el-form-item>
                   </el-col>
                   <el-col :span="12">
-                     <el-form-item label="所属部门 (租户)" prop="department_id" v-if="isSuperuser">
-                      <el-select v-model="currentItem.department_id" placeholder="选择所属部门" @change="onDepartmentChange">
+                    <el-form-item label="所属部门 (租户)" prop="department_id" v-if="isSuperuser">
+                      <el-select v-model="currentItem.department_id" placeholder="选择所属部门"
+                                 @change="onDepartmentChange">
                         <el-option v-for="dept in departments" :key="dept.id"
                                    :label="dept.department_name" :value="dept.id"></el-option>
                       </el-select>
@@ -872,7 +1111,7 @@
 
                 <el-row :gutter="20">
                   <el-col :span="12">
-                     <el-form-item label="源数据库" prop="source_db_id">
+                    <el-form-item label="源数据库" prop="source_db_id">
                       <el-select v-model="currentItem.source_db_id" placeholder="选择源数据库">
                         <el-option v-for="db in filteredDatabases" :key="db.id"
                                    :label="db.name" :value="db.id"></el-option>
@@ -882,14 +1121,6 @@
                   <el-col :span="12">
                     <el-form-item label="源数据库表名" prop="source_table">
                       <el-input v-model="currentItem.source_table" placeholder="数据库中的表名或视图名"></el-input>
-                    </el-form-item>
-                  </el-col>
-                </el-row>
-
-                <el-row :gutter="20">
-                  <el-col :span="12">
-                    <el-form-item label="源表主键" prop="pk_field_names">
-                      <el-input v-model="currentItem.pk_field_names" placeholder="e.g., id (复合主键用英文逗号分隔)"></el-input>
                     </el-form-item>
                   </el-col>
                 </el-row>
@@ -910,32 +1141,48 @@
                 <el-divider>同步模式配置</el-divider>
 
                 <el-row :gutter="20">
-                    <el-col :span="12">
-                        <el-form-item label="同步模式" prop="sync_mode">
-                          <el-select v-model="currentItem.sync_mode" placeholder="选择同步模式">
-                            <el-option label="INCREMENTAL (增量)" value="INCREMENTAL"></el-option>
-                            <el-option label="FULL_REPLACE (全量覆盖)" value="FULL_REPLACE"></el-option>
-                            <el-option label="BINLOG (实时)" value="BINLOG"></el-option>
-                          </el-select>
-                        </el-form-item>
-                    </el-col>
-                    <el-col :span="12">
-                         <el-form-item label="任务激活">
-                           <el-switch v-model="currentItem.is_active"></el-switch>
-                         </el-form-item>
-                    </el-col>
+                  <el-col :span="12">
+                    <el-form-item label="同步模式" prop="sync_mode">
+                      <el-select v-model="currentItem.sync_mode" placeholder="选择同步模式">
+                        <el-option label="INCREMENTAL (增量)" value="INCREMENTAL"></el-option>
+                        <el-option label="FULL_REPLACE (全量覆盖)" value="FULL_REPLACE"></el-option>
+                        <el-option label="BINLOG (实时)" value="BINLOG"></el-option>
+                      </el-select>
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="12">
+                    <el-form-item label="任务激活">
+                      <el-switch v-model="currentItem.is_active"></el-switch>
+                    </el-form-item>
+                  </el-col>
                 </el-row>
+
+                <template v-if="currentItem.sync_mode === 'INCREMENTAL' || currentItem.sync_mode === 'BINLOG'">
+                  <el-row :gutter="20">
+                    <el-col :span="12">
+                      <el-form-item label="源表主键" prop="pk_field_names">
+                        <el-input v-model="currentItem.pk_field_names"
+                                  placeholder="e.g., id1,id2 (复合主键用英文逗号分隔)"></el-input>
+                      </el-form-item>
+                    </el-col>
+                  </el-row>
+                  <el-form-item label="首次执行全量同步 (推荐)">
+                    <el-switch v-model="currentItem.is_full_replace_first"></el-switch>
+                  </el-form-item>
+                </template>
 
                 <template v-if="currentItem.sync_mode === 'INCREMENTAL'">
                   <el-row :gutter="20">
                     <el-col :span="12">
                       <el-form-item label="增量时间字段" prop="incremental_field">
-                        <el-input v-model="currentItem.incremental_field" placeholder="e.g., last_modified_time"></el-input>
+                        <el-input v-model="currentItem.incremental_field"
+                                  placeholder="e.g., last_modified_time"></el-input>
                       </el-form-item>
                     </el-col>
                     <el-col :span="12">
                       <el-form-item label="增量间隔 (分钟)" prop="incremental_interval">
-                        <el-input-number v-model="currentItem.incremental_interval" :min="1" style="width: 100%;"></el-input-number>
+                        <el-input-number v-model="currentItem.incremental_interval" :min="1"
+                                         style="width: 100%;"></el-input-number>
                       </el-form-item>
                     </el-col>
                   </el-row>
@@ -945,7 +1192,8 @@
                   <el-row :gutter="20">
                     <el-col :span="12">
                       <el-form-item label="每日同步时间" prop="full_replace_time">
-                         <el-time-picker v-model="currentItem.full_replace_time_temp" format="HH:mm" value-format="HH:mm:ss"
+                        <el-time-picker v-model="currentItem.full_replace_time_temp" format="HH:mm"
+                                        value-format="HH:mm:ss"
                                         placeholder="选择时间"></el-time-picker>
                       </el-form-item>
                     </el-col>
@@ -953,31 +1201,26 @@
                 </template>
 
                 <template v-if="currentItem.sync_mode === 'INCREMENTAL' || currentItem.sync_mode === 'FULL_REPLACE'">
-                   <el-form-item label="SQL 过滤条件 (选填)" prop="source_filter_sql">
-                      <el-input type="textarea" v-model="currentItem.source_filter_sql" placeholder="e.g., status = 'approved' AND amount > 1000"></el-input>
-                   </el-form-item>
-                 </template>
-
-                <template v-if="currentItem.sync_mode === 'INCREMENTAL' || currentItem.sync_mode === 'BINLOG'">
-                   <el-form-item label="首次执行全量同步 (推荐)">
-                      <el-switch v-model="currentItem.is_full_replace_first"></el-switch>
-                   </el-form-item>
+                  <el-form-item label="SQL 过滤条件 (选填)" prop="source_filter_sql">
+                    <el-input type="textarea" v-model="currentItem.source_filter_sql"
+                              placeholder="e.g., status = 'approved' AND amount > 1000"></el-input>
+                  </el-form-item>
                 </template>
 
                 <el-divider>通知配置</el-divider>
 
-                 <el-row :gutter="20">
-                   <el-col :span="12">
-                     <el-form-item label="发送企微错误日志">
-                       <el-switch v-model="currentItem.send_error_log_to_wecom"></el-switch>
-                     </el-form-item>
-                   </el-col>
-                 </el-row>
-                 <el-form-item label="企微机器人 Webhook URL" prop="wecom_robot_webhook_url"
-                               v-if="currentItem.send_error_log_to_wecom">
-                   <el-input type="textarea" v-model="currentItem.wecom_robot_webhook_url"
-                             placeholder="如果打开了企微错误通知，请粘贴机器人 URL"></el-input>
-                 </el-form-item>
+                <el-row :gutter="20">
+                  <el-col :span="12">
+                    <el-form-item label="发送企微错误日志">
+                      <el-switch v-model="currentItem.send_error_log_to_wecom"></el-switch>
+                    </el-form-item>
+                  </el-col>
+                </el-row>
+                <el-form-item label="企微机器人 Webhook URL" prop="wecom_robot_webhook_url"
+                              v-if="currentItem.send_error_log_to_wecom">
+                  <el-input type="textarea" v-model="currentItem.wecom_robot_webhook_url"
+                            placeholder="如果打开了企微错误通知，请粘贴机器人 URL"></el-input>
+                </el-form-item>
 
               </el-form>
               <template #footer>
@@ -993,7 +1236,7 @@
             const defaultTask = {
                 task_name: '',
                 department_id: null,
-                source_db_id: null, // (新)
+                source_db_id: null,
                 source_table: '',
                 pk_field_names: '',
                 jdy_app_id: '',
@@ -1023,7 +1266,16 @@
                 return tenantDatabases.value; // 普通租户直接显示 (后端已过滤)
             });
 
-            // (新)
+            // // Custom validator for primary key
+            // const validatePkField = (rule, value, callback) => {
+            //     // crud.currentItem is available here
+            //     if (crud.currentItem.sync_mode !== 'FULL_REPLACE' && !value) {
+            //         callback(new Error('请输入源表主键 (INCREMENTAL 和 BINLOG 模式必填)'));
+            //     } else {
+            //         callback();
+            //     }
+            // };
+
             const onDepartmentChange = () => {
                 // 管理员切换部门时，清空已选的数据库
                 if (props.isSuperuser) {
@@ -1034,7 +1286,11 @@
             // 获取部门 (仅管理员)
             const fetchDepartments = async () => {
                 if (props.isSuperuser) {
-                    try { departments.value = (await apiClient.get('/departments')).data; } catch (e) { console.error(e); }
+                    try {
+                        departments.value = (await apiClient.get('/departments')).data;
+                    } catch (e) {
+                        console.error(e);
+                    }
                 }
             };
 
@@ -1051,9 +1307,9 @@
             const taskRules = {
                 task_name: [{required: true, message: '请输入任务名称', trigger: 'blur'}],
                 department_id: [{required: props.isSuperuser, message: '请选择所属部门', trigger: 'change'}],
-                source_db_id: [{required: true, message: '请选择源数据库', trigger: 'change'}], // (新)
+                source_db_id: [{required: true, message: '请选择源数据库', trigger: 'change'}],
                 source_table: [{required: true, message: '请输入源表名', trigger: 'blur'}],
-                pk_field_names: [{required: true, message: '请输入源表主键', trigger: 'blur'}],
+                k_field_names: [{required: true, message: '请输入源表主键', trigger: 'blur'}],
                 jdy_app_id: [{required: true, message: '请输入 App ID', trigger: 'blur'}],
                 jdy_entry_id: [{required: true, message: '请输入 Entry ID', trigger: 'blur'}],
                 // ... (其他规则与原文件相同)
@@ -1128,7 +1384,8 @@
                   <div style="padding: 10px; background-color: #f9f9f9;"><p><strong>Traceback:</strong></p>
                     <pre style="white-space: pre-wrap; word-wrap: break-word;">{{ props.row.traceback || 'N/A' }}</pre>
                     <p><strong>Payload:</strong></p>
-                    <pre style="white-space: pre-wrap; word-wrap: break-word; max-height: 300px; overflow-y: auto;">{{ formatPayload(props.row.payload) }}</pre>
+                    <pre
+                        style="white-space: pre-wrap; word-wrap: break-word; max-height: 300px; overflow-y: auto;">{{ formatPayload(props.row.payload) }}</pre>
                   </div>
                 </template>
               </el-table-column>
@@ -1136,13 +1393,16 @@
               <el-table-column prop="timestamp" label="时间" width="170" sortable>
                 <template #default="scope">{{ formatDateTime(scope.row.timestamp) }}</template>
               </el-table-column>
-              <el-table-column prop="department_name" label="所属部门" width="120" v-if="isSuperuser" sortable></el-table-column>
+              <el-table-column prop="department_name" label="所属部门" width="120" v-if="isSuperuser"
+                               sortable></el-table-column>
               <el-table-column prop="task_id" label="任务ID" width="100" sortable></el-table-column>
               <el-table-column prop="table_name" label="表名" width="150" sortable></el-table-column>
               <el-table-column prop="app_id" label="App ID" width="120"></el-table-column>
               <el-table-column prop="entry_id" label="Entry ID" width="120"></el-table-column>
               <el-table-column prop="error_message" label="错误信息" min-width="250">
-                <template #default="scope"> <div style="white-space: pre-wrap;">{{ scope.row.error_message }}</div> </template>
+                <template #default="scope">
+                  <div style="white-space: pre-wrap;">{{ scope.row.error_message }}</div>
+                </template>
               </el-table-column>
             </el-table>
           </el-card>
@@ -1181,9 +1441,23 @@
             const formatDateTime = (isoDateTime) => isoDateTime ? new Date(isoDateTime).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai'}) : '-';
             const formatPayload = (payloadStr) => {
                 if (!payloadStr) return 'N/A';
-                try { return JSON.stringify(JSON.parse(payloadStr), null, 2); } catch (e) { return payloadStr; }
+                try {
+                    return JSON.stringify(JSON.parse(payloadStr), null, 2);
+                } catch (e) {
+                    return payloadStr;
+                }
             };
-            return { items, loading, fetchItems, filters, filteredLogs, clearFilters, formatDateTime, formatPayload, ElementPlusIcons };
+            return {
+                items,
+                loading,
+                fetchItems,
+                filters,
+                filteredLogs,
+                clearFilters,
+                formatDateTime,
+                formatPayload,
+                ElementPlusIcons
+            };
         }
     };
 
