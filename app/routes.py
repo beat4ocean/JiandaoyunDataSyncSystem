@@ -4,6 +4,7 @@ from flask import Blueprint, request, jsonify, g
 from flask_jwt_extended import jwt_required, get_jwt
 from sqlalchemy.orm import joinedload
 from sqlalchemy.exc import IntegrityError
+from datetime import time, date, datetime
 from app.models import (Department, User, DatabaseInfo, JdyKeyInfo, SyncTask, SyncErrLog)
 from app.auth import superuser_required
 from app.utils import test_db_connection
@@ -28,7 +29,17 @@ def to_dict(model_instance):
         # 不暴露密码哈希
         if column.name == 'password':
             continue
-        d[column.name] = getattr(model_instance, column.name)
+
+        # --- 2. 修复时间解析报错的bug ---
+        value = getattr(model_instance, column.name)
+
+        if isinstance(value, (datetime, date)):
+            d[column.name] = value.isoformat()
+        elif isinstance(value, time):
+            # 将 time 对象格式化为 HH:MM:SS 字符串
+            d[column.name] = value.strftime('%H:%M:%S')
+        else:
+            d[column.name] = value
 
     # --- 自动添加 department_name (如果存在) ---
     if hasattr(model_instance, 'department') and model_instance.department:
