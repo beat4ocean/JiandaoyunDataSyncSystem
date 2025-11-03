@@ -40,7 +40,7 @@ def get_dynamic_session(task: SyncTask) -> Generator[Any, Any, None]:
         with ConfigSession() as config_session:
             db_info = config_session.query(DatabaseInfo).get(task.source_db_id)
             if not db_info:
-                raise ValueError(f"[{task.task_id}] Source DatabaseInfo (ID: {task.source_db_id}) not found.")
+                raise ValueError(f"task_id:[{task.task_id}] Source DatabaseInfo (ID: {task.source_db_id}) not found.")
     else:
         db_info = task.source_database
 
@@ -48,7 +48,7 @@ def get_dynamic_session(task: SyncTask) -> Generator[Any, Any, None]:
 
     # 检查缓存
     if db_id not in dynamic_engine_cache:
-        print(f"[{task.task_id}] Creating new dynamic engine for source DB: {db_info.db_show_name} (ID: {db_id})")
+        print(f"task_id:[{task.task_id}] Creating new dynamic engine for source DB: {db_info.db_show_name} (ID: {db_id})")
         # 构建连接字符串
         db_url = (
             f"{db_info.db_type}://{db_info.db_user}:{quote_plus(db_info.db_password)}@"
@@ -141,7 +141,7 @@ class FieldMappingService:
         """
         从简道云 API 更新指定任务的字段映射缓存
         """
-        print(f"[{task.task_id}] Updating field mappings for task...")
+        print(f"task_id:[{task.task_id}] Updating field mappings for task...")
 
         if not task.department or not task.department.jdy_key_info or not task.department.jdy_key_info.api_key:
             log_sync_error(
@@ -169,10 +169,10 @@ class FieldMappingService:
                 try:
                     data_modify_time = datetime.fromisoformat(data_modify_time_str.replace('Z', '+00:00'))
                 except ValueError:
-                    print(f"[{task.task_id}] Warning: Could not parse dataModifyTime '{data_modify_time_str}'.")
+                    print(f"task_id:[{task.task_id}] Warning: Could not parse dataModifyTime '{data_modify_time_str}'.")
 
             if not widgets:
-                print(f"[{task.task_id}] No widgets found for form.")
+                print(f"task_id:[{task.task_id}] No widgets found for form.")
                 return
 
             # 4. 删除旧映射
@@ -204,21 +204,21 @@ class FieldMappingService:
 
             config_session.add_all(new_mappings)
             config_session.commit()
-            print(f"[{task.task_id}] Successfully updated {len(new_mappings)} field mappings.")
+            print(f"task_id:[{task.task_id}] Successfully updated {len(new_mappings)} field mappings.")
 
         except (requests.exceptions.RequestException, requests.exceptions.HTTPError) as e:
             config_session.rollback()
             log_sync_error(
                 task_config=task,
                 error=e,
-                extra_info=f"[{task.task_id}] Failed to update field mappings via V5 API."
+                extra_info=f"task_id:[{task.task_id}] Failed to update field mappings via V5 API."
             )
         except IntegrityError as e:
             config_session.rollback()
             log_sync_error(
                 task_config=task,
                 error=e,
-                extra_info=f"[{task.task_id}] Failed to update mappings due to IntegrityError (e.g., duplicate widget_alias?)."
+                extra_info=f"task_id:[{task.task_id}] Failed to update mappings due to IntegrityError (e.g., duplicate widget_alias?)."
             )
 
 
@@ -237,7 +237,7 @@ class SyncService:
         检查源表, 如果是物理表 (BASE TABLE) 则添加 _id 字段和索引。
         此方法在任务首次运行前调用。
         """
-        print(f"[{task.task_id}] Preparing source table: {task.source_table}...")
+        print(f"task_id:[{task.task_id}] Preparing source table: {task.source_table}...")
 
         # 动态获取引擎和会话
         try:
@@ -265,7 +265,7 @@ class SyncService:
                 table_type = result[0] if result else None
 
                 if table_type == 'VIEW':
-                    print(f"[{task.task_id}] Source is a VIEW. Skipping _id column check.")
+                    print(f"task_id:[{task.task_id}] Source is a VIEW. Skipping _id column check.")
                     return  # 视图, 正常退出
 
                 if table_type != 'BASE TABLE':
@@ -276,20 +276,20 @@ class SyncService:
                 # 3. 检查 `_id` 列是否存在
                 columns = [col['name'] for col in inspector.get_columns(task.source_table)]
                 if '_id' not in columns:
-                    print(f"[{task.task_id}] Adding `_id` column to table '{task.source_table}'...")
+                    print(f"task_id:[{task.task_id}] Adding `_id` column to table '{task.source_table}'...")
                     try:
                         # 提交在会话级别处理
                         source_conn.execute(
                             text(f"ALTER TABLE `{task.source_table}` ADD COLUMN `_id` VARCHAR(50) NULL DEFAULT NULL"))
                         source_conn.execute(text(f"ALTER TABLE `{task.source_table}` ADD INDEX `idx__id` (`_id`)"))
                         source_conn.commit()
-                        print(f"[{task.task_id}] Successfully added `_id` column and index.")
+                        print(f"task_id:[{task.task_id}] Successfully added `_id` column and index.")
                     except Exception as alter_e:
                         source_conn.rollback()
                         log_sync_error(task_config=task, error=alter_e,
                                        extra_info=f"Failed to add `_id` column to '{task.source_table}'.")
                 else:
-                    print(f"[{task.task_id}] `_id` column already exists.")
+                    print(f"task_id:[{task.task_id}] `_id` column already exists.")
 
         except NoSuchTableError:
             log_sync_error(task_config=task,
@@ -329,7 +329,7 @@ class SyncService:
             # self._view_status_cache[cache_key] = is_view
 
             if is_view:
-                print(f"[{task.task_id}] Source table {task.source_table} is a VIEW.")
+                print(f"task_id:[{task.task_id}] Source table {task.source_table} is a VIEW.")
 
             return is_view
 
@@ -337,7 +337,7 @@ class SyncService:
             log_sync_error(
                 task_config=task,
                 error=e,
-                extra_info=f"[{task.task_id}] Failed to check if table is view."
+                extra_info=f"task_id:[{task.task_id}] Failed to check if table is view."
             )
             return False  # 默认不是视图以防止意外
 
@@ -380,7 +380,7 @@ class SyncService:
         解析复合主键并从行中提取值
         """
         if not task.pk_field_names:
-            raise ValueError(f"[{task.task_id}] pk_field_names is not configured.")
+            raise ValueError(f"task_id:[{task.task_id}] pk_field_names is not configured.")
 
         # pk_field_name 格式 "pk1,pk2,pk3"
         pk_fields = [pk.strip() for pk in task.pk_field_names.split(',')]
@@ -388,7 +388,7 @@ class SyncService:
 
         for field in pk_fields:
             if field not in row:
-                raise ValueError(f"[{task.task_id}] Composite PK field '{field}' not found in row data.")
+                raise ValueError(f"task_id:[{task.task_id}] Composite PK field '{field}' not found in row data.")
             pk_values.append(row[field])
 
         return pk_fields, pk_values
@@ -457,7 +457,7 @@ class SyncService:
 
                 log_sync_error(
                     task_config=task,
-                    extra_info=f"[{task.task_id}] Found {len(jdy_data)} duplicate entries for PK {log_pk_str}. Keeping {id_to_keep}, deleting {len(ids_to_delete)}."
+                    extra_info=f"task_id:[{task.task_id}] Found {len(jdy_data)} duplicate entries for PK {log_pk_str}. Keeping {id_to_keep}, deleting {len(ids_to_delete)}."
                 )
 
                 try:
@@ -469,12 +469,12 @@ class SyncService:
                     total_deleted += success_count
                     if success_count != len(data_ids):
                         log_sync_error(task_config=task,
-                                       extra_info=f"[{task.task_id}] Delete mismatch. Requested: {len(data_ids)}, Deleted: {success_count}.")
+                                       extra_info=f"task_id:[{task.task_id}] Delete mismatch. Requested: {len(data_ids)}, Deleted: {success_count}.")
                 except Exception as e:
                     log_sync_error(
                         task_config=task,
                         error=e,
-                        extra_info=f"[{task.task_id}] Failed to delete duplicate entries for PK {log_pk_str}."
+                        extra_info=f"task_id:[{task.task_id}] Failed to delete duplicate entries for PK {log_pk_str}."
                     )
 
                 return id_to_keep  # 返回保留的 ID
@@ -486,7 +486,7 @@ class SyncService:
             log_sync_error(
                 task_config=task,
                 error=e,
-                extra_info=f"[{task.task_id}] V5 API error finding Jdy ID by PK."
+                extra_info=f"task_id:[{task.task_id}] V5 API error finding Jdy ID by PK."
             )
             return None
 
@@ -502,7 +502,7 @@ class SyncService:
         将简道云 _id 回写到源数据库
         """
         if self._is_view(task):
-            # print(f"[{task.task_id}] Skipping _id writeback for VIEW.")
+            # print(f"task_id:[{task.task_id}] Skipping _id writeback for VIEW.")
             return  # 视图不能回写
 
         try:
@@ -537,7 +537,7 @@ class SyncService:
             log_sync_error(
                 task_config=task,
                 error=e,
-                extra_info=f"[{task.task_id}] Failed to writeback _id {jdy_id} to PK {log_pk_str}."
+                extra_info=f"task_id:[{task.task_id}] Failed to writeback _id {jdy_id} to PK {log_pk_str}."
             )
 
     def _update_task_status(
@@ -567,7 +567,7 @@ class SyncService:
             config_session.commit()
         except Exception as e:
             config_session.rollback()
-            print(f"[{task.task_id}] CRITICAL: Failed to update task status to {status}: {e}")
+            print(f"task_id:[{task.task_id}] CRITICAL: Failed to update task status to {status}: {e}")
 
     # --- 公共同步方法 ---
     # --- 首次全量同步的内部方法 ---
@@ -577,7 +577,7 @@ class SyncService:
         内部全量同步逻辑, 支持SQL过滤和选择性删除
         """
         mode = "FULL_REPLACE" if delete_first else "INITIAL_SYNC"
-        print(f"[{task.task_id}] Running {mode} sync...")
+        print(f"task_id:[{task.task_id}] Running {mode} sync...")
 
         total_deleted = 0
         total_created = 0
@@ -599,7 +599,7 @@ class SyncService:
 
             # 2. 仅在 delete_first=True 时删除
             if delete_first:
-                print(f"[{task.task_id}] Deleting all data from Jdy...")
+                print(f"task_id:[{task.task_id}] Deleting all data from Jdy...")
                 data_id = None
                 while True:
                     response = data_api_query.query_list_data(
@@ -618,12 +618,12 @@ class SyncService:
                     total_deleted += success_count
                     if success_count != len(data_ids):
                         log_sync_error(task_config=task,
-                                       extra_info=f"[{task.task_id}] Delete mismatch. Requested: {len(data_ids)}, Deleted: {success_count}.")
+                                       extra_info=f"task_id:[{task.task_id}] Delete mismatch. Requested: {len(data_ids)}, Deleted: {success_count}.")
 
                     data_id = jdy_data[-1]['_id']
-                print(f"[{task.task_id}] Jdy data deleted ({total_deleted} items). Fetching from source DB...")
+                print(f"task_id:[{task.task_id}] Jdy data deleted ({total_deleted} items). Fetching from source DB...")
             else:
-                print(f"[{task.task_id}] Skipping deletion for {mode}.")
+                print(f"task_id:[{task.task_id}] Skipping deletion for {mode}.")
 
             # 3. 构建带 SQL 过滤的查询
             with get_dynamic_session(task) as source_session:
@@ -653,7 +653,7 @@ class SyncService:
                     total_created += success_count
                     if success_count != len(batch_data):
                         log_sync_error(task_config=task,
-                                       extra_info=f"[{task.task_id}] Create mismatch. Req: {len(batch_data)}, Created: {success_count}. TransID: {trans_id}")
+                                       extra_info=f"task_id:[{task.task_id}] Create mismatch. Req: {len(batch_data)}, Created: {success_count}. TransID: {trans_id}")
                     batch_data = []
 
             if batch_data:
@@ -667,13 +667,13 @@ class SyncService:
                 total_created += success_count
                 if success_count != len(batch_data):
                     log_sync_error(task_config=task,
-                                   extra_info=f"[{task.task_id}] Create mismatch. Req: {len(batch_data)}, Created: {success_count}. TransID: {trans_id}")
+                                   extra_info=f"task_id:[{task.task_id}] Create mismatch. Req: {len(batch_data)}, Created: {success_count}. TransID: {trans_id}")
 
             print(
-                f"[{task.task_id}] {mode} sync completed. Source rows: {len(rows)}, Created in Jdy: {total_created}.")
+                f"task_id:[{task.task_id}] {mode} sync completed. Source rows: {len(rows)}, Created in Jdy: {total_created}.")
             if len(rows) != total_created:
                 log_sync_error(task_config=task,
-                               extra_info=f"[{task.task_id}] FINAL COUNT MISMATCH. Source: {len(rows)}, Created: {total_created}.")
+                               extra_info=f"task_id:[{task.task_id}] FINAL COUNT MISMATCH. Source: {len(rows)}, Created: {total_created}.")
 
             # 更新时间, 但不更新状态 (由调用者更新)
             self._update_task_status(config_session, task,
@@ -682,7 +682,7 @@ class SyncService:
 
         except Exception as e:
             # 不更新状态, 只记录日志, 抛出异常
-            log_sync_error(task_config=task, error=e, extra_info=f"[{task.task_id}] {mode} failed.")
+            log_sync_error(task_config=task, error=e, extra_info=f"task_id:[{task.task_id}] {mode} failed.")
             raise e  # 抛出异常, 让调用者处理状态
 
     @retry()
@@ -694,10 +694,10 @@ class SyncService:
         # 视图支持全量覆盖
         # if self._is_view(task):
         #     log_sync_error(task_config=task,
-        #                    extra_info=f"[{task.task_id}] FULL_REPLACE mode is not allowed for VIEWS. Skipping task.")
+        #                    extra_info=f"task_id:[{task.task_id}] FULL_REPLACE mode is not allowed for VIEWS. Skipping task.")
         #     return
 
-        print(f"[{task.task_id}] Running FULL_REPLACE sync (Scheduled)...")
+        print(f"task_id:[{task.task_id}] Running FULL_REPLACE sync (Scheduled)...")
         self._update_task_status(config_session, task, status='running')
 
         try:
@@ -717,7 +717,7 @@ class SyncService:
         执行增量同步 (Upsert)
         (接受会话, 事务 ID, 去重, 复合主键，支持首次全量同步 和 source_filter_sql)
         """
-        print(f"[{task.task_id}] Running INCREMENTAL sync...")
+        print(f"task_id:[{task.task_id}] Running INCREMENTAL sync...")
         self._update_task_status(config_session, task, status='running')
 
         if not task.department or not task.department.jdy_key_info or not task.department.jdy_key_info.api_key:
@@ -735,7 +735,7 @@ class SyncService:
 
             # 1. 检查是否需要首次全量同步
             if task.is_full_replace_first:
-                print(f"[{task.task_id}] First run: Executing initial full replace...")
+                print(f"task_id:[{task.task_id}] First run: Executing initial full replace...")
                 try:
                     # 调用全量同步
                     self._run_full_sync(config_session, task, delete_first=True)
@@ -744,7 +744,7 @@ class SyncService:
                                              status='idle',
                                              last_sync_time=current_sync_time,
                                              is_full_replace_first=False)
-                    print(f"[{task.task_id}] Initial full sync complete.")
+                    print(f"task_id:[{task.task_id}] Initial full sync complete.")
                     return  # 本次运行结束
                 except Exception as e:
                     # 首次全量同步失败, 保持 is_full_replace_first=True, 设为 error
@@ -799,11 +799,11 @@ class SyncService:
                 # 1. 如果是 DATE 类型，总是截断
                 if col_type_name == 'DATE':
                     last_sync_time_for_query = last_sync_time.replace(hour=0, minute=0, second=0, microsecond=0)
-                    print(f"[{task.task_id}] Detected DATE type. Querying >= {last_sync_time_for_query} (Truncated)")
+                    print(f"task_id:[{task.task_id}] Detected DATE type. Querying >= {last_sync_time_for_query} (Truncated)")
 
                 # 2. 如果是 DATETIME，执行数据探测
                 elif col_type_name.startswith('DATETIME'):
-                    print(f"[{task.task_id}] Detected DATETIME type. Probing data ...")
+                    print(f"task_id:[{task.task_id}] Detected DATETIME type. Probing data ...")
                     is_fake_datetime = False
 
                     # 探测查询，限制1000条
@@ -815,7 +815,7 @@ class SyncService:
 
                     # 没有数据，无法判断。为安全起见，使用截断（防止丢失数据）
                     if not probe_results:
-                        print(f"[{task.task_id}] No data found for probing.")
+                        print(f"task_id:[{task.task_id}] No data found for probing.")
                         is_fake_datetime = True
                     else:
                         min_time = time_obj(0, 0, 0)
@@ -823,22 +823,22 @@ class SyncService:
                         for row in probe_results:
                             dt_val = row[0]
                             if dt_val is not None and dt_val.time() != min_time:
-                                # print(f"[{task.task_id}] Detected DATETIME type is yyyy-MM-dd HH:mm:ss.")
+                                # print(f"task_id:[{task.task_id}] Detected DATETIME type is yyyy-MM-dd HH:mm:ss.")
                                 all_are_midnight = False
                                 break
                         is_fake_datetime = all_are_midnight
                     if is_fake_datetime:
                         print(
-                            f"[{task.task_id}] Probe confirms yyyy-MM-dd 00:00:00 DATETIME format. Using truncated timestamp.")
+                            f"task_id:[{task.task_id}] Probe confirms yyyy-MM-dd 00:00:00 DATETIME format. Using truncated timestamp.")
                         last_sync_time_for_query = last_sync_time.replace(hour=0, minute=0, second=0, microsecond=0)
                     else:
                         print(
-                            f"[{task.task_id}] Probe found yyyy-MM-dd HH:mm:ss DATETIME format. Using exact timestamp.")
+                            f"task_id:[{task.task_id}] Probe found yyyy-MM-dd HH:mm:ss DATETIME format. Using exact timestamp.")
                         last_sync_time_for_query = last_sync_time
                 else:
                     # 3. 如果是 TIMESTAMP 或其他类型，使用精确时间
                     last_sync_time_for_query = last_sync_time
-                    print(f"[{task.task_id}] Detected {col_type_name} type. Querying >= {last_sync_time_for_query}")
+                    print(f"task_id:[{task.task_id}] Detected {col_type_name} type. Querying >= {last_sync_time_for_query}")
 
                 # 5. 获取源数据 (带 SQL 过滤)
                 base_query = (
@@ -853,7 +853,7 @@ class SyncService:
                 rows = source_session.execute(text(base_query), params).mappings().all()
 
                 if not rows:
-                    print(f"[{task.task_id}] No new data found since {last_sync_time_for_query}.")
+                    print(f"task_id:[{task.task_id}] No new data found since {last_sync_time_for_query}.")
                     self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
                     return
 
@@ -865,7 +865,7 @@ class SyncService:
                         self._get_pk_fields_and_values(task, row_dict)
                     except ValueError as e:
                         log_sync_error(task_config=task, error=e,
-                                       extra_info=f"[{task.task_id}] Row missing PK. Skipping.",
+                                       extra_info=f"task_id:[{task.task_id}] Row missing PK. Skipping.",
                                        payload=row_dict)
                         continue
 
@@ -873,7 +873,7 @@ class SyncService:
                     if not data_payload:
                         log_sync_error(task_config=task,
                                        payload=row_dict,
-                                       extra_info=f"[{task.task_id}] Row missing required fields. Skipping.")
+                                       extra_info=f"task_id:[{task.task_id}] Row missing required fields. Skipping.")
                         continue
 
                     # 传入 row_dict 以进行复合主键去重
@@ -893,7 +893,7 @@ class SyncService:
                             log_sync_error(task_config=task,
                                            payload=data_payload,
                                            error=update_response,
-                                           extra_info=f"[{task.task_id}] Failed to update data.")
+                                           extra_info=f"task_id:[{task.task_id}] Failed to update data.")
                         else:
                             count_updated += 1
                     else:
@@ -907,19 +907,19 @@ class SyncService:
                             log_sync_error(task_config=task,
                                            payload=data_payload,
                                            error=create_response,
-                                           extra_info=f"[{task.task_id}] Failed to create data.")
+                                           extra_info=f"task_id:[{task.task_id}] Failed to create data.")
                         # 是否需要回写，有待商榷，实际可不用回写
                         # if new_jdy_id:
                         #     count_new += 1
                         #     # 传入 row_dict 以进行复合主键回写
                         #     self._writeback_id_to_source(source_session, task, new_jdy_id, row_dict)
 
-            print(f"[{task.task_id}] INCREMENTAL sync completed. New: {count_new}, Updated: {count_updated}.")
+            print(f"task_id:[{task.task_id}] INCREMENTAL sync completed. New: {count_new}, Updated: {count_updated}.")
             self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
 
         except Exception as e:
             config_session.rollback()
-            log_sync_error(task_config=task, error=e, extra_info=f"[{task.task_id}] INCREMENTAL failed.")
+            log_sync_error(task_config=task, error=e, extra_info=f"task_id:[{task.task_id}] INCREMENTAL failed.")
             self._update_task_status(config_session, task, status='error')
 
     @retry()
@@ -930,7 +930,7 @@ class SyncService:
         """
         if self._is_view(task):
             log_sync_error(task_config=task,
-                           extra_info=f"[{task.task_id}] BINLOG mode is not allowed for VIEWS. Stopping listener.")
+                           extra_info=f"task_id:[{task.task_id}] BINLOG mode is not allowed for VIEWS. Stopping listener.")
             return
 
         thread_name = f"BinlogListener-{task.task_id}"
@@ -1049,7 +1049,7 @@ class SyncService:
                                 if not data_payload:
                                     log_sync_error(task_config=task,
                                                    payload=row['values'],
-                                                   extra_info=f"[{task.task_id}] Row missing required fields. Skipping.")
+                                                   extra_info=f"task_id:[{task.task_id}] Row missing required fields. Skipping.")
                                     continue
 
                                 create_response = data_api_create.create_single_data(
@@ -1081,7 +1081,7 @@ class SyncService:
                                     if not data_payload:
                                         log_sync_error(task_config=task,
                                                        payload=row['after_values'],
-                                                       extra_info=f"[{task.task_id}] Row missing required fields. Skipping.")
+                                                       extra_info=f"task_id:[{task.task_id}] Row missing required fields. Skipping.")
                                         continue
 
                                     update_response = data_api_update.update_single_data(
@@ -1093,7 +1093,7 @@ class SyncService:
                                         log_sync_error(task_config=task,
                                                        payload=data_payload,
                                                        error=update_response,
-                                                       extra_info=f"[{task.task_id}] Failed to update data.")
+                                                       extra_info=f"task_id:[{task.task_id}] Failed to update data.")
                                     else:
                                         print(f"[{thread_name}] Updated data.")
                                 else:
@@ -1105,7 +1105,7 @@ class SyncService:
                                     if not data_payload:
                                         log_sync_error(task_config=task,
                                                        payload=row['after_values'],
-                                                       extra_info=f"[{task.task_id}] Row missing required fields. Skipping.")
+                                                       extra_info=f"task_id:[{task.task_id}] Row missing required fields. Skipping.")
                                         continue
 
                                     create_response = data_api_create.create_single_data(
