@@ -141,6 +141,7 @@ class JdyKeyInfo(ConfigBase):
     department_id = Column(Integer, ForeignKey('Department.id'), nullable=False, unique=True, comment="关联的租户ID")
 
     api_key = Column(String(255), nullable=False, comment="该项目专属的 API Key")
+    api_secret = Column(String(255), nullable=True, comment="该项目专属的 API Secret")
 
     created_at = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), comment="创建时间")
     updated_at = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), onupdate=lambda: datetime.now(TZ_UTC_8),
