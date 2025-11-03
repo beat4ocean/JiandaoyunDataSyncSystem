@@ -463,7 +463,8 @@ class SyncService:
                 try:
                     # 调用批量删除 (QPS 10)
                     data_ids = [d['_id'] for d in jdy_data]
-                    delete_responses = data_api_delete.delete_batch_data(task.jdy_app_id, task.jdy_entry_id, ids_to_delete)
+                    delete_responses = data_api_delete.delete_batch_data(task.jdy_app_id, task.jdy_entry_id,
+                                                                         ids_to_delete)
                     success_count = sum(resp.get('success_count', 0) for resp in delete_responses)
                     total_deleted += success_count
                     if success_count != len(data_ids):
@@ -867,7 +868,13 @@ class SyncService:
                                        extra_info=f"[{task.task_id}] Row missing PK. Skipping.",
                                        payload=row_dict)
                         continue
+
                     data_payload = self._transform_row_to_jdy(row_dict, payload_map)
+                    if not data_payload:
+                        log_sync_error(task_config=task,
+                                       payload=row_dict,
+                                       extra_info=f"[{task.task_id}] Row missing required fields. Skipping.")
+                        continue
 
                     # 传入 row_dict 以进行复合主键去重
                     jdy_id = row_dict.get('_id') or self._find_jdy_id_by_pk(
@@ -1038,6 +1045,13 @@ class SyncService:
 
                             if isinstance(binlog_event, WriteRowsEvent):
                                 data_payload = self._transform_row_to_jdy(row['values'], payload_map)
+
+                                if not data_payload:
+                                    log_sync_error(task_config=task,
+                                                   payload=row['values'],
+                                                   extra_info=f"[{task.task_id}] Row missing required fields. Skipping.")
+                                    continue
+
                                 create_response = data_api_create.create_single_data(
                                     task.jdy_app_id, task.jdy_entry_id,
                                     data_payload, transaction_id=trans_id
@@ -1045,7 +1059,7 @@ class SyncService:
                                 new_jdy_id = create_response.get('data', {}).get('_id')
                                 if not new_jdy_id:
                                     log_sync_error(task_config=task,
-                                                   payload = data_payload,
+                                                   payload=data_payload,
                                                    error=create_response,
                                                    extra_info=f"[{thread_name}] Failed to create data.")
                                 # binlog 模式不需要回写_id, 会导致binlog被重复激发
@@ -1063,6 +1077,13 @@ class SyncService:
 
                                 if jdy_id:
                                     data_payload = self._transform_row_to_jdy(row['after_values'], payload_map)
+
+                                    if not data_payload:
+                                        log_sync_error(task_config=task,
+                                                       payload=row['after_values'],
+                                                       extra_info=f"[{task.task_id}] Row missing required fields. Skipping.")
+                                        continue
+
                                     update_response = data_api_update.update_single_data(
                                         task.jdy_app_id, task.jdy_entry_id, jdy_id,
                                         data_payload, transaction_id=trans_id
@@ -1081,6 +1102,12 @@ class SyncService:
                                     #                payload=row['after_values'])
                                     # 简道云中没有，则新增
                                     data_payload = self._transform_row_to_jdy(row['after_values'], payload_map)
+                                    if not data_payload:
+                                        log_sync_error(task_config=task,
+                                                       payload=row['after_values'],
+                                                       extra_info=f"[{task.task_id}] Row missing required fields. Skipping.")
+                                        continue
+
                                     create_response = data_api_create.create_single_data(
                                         task.jdy_app_id, task.jdy_entry_id,
                                         data_payload, transaction_id=trans_id
@@ -1103,7 +1130,8 @@ class SyncService:
 
                                 if jdy_id:
                                     # Delete single 没有 transaction_id
-                                    delete_response = data_api_delete.delete_single_data(task.jdy_app_id, task.jdy_entry_id, jdy_id)
+                                    delete_response = data_api_delete.delete_single_data(task.jdy_app_id,
+                                                                                         task.jdy_entry_id, jdy_id)
                                     success = delete_response.get('status')
                                     if not success:
                                         log_sync_error(task_config=task,
@@ -1111,7 +1139,7 @@ class SyncService:
                                                        error=delete_response,
                                                        extra_info=f"[{thread_name}] Failed to delete data.")
                                     else:
-                                       print(f"[{thread_name}] Deleted data.")
+                                        print(f"[{thread_name}] Deleted data.")
                                 else:
                                     log_sync_error(task_config=task,
                                                    extra_info=f"[{thread_name}] Delete event skipped: Jdy ID not found.",
