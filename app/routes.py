@@ -4,7 +4,7 @@ from flask import Blueprint, request, jsonify, g
 from flask_jwt_extended import jwt_required, get_jwt
 from sqlalchemy.orm import joinedload
 from sqlalchemy.exc import IntegrityError
-from app.models import ( Department, User, DatabaseInfo, JdyKeyInfo, SyncTask, SyncErrLog)
+from app.models import (Department, User, DatabaseInfo, JdyKeyInfo, SyncTask, SyncErrLog)
 from app.auth import superuser_required
 from app.utils import test_db_connection
 
@@ -496,11 +496,10 @@ def test_database_connection():
     data = request.get_json()
 
     # 权限检查：确保非超管用户不能测试其他租户的配置
-    # (虽然这里只是测试，不保存，但最好保持一致)
     if not claims.get('is_superuser'):
-        # 如果提供了 department_id 且与用户不符
-        if 'department_id' in data and data.get('department_id') != claims.get('department_id'):
-            return jsonify({"msg": "Forbidden: Cannot test connection for another tenant."}), 403
+        # # 如果提供了 department_id 且与用户不符
+        # if 'department_id' in data and data.get('department_id') != claims.get('department_id'):
+        #     return jsonify({"msg": "Forbidden: Cannot test connection for another tenant."}), 403
 
         # 强制使用自己的 department_id (虽然测试连接本身不依赖此ID)
         data['department_id'] = claims.get('department_id')
