@@ -755,6 +755,9 @@
               <el-table-column label="API Key">
                 <template #default="scope"> {{ scope.row.api_key ? scope.row.api_key.substring(0, 10) : '' }}... </template>
               </el-table-column>
+              <el-table-column label="API Secret">
+                <template #default="scope"> {{ scope.row.api_secret ? scope.row.api_secret.substring(0, 10) : '' }}... </template>
+              </el-table-column>
               <el-table-column label="操作" width="300" fixed="right">
                 <template #default="scope">
                   <el-button size="small" @click="openDialog(scope.row)" :icon="ElementPlusIcons.Edit">编辑</el-button>
@@ -772,6 +775,9 @@
                 <el-form-item label="API Key" prop="api_key">
                   <el-input v-model="currentItem.api_key" placeholder="请输入简道云 API Key"></el-input>
                 </el-form-item>
+                <el-form-item label="API Secret" prop="api_secret">
+                  <el-input v-model="currentItem.api_secret" placeholder="简道云 API Secret，用于接收简道云数据推送，可置空"></el-input>
+                </el-form-item>
               </el-form>
               <template #footer>
                 <el-button @click="closeDialog">取消</el-button>
@@ -782,13 +788,14 @@
         `,
         props: ['isSuperuser'],
         setup(props) {
-            const defaultItem = { department_id: null, api_key: '' };
+            const defaultItem = { department_id: null, api_key: '', api_secret: '' };
             const crud = useCrud('/jdy-keys', '密钥', defaultItem, 'id');
             const departments = ref([]);
 
             const keyRules = {
                 department_id: [{required: props.isSuperuser, message: '请选择部门', trigger: 'change'}],
                 api_key: [{required: true, message: '请输入 API Key', trigger: 'blur'}],
+                api_secret: [{required: false, message: '请输入 API Secret', trigger: 'blur'}],
             };
 
             const fetchDepartments = async () => {

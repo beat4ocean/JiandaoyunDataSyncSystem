@@ -8,7 +8,7 @@ from sqlalchemy import select, update, delete, desc
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-from app.models import JdyKeyInfo, SyncTask, SyncErrLog, FormFieldMapping
+from app.models import JdyKeyInfo, SyncTask, SyncErrLog, FormFieldMapping, Department, DatabaseInfo
 from app.scheduler import add_or_update_task_in_scheduler, remove_task_from_scheduler
 
 api_bp = Blueprint('api', __name__, url_prefix='/api')
@@ -35,7 +35,7 @@ def row_to_dict(row):
 def get_jdy_keys():
     session = g.config_session
     try:
-        keys = session.scalars(select(JdyKeyInfo).order_by(JdyKeyInfo.department.department_name)).all()
+        keys = session.scalars(select(JdyKeyInfo).order_by(JdyKeyInfo.department_id)).all()
         return jsonify([row_to_dict(key) for key in keys])
     except Exception as e:
         print(f"Error getting JdyKeyInfo: {e}\n{traceback.format_exc()}")
@@ -48,10 +48,16 @@ def add_jdy_key():
     data = request.get_json()
     session = g.config_session
     try:
+        # --- 查询 department_id ---
+        department_name = data.get('department_name')
+        department = session.scalar(select(Department).where(Department.department_name == department_name))
+        if not department:
+            return jsonify({"error": f"Department '{department_name}' not found."}), 400
+
         new_key = JdyKeyInfo(
-            department_name=data.get('department_name'),
+            department_id=department.id,
             api_key=data.get('api_key'),
-            # app_secret is not in this model
+            app_secret=data.get('api_secret')
         )
         session.add(new_key)
         session.commit()
@@ -71,14 +77,22 @@ def update_jdy_key(key_id):
     data = request.get_json()
     session = g.config_session
     try:
+        # --- 查询 department_id ---
+        department_name = data.get('department_name')
+        department = session.scalar(select(Department).where(Department.department_name == department_name))
+        if not department:
+            return jsonify({"error": f"Department '{department_name}' not found."}), 400
+
         stmt = update(JdyKeyInfo).where(JdyKeyInfo.id == key_id).values(
-            department_name=data.get('department_name'),
-            api_key=data.get('api_key')
+            department_id=department.id,
+            api_key=data.get('api_key'),
+            app_secret=data.get('api_secret')
         )
         result = session.execute(stmt)
         session.commit()
         if result.rowcount == 0:
             return jsonify({"error": "JdyKeyInfo not found"}), 404
+
         updated_key = session.get(JdyKeyInfo, key_id)
         return jsonify(row_to_dict(updated_key))
     except IntegrityError:
@@ -146,9 +160,36 @@ def add_sync_task():
     try:
         full_replace_time_obj = _parse_time_string(data.get('full_replace_time'))
 
+        # --- 查询 department_id ---
+        department_id = data.get('department_id')
+        if not department_id:
+            department_name = data.get('department_name')
+            if department_name:
+                department = session.scalar(select(Department).where(Department.department_name == department_name))
+                if department:
+                    department_id = department.id
+
+            if not department_id:
+                return jsonify({"error": f"Department '{department_name}' not found."}), 400
+
+        # --- 查询 source_db_id ---
+        source_db_id = data.get('source_db_id')
+        if not source_db_id:
+            source_db_name = data.get('source_db_name')
+            if source_db_name:
+                source_db = session.scalar(select(DatabaseInfo).where(DatabaseInfo.db_show_name == source_db_name))
+                if source_db:
+                    source_db_id = source_db.id
+                    if not source_db.is_active:
+                        return jsonify({"error": f"Source DB '{source_db_name}' is not active."}), 400
+
+            if not source_db_id:
+                return jsonify({"error": f"Database '{source_db_id}' not found."}), 400
+
         new_task = SyncTask(
             task_name=data.get('task_name'),
-            department_name=data.get('department_name'),
+            source_db_id=source_db_id,
+            department_id=department_id,
             source_table=data.get('source_table'),
             pk_field_names=data.get('pk_field_names'),
             jdy_app_id=data.get('jdy_app_id'),
@@ -170,7 +211,8 @@ def add_sync_task():
         # --- 通知调度器 ---
         # 重新查询更新后的任务，以确保所有字段 (包括 .department) 都是最新的
         final_task = session.query(SyncTask).options(
-            joinedload(SyncTask.department)
+            joinedload(SyncTask.department),
+            joinedload(SyncTask.source_database)
         ).get(new_task.task_id)
 
         if final_task:
@@ -198,13 +240,40 @@ def update_sync_task(task_id):
     try:
         full_replace_time_obj = _parse_time_string(data.get('full_replace_time'))
 
+        # --- 查询 department_id ---
+        department_id = data.get('department_id')
+        if not department_id:
+            department_name = data.get('department_name')
+            if department_name:
+                department = session.scalar(select(Department).where(Department.department_name == department_name))
+                if department:
+                    department_id = department.id
+
+            if not department_id:
+                return jsonify({"error": f"Department '{department_name}' not found."}), 400
+
+        # --- 查询 source_db_id ---
+        source_db_id = data.get('source_db_id')
+        if not source_db_id:
+            source_db_name = data.get('source_db_name')
+            if source_db_name:
+                source_db = session.scalar(select(DatabaseInfo).where(DatabaseInfo.db_show_name == source_db_name))
+                if source_db:
+                    source_db_id = source_db.id
+                    if not source_db.is_active:
+                        return jsonify({"error": f"Source DB '{source_db_name}' is not active."}), 400
+
+            if not source_db_id:
+                return jsonify({"error": f"Database '{source_db_id}' not found."}), 400
+
         update_values = {
             'task_name': data.get('task_name'),
+            'source_db_id': source_db_id,
             'source_table': data.get('source_table'),
             'pk_field_names': data.get('pk_field_names'),
             'jdy_app_id': data.get('jdy_app_id'),
             'jdy_entry_id': data.get('jdy_entry_id'),
-            'department_name': data.get('department_name'),
+            'department_id': department_id,
             'sync_mode': data.get('sync_mode'),
             'incremental_field': data.get('incremental_field'),
             'incremental_interval': data.get('incremental_interval'),
@@ -226,7 +295,8 @@ def update_sync_task(task_id):
         # --- 通知调度器 ---
         # 重新查询更新后的任务，以确保所有字段 (包括 .department) 都是最新的
         updated_task = session.query(SyncTask).options(
-            joinedload(SyncTask.department)
+            joinedload(SyncTask.department),
+            joinedload(SyncTask.source_database)
         ).get(task_id)
 
         if updated_task:
