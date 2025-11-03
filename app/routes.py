@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import logging
 from flask import Blueprint, request, jsonify, g
-from flask_jwt_extended import jwt_required, get_jwt
+from flask_jwt_extended import jwt_required, get_jwt, get_jwt_identity
 from sqlalchemy.orm import joinedload
 from sqlalchemy.exc import IntegrityError
 from datetime import time, date, datetime
@@ -151,12 +151,24 @@ def delete_department(id):
 # 只有超级管理员可以管理 (修改密码除外)
 
 @api_bp.route('/api/users', methods=['GET'])
-@superuser_required
+@jwt_required()
 def get_users():
     session = g.config_session
+    claims = get_jwt()
+    is_superuser = claims.get('is_superuser', False)
+
     try:
-        # 预加载部门信息以显示名称 (虽然本视图不显示，但 to_dict 支持)
-        users = session.query(User).options(joinedload(User.department)).all()
+        query = session.query(User).options(joinedload(User.department))
+
+        if is_superuser:
+            # 管理员获取所有用户
+            users = query.all()
+        else:
+            # 非管理员仅获取自己的信息
+            user_id = get_jwt_identity()
+            user = query.get(user_id)
+            users = [user] if user else []
+
         return jsonify([to_dict(u) for u in users]), 200
     finally:
         pass
@@ -231,8 +243,16 @@ def update_user(id):
 
 
 @api_bp.route('/api/users/<int:id>/reset-password', methods=['PATCH'])
-@superuser_required
+@jwt_required()
 def reset_user_password(id):
+    claims = get_jwt()
+    is_superuser = claims.get('is_superuser', False)
+    current_user_id_str = get_jwt_identity()
+
+    # 安全检查：必须是超级管理员，或者是用户本人
+    if not is_superuser and str(id) != current_user_id_str:
+        return jsonify({"msg": "Forbidden: You can only reset your own password."}), 403
+
     data = request.get_json()
     new_password = data.get('new_password')
     if not new_password:
@@ -246,7 +266,14 @@ def reset_user_password(id):
 
         user.set_password(new_password)
         session.commit()
-        return jsonify({"msg": f"Password for user {user.username} has been reset."}), 200
+
+        # 根据上下文返回不同的成功消息
+        if is_superuser and str(id) != current_user_id_str:
+            msg = f"Password for user {user.username} has been reset."
+        else:
+            msg = "Your password has been successfully updated."
+
+        return jsonify({"msg": msg}), 200
     except Exception as e:
         session.rollback()
         logging.error(f"Reset password error: {e}")
