@@ -1193,7 +1193,10 @@
                       </el-form-item>
                     </el-col>
                   </el-row>
-                  <el-form-item label="首次执行全量同步 (推荐)">
+                </template>
+
+                <template v-if="currentItem.sync_mode === 'INCREMENTAL' || currentItem.sync_mode === 'BINLOG'">
+                  <el-form-item label="首次执行全量同步 (会覆盖目标数据)">
                     <el-switch v-model="currentItem.is_full_replace_first"></el-switch>
                   </el-form-item>
                 </template>
@@ -1293,14 +1296,44 @@
                 return tenantDatabases.value; // 普通租户直接显示 (后端已过滤)
             });
 
-
+            // 规则: 所有模式 (INCREMENTAL, FULL_REPLACE, BINLOG) 都需要主键
             const validatePkField = (rule, value, callback) => {
                 if (crud.currentItem.sync_mode !== 'FULL_REPLACE' && !value) {
-                    callback(new Error('请输入源表主键 (INCREMENTAL 和 BINLOG 模式必填)'));
+                    callback(new Error('请输入源表主键'));
                 } else {
                     callback();
                 }
             };
+
+            // 规则: FULL_REPLACE 模式需要指定 全量同步时间
+            const validateFullReplaceTime = (rule, value, callback) => {
+                // 注意: 验证器是为 'full_replace_time' 注册的，但我们检查 'full_replace_time_temp'
+                if (crud.currentItem.sync_mode === 'FULL_REPLACE' && !crud.currentItem.full_replace_time_temp) {
+                    callback(new Error('请选择每日同步时间'));
+                } else {
+                    callback();
+                }
+            };
+
+            // 规则: INCREMENTAL 模式需要 增量时间字段
+            const validateIncrementalField = (rule, value, callback) => {
+                if (crud.currentItem.sync_mode === 'INCREMENTAL' && !value) {
+                    callback(new Error('请输入增量时间字段'));
+                } else {
+                    callback();
+                }
+            };
+
+            // 规则: INCREMENTAL 模式需要 增量同步时间间隔
+            const validateIncrementalInterval = (rule, value, callback) => {
+                if (crud.currentItem.sync_mode === 'INCREMENTAL' && !value) {
+                    callback(new Error('请输入增量间隔'));
+                } else {
+                    callback();
+                }
+            };
+
+            // --- END: MODIFIED VALIDATION LOGIC ---
 
 
             const onDepartmentChange = () => {
@@ -1336,9 +1369,14 @@
                 department_id: [{required: props.isSuperuser, message: '请选择所属部门', trigger: 'change'}],
                 source_db_id: [{required: true, message: '请选择源数据库', trigger: 'change'}],
                 source_table: [{required: true, message: '请输入源表名', trigger: 'blur'}],
-                pk_field_names: [{validator: validatePkField, trigger: 'blur'}], // MODIFIED
                 jdy_app_id: [{required: true, message: '请输入 App ID', trigger: 'blur'}],
                 jdy_entry_id: [{required: true, message: '请输入 Entry ID', trigger: 'blur'}],
+
+                // 应用新的自定义验证器
+                pk_field_names: [{validator: validatePkField, trigger: 'blur'}],
+                full_replace_time: [{validator: validateFullReplaceTime, trigger: 'change'}],
+                incremental_field: [{validator: validateIncrementalField, trigger: 'blur'}],
+                incremental_interval: [{validator: validateIncrementalInterval, trigger: 'change'}],
             };
 
             const formatDateTime = (isoDateTime) => isoDateTime ? new Date(isoDateTime).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai'}) : '-';
@@ -1357,7 +1395,9 @@
                         crud.currentItem.full_replace_time_temp = null;
                         // 非管理员自动设置部门ID
                         if (!props.isSuperuser) {
-                            crud.currentItem.department_id = parseInt(localStorage.getItem('department_id'));
+                            // 确保 department_id 是数字
+                            const deptId = localStorage.getItem('department_id');
+                            crud.currentItem.department_id = deptId ? parseInt(deptId) : null;
                         }
                     }
                 }
