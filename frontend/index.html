@@ -421,9 +421,9 @@
             </el-table>
             <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑部门' : '添加部门'" width="500px" @close="closeDialog" class="form-dialog">
               <el-form ref="formRef" :model="currentItem" :rules="formRules" label-position="top">
-                <el-form-item label="部门ID (外部)" prop="id">
+                <!--<el-form-item label="部门ID (外部)" prop="id">
                   <el-input v-model.number="currentItem.id" placeholder="唯一的数字ID" :disabled="isEdit"></el-input>
-                </el-form-item>
+                </el-form-item>-->
                 <el-form-item label="部门简称 (英文)" prop="department_name">
                   <el-input v-model="currentItem.department_name" placeholder="例如：sales_dept (唯一)"></el-input>
                 </el-form-item>
