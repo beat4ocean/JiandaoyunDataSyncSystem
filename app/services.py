@@ -1,4 +1,5 @@
 import json
+import re
 import time
 import uuid
 from contextlib import contextmanager
@@ -812,36 +813,95 @@ class SyncService:
             with get_dynamic_session(task) as source_session:
 
                 # --- 数据探测逻辑 ---
+
+                # 解析 incremental 字段（有可能是复杂字段）
+                raw_field = task.incremental_field.strip() if task.incremental_field else None
+                if not raw_field:
+                    raise ValueError("No incremental field specified.")
+
+                raw_field = ','.join([item.strip() for item in raw_field.split(',') if item.strip()])
+
+                field_for_probing = raw_field  # 用第一个字段用于数据类型探测
+                incremental_field_for_query = raw_field
+                is_complex_field = False
+
+                # 1. 检查字段格式
+                if ',' in raw_field and '(' not in raw_field and ')' not in raw_field:
+                    # 格式: updated_time,created_time
+                    # 转换为 coalesce
+                    incremental_field_for_query = f"COALESCE({raw_field})"
+                    # 探测字段: updated_time
+                    field_for_probing = raw_field.split(',')[0].strip().replace('`', '')
+                    is_complex_field = True
+                    print(
+                        f"task_id:[{task.task_id}] Detected comma-separated fields. Query: {incremental_field_for_query}, ProbeField: {field_for_probing}")
+
+                elif 'coalesce(' in raw_field.lower() or 'ifnull(' in raw_field.lower():
+                    # 格式: coalesce(updated_time,created_time) 或 IFNULL(...) 或 (其他复杂表达式)
+                    incremental_field_for_query = f"({raw_field})"
+                    is_complex_field = True
+
+                    # 提取第一个字段用于探测
+                    # 查找第一个单词 (可能是函数名) 和随后的字段名
+                    # r'[a-zA-Z0-9_]+' 匹配字段名
+                    fields = re.findall(r'[a-zA-Z0-9_]+', raw_field.replace('`', ''))
+
+                    if fields:
+                        first_word = fields[0].lower()
+                        if first_word in ['coalesce', 'ifnull'] and len(fields) > 1:
+                            field_for_probing = fields[1]  # e.g., coalesce(THIS_ONE, ...)
+                        else:
+                            field_for_probing = fields[0]  # e.g., THIS_ONE ...
+                    else:
+                        field_for_probing = raw_field  # 回退
+
+                    print(
+                        f"task_id:[{task.task_id}] Detected complex function. Query: {incremental_field_for_query}, ProbeField: {field_for_probing}")
+
+                else:
+                    # 简单字段: updated_time
+                    incremental_field_for_query = f"`{raw_field}`"
+                    field_for_probing = raw_field.replace('`', '')
+                    is_complex_field = False
+                    print(
+                        f"task_id:[{task.task_id}] Detected simple field. Query: {incremental_field_for_query}, ProbeField: {field_for_probing}")
+
+                # 2. 检查探测字段 (field_for_probing) 的类型
                 inspector = inspect(dynamic_engine)
                 col_info = None
                 try:
                     columns = inspector.get_columns(task.source_table)
-                    col_info = next((col for col in columns if col['name'] == task.incremental_field), None)
+                    # 使用 field_for_probing 查找列信息
+                    col_info = next((col for col in columns if col['name'] == field_for_probing), None)
                 except NoSuchTableError:
                     raise ValueError(f"Incremental field's table '{task.source_table}' not found.")
 
+                # 如果找不到字段
                 if not col_info:
+                    log_sync_error(task_config=task,
+                                   extra_info=f"task_id:[{task.task_id}] Incremental field (ProbeField) '{field_for_probing}' not found in table '{task.source_table}'.")
                     raise ValueError(
-                        f"Incremental field '{task.incremental_field}' not found in table '{task.source_table}'.")
+                        f"Incremental field (ProbeField) '{field_for_probing}' not found in table '{task.source_table}'.")
 
                 col_type_name = str(col_info['type']).upper()
+
                 last_sync_time_for_query = None
 
-                # 1. 如果是 DATE 类型，总是截断
+                # 3. 如果是 DATE 类型，总是截断
                 if col_type_name == 'DATE':
                     last_sync_time_for_query = last_sync_time.replace(hour=0, minute=0, second=0, microsecond=0)
                     print(
                         f"task_id:[{task.task_id}] Detected DATE type. Querying >= {last_sync_time_for_query} (Truncated)")
 
-                # 2. 如果是 DATETIME，执行数据探测
+                # 4. 如果是 DATETIME，执行数据探测
                 elif col_type_name.startswith('DATETIME'):
                     print(f"task_id:[{task.task_id}] Detected DATETIME type. Probing data ...")
                     is_fake_datetime = False
 
                     # 探测查询，限制100条
                     probe_query = text(
-                        f"SELECT `{task.incremental_field}` FROM `{task.source_table}` "
-                        f"WHERE `{task.incremental_field}` IS NOT NULL LIMIT 100"
+                        f"SELECT `{field_for_probing}` FROM `{task.source_table}` "
+                        f"WHERE `{field_for_probing}` IS NOT NULL LIMIT 100"
                     )
                     probe_results = source_session.execute(probe_query).fetchall()
 
@@ -859,6 +919,7 @@ class SyncService:
                                 all_are_midnight = False
                                 break
                         is_fake_datetime = all_are_midnight
+
                     if is_fake_datetime:
                         print(
                             f"task_id:[{task.task_id}] Probe confirms yyyy-MM-dd 00:00:00 DATETIME format. Using truncated timestamp.")
@@ -873,10 +934,10 @@ class SyncService:
                     print(
                         f"task_id:[{task.task_id}] Detected {col_type_name} type. Querying >= {last_sync_time_for_query}")
 
-                # 5. 获取源数据 (带 SQL 过滤)
+                # 6. 获取源数据 (带 SQL 过滤)
                 base_query = (
                     f"SELECT * FROM `{task.source_table}` "
-                    f"WHERE `{task.incremental_field}` >= :last_sync_time"
+                    f"WHERE {incremental_field_for_query} >= :last_sync_time"
                 )
                 # 使用动态确定的时间戳
                 params = {"last_sync_time": last_sync_time_for_query}
