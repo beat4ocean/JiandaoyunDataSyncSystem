@@ -608,7 +608,7 @@ class SyncService:
                 while True:
                     response = data_api_query.query_list_data(
                         task.jdy_app_id, task.jdy_entry_id,
-                        limit=500, data_id=data_id, fields=["_id"]
+                        limit=100, data_id=data_id, fields=["_id"]
                     )
                     jdy_data = response.get('data', [])
                     if not jdy_data:
