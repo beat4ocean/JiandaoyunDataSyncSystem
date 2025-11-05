@@ -1,20 +1,48 @@
 import datetime
+import hashlib
 import json
 import logging
+import re
 import time
 import time as time_module
 import traceback
-from datetime import datetime, time as time_obj, date, timezone, timedelta
+from contextlib import contextmanager
+from datetime import date, time, timedelta, timezone
+from datetime import datetime
+from datetime import time as time_obj
 from decimal import Decimal
 from functools import wraps
-from typing import Dict, Any
+from typing import Dict, Any, Generator
 from urllib.parse import quote_plus, urlunparse
 
 import requests
-from sqlalchemy import create_engine, text
-from sqlalchemy.exc import OperationalError, DBAPIError
+from pypinyin import pinyin, Style
+from sqlalchemy import create_engine
+from sqlalchemy import text, MetaData, Table
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import sessionmaker
+
+from app.config import DB_CONNECT_ARGS
+from app.models import (ConfigSession, Database)
+
+# 配置日志
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+from app.models import SyncTask
 
 TZ_UTC_8 = timezone(timedelta(hours=8))
+
+# --- 动态引擎缓存 ---
+# 缓存 {database_info_id: (engine, SessionLocal)}
+dynamic_engine_cache = {}
+
+# --- 动态元数据缓存 ---
+# 用于缓存已检查过的表结构 { engine_url: { table_name: Table } }
+inspected_tables_cache: dict[str, dict[str, Table]] = {}
+# 用于缓存动态引擎的 MetaData 对象 { engine_url: MetaData }
+dynamic_metadata_cache: dict[str, MetaData] = {}
 
 
 def json_serializer(obj):
@@ -148,17 +176,20 @@ def log_sync_error(task_config: 'SyncTask' = None,
     table_name = None
     department_id = None
     department_name = None
+    sync_type = 'db2jdy'
 
     if task_config:
         # 延迟导入 SyncTask 以进行类型检查
         from app.models import SyncTask
         if isinstance(task_config, SyncTask):
-            task_id = task_config.task_id
-            app_id = task_config.jdy_app_id
-            entry_id = task_config.jdy_entry_id
-            table_name = task_config.source_table
-            department_id = task_config.department.id
-            department_name = task_config.department.department_name
+            task_id = task_config.id
+            app_id = task_config.app_id
+            entry_id = task_config.entry_id
+            table_name = task_config.table_name
+            sync_type = task_config.sync_type
+            if task_config.department:
+                department_id = task_config.department.id
+                department_name = task_config.department.department_name
 
     try:
         # --- 安全地尝试获取会话 ---
@@ -197,11 +228,12 @@ def log_sync_error(task_config: 'SyncTask' = None,
         # 2. 插入数据库
         new_log = SyncErrLog(
             task_id=task_id,
+            sync_type=sync_type,  # 记录同步类型
             app_id=app_id,
             entry_id=entry_id,
             table_name=table_name,
             department_id=department_id,
-            department_name=department_name,
+            department_name=department_name or "N/A",
             error_message=error_message,
             traceback=traceback_str,  # 使用格式化后的字符串
             payload=payload_str,
@@ -237,6 +269,9 @@ def log_sync_error(task_config: 'SyncTask' = None,
 
     except Exception as db_err:
         print(f"!!! 写入错误日志到数据库时发生严重错误: {db_err}")
+        # 确保 error_message 已定义
+        if 'error_message' not in locals():
+            error_message = str(error) if error else "未知原始错误"
         print(f"原始错误信息: {error_message}")
         # 如果连日志会话都有问题，尝试回滚并打印更详细的错误
         if session:
@@ -255,6 +290,152 @@ def log_sync_error(task_config: 'SyncTask' = None,
             # print("log_sync_error: 关闭独立创建的会话。")
             session.close()
 
+
+# --- 名称与类型转换 ---
+
+def convert_to_pinyin(name: str) -> str | None:
+    """将包含中文的名称转换为全小写的拼音下划线风格，便于用作表名"""
+    if not name:
+        return ""
+    # 检查名称中是否包含中文字符
+    if re.search(r'[\u4e00-\u9fa5]', name):
+        # 如果有，先将中文转换为拼音
+        pinyin_list = pinyin(name, style=Style.NORMAL)
+        # 将拼音列表连接成一个字符串
+        name = '_'.join(item[0] for item in pinyin_list if item and item[0])  # 添加检查防止空item
+
+    # 对转换后（或原始的英文）字符串进行清理
+    # 1. 替换所有非字母、数字、下划线的字符为空字符串
+    name = re.sub(r'[^a-zA-Z0-9_]', '', name)
+    # 2. 将一个或多个连续的下划线合并为单个下划线
+    name = re.sub(r'_+', '_', name)
+    # 3. 确保不以下划线开头或结尾
+    name = name.strip('_')
+    # 4. 转换为小写
+    name = name.lower()
+    # 5. 如果名称为空或变为纯下划线，提供默认名称
+    if not name or name == '_':
+        return None
+    # 6. 确保不以数字开头 (如果数据库有此限制)
+    if name and name[0].isdigit():
+        name = '_' + name
+
+    return name
+
+
+# 获取数据库连接字符串
+def get_connection_url(db_type, db_host, db_port, db_name, db_user, db_password, db_args):
+    if db_type == 'MySQL':
+        db_url = f"mysql+pymysql://{db_user}:{quote_plus(db_password)}@{db_host}:{db_port}/{db_name}"
+        if db_args:
+            db_url += f"?{db_args}"
+    elif db_type == 'SQL Server':
+        db_url = f"mssql+pymssql://{db_user}:{quote_plus(db_password)}@{db_host}:{db_port}/{db_name}"
+        if db_args:
+            db_url += f"?{db_args}"
+    elif db_type == 'PostgreSQL':
+        db_url = f"postgresql+psycopg2://{db_user}:{quote_plus(db_password)}@{db_host}:{db_port}/{db_name}"
+        if db_args:
+            db_url += f"?{db_args}"
+    elif db_type == 'Oracle':
+        db_url = f"oracle+cx_oracle://{db_user}:{quote_plus(db_password)}@{db_host}:{db_port}/{db_name}"
+        if db_args:
+            db_url += f"?{db_args}"
+    else:
+        raise ValueError(f"Unsupported database type: {db_type}")
+
+    return db_url
+
+
+# 获取数据库驱动
+def get_db_driver(db_type: str) -> str:
+    driver_map = {
+        'MySQL': 'mysql+pymysql',
+        'PostgreSQL': 'postgresql+psycopg2',
+        'SQL Server': '"mssql+pymssql',
+        'Oracle': 'oracle+cx_oracle',
+    }
+
+    return driver_map.get(db_type)
+
+
+# --- 获取动态引擎 ---
+@contextmanager
+def get_dynamic_session(task: SyncTask) -> Generator[Any, Any, None]:
+    """
+    一个上下文管理器，用于根据任务动态获取源数据库会话。
+    它会缓存引擎以提高性能。
+    """
+    if not task.database:
+        # 在加载任务时应使用 joinedload('database')
+        # 如果没有，我们必须在 ConfigSession 中手动加载它
+        with ConfigSession() as config_session:
+            db_info = config_session.query(Database).get(task.database_id)
+            if not db_info:
+                raise ValueError(f"task_id:[{task.id}] Source Database (ID: {task.database_id}) not found.")
+    else:
+        db_info = task.database
+
+    if not db_info.is_active:
+        raise ValueError(f"task_id:[{task.id}] Source Database '{db_info.db_show_name}' is not active.")
+
+    db_id = db_info.id
+
+    # 检查缓存
+    if db_id not in dynamic_engine_cache:
+        print(f"task_id:[{task.id}] Creating new dynamic engine for source DB: {db_info.db_show_name} (ID: {db_id})")
+
+        # --- 根据 db_type 构建 URL ---
+        driver = get_db_driver(db_info.db_type)
+        if not driver:
+            raise ValueError(f"Unsupported database type: {db_info.db_type}")
+
+        # 构建连接字符串
+        db_url = (
+            f"{db_info.db_type}://{db_info.db_user}:{quote_plus(db_info.db_password)}@"
+            f"{db_info.db_host}:{db_info.db_port}/{db_info.db_name}?{db_info.db_args}"
+        )
+
+        engine = create_engine(db_url, pool_recycle=3600, connect_args=DB_CONNECT_ARGS)
+        session_local = sessionmaker(bind=engine)
+
+        # 缓存引擎和会话工厂
+        dynamic_engine_cache[db_id] = (engine, session_local)
+
+    # 从缓存中获取会话工厂
+    _, session_local = dynamic_engine_cache[db_id]
+
+    session = session_local()
+    try:
+        yield session
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def get_dynamic_engine(task: SyncTask):
+    """获取动态引擎（主要用于 inspect）"""
+    # 确保引擎在缓存中
+    with get_dynamic_session(task):
+        pass
+    # 从缓存返回引擎
+    database_id = task.database_id
+    if database_id not in dynamic_engine_cache:
+        raise RuntimeError(f"Dynamic engine for DB {database_id} not found in cache after get_dynamic_session.")
+    return dynamic_engine_cache[database_id][0]
+
+
+def get_dynamic_metadata(engine) -> MetaData:
+    """获取或创建与动态引擎关联的 MetaData 对象"""
+    engine_url = str(engine.url)
+    if engine_url not in dynamic_metadata_cache:
+        dynamic_metadata_cache[engine_url] = MetaData()
+    return dynamic_metadata_cache[engine_url]
+
+
+# --- 简道云同步数据库 ---
 
 # --- “测试连接”功能函数 ---
 def test_db_connection(db_info: Dict[str, Any]) -> (bool, str):
@@ -277,47 +458,14 @@ def test_db_connection(db_info: Dict[str, Any]) -> (bool, str):
             return False, "数据库类型、主机、端口、库名和用户名均不能为空"
 
         # --- 1. 映射数据库类型到 SQLAlchemy 驱动 ---
-        #    (e.g., pymysql, psycopg2-binary, pyodbc)
-        driver_map = {
-            'mysql+pymysql': 'mysql+pymysql',
-            'postgresql+psycopg2': 'postgresql+psycopg2',
-            # 'mssql+pyodbc': 'mssql+pyodbc',
-            'oracle+cx_oracle': 'oracle+cx_oracle',
-        }
-
-        driver = driver_map.get(db_type)
+        driver = get_db_driver(db_type)
         if not driver:
-            return False, f"不支持的数据库类型: {db_type}。支持的类型: {list(driver_map.keys())}"
+            return False, ValueError(f"Unsupported database type: {db_type}")
 
-        # --- 2. 构建连接 URL (确保密码被正确编码) ---
-        # 密码中的特殊字符 (如 @, :, /) 需要 URL 编码
-        encoded_password = quote_plus(db_password)
+        # --- 2. 构建连接 URL ---
+        db_url = get_connection_url(db_type, db_host, db_port, db_name, db_user, db_password, db_args)
 
-        netloc = f"{db_user}:{encoded_password}@{db_host}:{db_port}"
-
-        # # SQL Server (mssql) 可能需要特殊的 DSN 或 驱动参数
-        # if db_type == 'mssql+pyodbc' and not db_args:
-        #     # 如果用户没有提供 db_args，我们提供一个合理的默认值
-        #     # 注意：这需要安装 'ODBC Driver 17 for SQL Server'
-        #     db_args = "driver=ODBC+Driver+17+for+SQL+Server"
-
-        # --- 3. 构造最终的 URL ---
-        # 使用 urlunparse 来正确组合
-        db_url = urlunparse((
-            driver,  # scheme
-            netloc,  # netloc
-            f"/{db_name}",  # path
-            "",  # params
-            db_args,  # query
-            ""  # fragment
-        ))
-
-        # # 移除 mssql 在 path 上的 /
-        # if db_type == 'mssql+pyodbc':
-        #     db_url = db_url.replace(f"///{db_name}", f"/{db_name}", 1)
-
-        # --- 4. 尝试连接 ---
-        # connect_args={'connect_timeout': 5} 设置5秒超时
+        # --- 3. 尝试连接 ---
         engine = create_engine(db_url, connect_args={'connect_timeout': 5}, pool_recycle=3600)
 
         with engine.connect() as connection:
@@ -337,3 +485,48 @@ def test_db_connection(db_info: Dict[str, Any]) -> (bool, str):
     except Exception as e:
         logging.error(f"数据库连接测试发生未知错误: {e}")
         return False, f"发生未知错误: {e}"
+
+
+# --- Webhook 签名验证 ---
+def get_signature(nonce: str, payload: str, secret: str, timestamp: str) -> str:
+    """
+    根据简道云指南计算 SHA1 签名。
+    """
+    content = f'{nonce}:{payload}:{secret}:{timestamp}'.encode('utf-8')
+    m = hashlib.sha1()
+    m.update(content)
+    return m.hexdigest()
+
+
+def validate_signature(nonce: str, payload_str: str, secret: str, timestamp: str, signature_from_header: str) -> bool:
+    """
+    验证传入的 Webhook 签名是否有效。
+    :param nonce: URL 参数 'nonce'
+    :param payload_str: 原始请求体 (字符串)
+    :param secret: JdyKeyInfo.api_secret
+    :param timestamp: URL 参数 'timestamp'
+    :param signature_from_header: 'X-JDY-Signature'
+    :return: (bool) 是否验证通过
+    """
+    if not all([nonce, payload_str is not None, secret, timestamp, signature_from_header]):
+        logger.warning(
+            f"[Webhook Auth] 签名验证失败: 缺少必要参数。Nonce: {nonce}, TS: {timestamp}, Secret: {bool(secret)}, Header: {signature_from_header}")
+        return False
+
+    try:
+        calculated_signature = get_signature(nonce, payload_str, secret, timestamp)
+
+        if calculated_signature == signature_from_header:
+            logger.info("[Webhook Auth] 签名验证成功。")
+            return True
+        else:
+            logger.warning(f"[Webhook Auth] 签名验证失败: 签名不匹配。")
+            logger.debug(f"Nonce: {nonce}, TS: {timestamp}")
+            logger.debug(f"Payload (first 100): {payload_str[:100]}...")
+            logger.debug(f"Expected: {signature_from_header}")
+            logger.debug(f"Calculated: {calculated_signature}")
+            return False
+
+    except Exception as e:
+        logger.error(f"[Webhook Auth] 计算签名时发生错误: {e}", exc_info=True)
+        return False

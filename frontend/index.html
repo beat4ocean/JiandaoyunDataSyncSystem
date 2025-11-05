@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MySQL数据同步至简道云配置</title>
+    <title>简道云数据同步配置</title>
 
     <link rel="stylesheet" href="/vendor/index.css"/>
     <script src="/vendor/vue.global.js"></script>
@@ -171,7 +171,7 @@
         <template v-else>
             <div class="app-container">
                 <el-header height="60px">
-                    <h2>MySQL同步至简道云配置</h2>
+                    <h2>数据同步配置</h2>
                     <div>
                         <span>你好, {{ username }} ({{ isSuperuser ? '超级管理员' : '租户: ' + departmentName }})</span>
                         <el-button type="danger" link @click="logout" style="margin-left: 15px;">退出登录</el-button>
@@ -225,7 +225,7 @@
                                     <el-icon>
                                         <Coin/>
                                     </el-icon>
-                                    <span>源库管理</span>
+                                    <span>数据库管理</span>
                                 </el-menu-item>
                             </el-sub-menu>
 
@@ -236,11 +236,17 @@
                                     </el-icon>
                                     <span>任务管理</span>
                                 </template>
-                                <el-menu-item index="/sync-tasks">
+                                <el-menu-item index="/tasks-db-to-jdy">
                                     <el-icon>
-                                        <Tickets/>
+                                        <Upload/>
                                     </el-icon>
                                     <span>数据库->简道云</span>
+                                </el-menu-item>
+                                <el-menu-item index="/tasks-jdy-to-db">
+                                    <el-icon>
+                                        <Download/>
+                                    </el-icon>
+                                    <span>简道云->数据库</span>
                                 </el-menu-item>
                             </el-sub-menu>
 
@@ -251,11 +257,17 @@
                                     </el-icon>
                                     <span>日志管理</span>
                                 </template>
-                                <el-menu-item index="/error-logs">
+                                <el-menu-item index="/logs-db-to-jdy">
                                     <el-icon>
                                         <Warning/>
                                     </el-icon>
-                                    <span>错误日志</span>
+                                    <span>日志 (DB->JDY)</span>
+                                </el-menu-item>
+                                <el-menu-item index="/logs-jdy-to-db">
+                                    <el-icon>
+                                        <WarningFilled/>
+                                    </el-icon>
+                                    <span>日志 (JDY->DB)</span>
                                 </el-menu-item>
                             </el-sub-menu>
 
@@ -376,7 +388,7 @@
         }
     );
 
-    // --- Reusable CRUD Composable (适配新 API) ---
+    // --- Reusable CRUD Composable ---
     function useCrud(apiEndpoint, itemName = '项目', defaultItem = {}, idKey = 'id') {
         const items = ref([]);
         const loading = ref(false);
@@ -388,10 +400,12 @@
         const fetchItems = async () => {
             loading.value = true;
             try {
+                // apiEndpoint 已经包含了 ?sync_type=...
                 const response = await apiClient.get(apiEndpoint);
                 items.value = response.data;
             } catch (error) {
                 console.error(`获取 ${itemName} 列表失败:`, error);
+                // 错误已由拦截器显示
             } finally {
                 loading.value = false;
             }
@@ -426,8 +440,9 @@
             }
 
             loading.value = true;
-            // 使用 idKey
-            const url = isEdit.value ? `${apiEndpoint}/${currentItem[idKey]}` : apiEndpoint;
+            // 从 apiEndpoint 中移除查询参数
+            const baseUrl = apiEndpoint.split('?')[0];
+            const url = isEdit.value ? `${baseUrl}/${currentItem[idKey]}` : baseUrl;
             const method = isEdit.value ? 'put' : 'post';
 
             try {
@@ -438,6 +453,10 @@
                     dataToSend.full_replace_time = dataToSend.full_replace_time_temp || null;
                     delete dataToSend.full_replace_time_temp;
                 }
+                if ('daily_sync_time_temp' in dataToSend) {
+                    dataToSend.daily_sync_time = dataToSend.daily_sync_time_temp || null;
+                    delete dataToSend.daily_sync_time_temp;
+                }
                 // 清理密码
                 if (method === 'put' && 'password' in dataToSend && !dataToSend.password) {
                     delete dataToSend.password;
@@ -446,6 +465,8 @@
                 // 清理只读字段
                 delete dataToSend.created_at;
                 delete dataToSend.updated_at;
+                // 清理只读的 webhook_url
+                delete dataToSend.webhook_url;
 
                 const response = await apiClient[method](url, dataToSend);
 
@@ -472,7 +493,9 @@
                     type: 'warning'
                 });
                 loading.value = true;
-                await apiClient.delete(`${apiEndpoint}/${id}`);
+                // 从 apiEndpoint 中移除查询参数
+                const baseUrl = apiEndpoint.split('?')[0];
+                await apiClient.delete(`${baseUrl}/${id}`);
                 items.value = items.value.filter(i => i[idKey] !== id);
                 ElMessage.success(`${itemName} 删除成功！`);
             } catch (error) {
@@ -501,7 +524,7 @@
     const LoginView = {
         template: `
           <el-card class="login-card">
-            <h1 class="login-title">MySQL -> 简道云 数据同步系统</h1>
+            <h1 class="login-title">简道云数据同步系统</h1>
             <h2>登录</h2>
             <el-form @submit.prevent="submitLogin" ref="loginFormRef" :model="loginForm" :rules="loginRules"
                      label-position="top">
@@ -545,6 +568,8 @@
                     localStorage.setItem('refresh_token', data.refresh_token);
                     localStorage.setItem('username', data.username);
                     localStorage.setItem('is_superuser', data.is_superuser);
+                    // 存储 department_id
+                    localStorage.setItem('department_id', data.department_id);
                     localStorage.setItem('department_name', data.department_name || 'N/A');
 
                     emit('login-success', data); // 传递所有用户数据
@@ -611,9 +636,10 @@
         `,
         setup() {
             const defaultItem = {id: null, department_name: '', is_active: true};
+            // REFACTOR: 3.2 - API endpoint is /departments
             const crud = useCrud('/departments', '部门', defaultItem, 'id');
             const formRules = {
-                id: [{required: true, message: '请输入部门ID', trigger: 'blur'}],
+                // id: [{required: true, message: '请输入部门ID', trigger: 'blur'}],
                 department_name: [{required: true, message: '请输入部门简称', trigger: 'blur'}],
             };
             return {...crud, formRules, ElementPlusIcons};
@@ -632,7 +658,7 @@
                 </el-button>
               </div>
             </template>
-            <el-table :data="displayedItems" v-loading="loading" style="width: 100%">
+            <el-table :data="items" v-loading="loading" style="width: 100%">
               <el-table-column prop="id" label="ID" width="100" sortable></el-table-column>
               <el-table-column prop="username" label="用户名" sortable></el-table-column>
               <el-table-column prop="department_name" label="所属部门" sortable></el-table-column>
@@ -714,32 +740,20 @@
             </el-dialog>
           </el-card>
         `,
-        setup(props) { // <-- ADDED props
+        props: ['isSuperuser'],
+        setup(props) {
             const defaultItem = {username: '', password: '', department_id: null, is_superuser: false, is_active: true};
             const crud = useCrud('/users', '用户', defaultItem, 'id');
             const departments = ref([]);
-
-            // ADDED: Computed property to filter items
-            const displayedItems = computed(() => {
-                if (props.isSuperuser) {
-                    return crud.items.value;
-                }
-                // Filter for non-superuser
-                const currentUsername = localStorage.getItem('username');
-                if (!currentUsername) return [];
-                return crud.items.value.filter(user => user.username === currentUsername);
-            });
-
-            // 重置密码状态
             const resetPasswordDialogVisible = ref(false);
             const resetPasswordData = reactive({new_password: ''});
             const resetFormRef = ref(null);
 
-            const formRules = {
+            const formRules = computed(() => ({
                 username: [{required: true, message: '请输入用户名', trigger: 'blur'}],
-                password: [{required: crud.isEdit.value ? false : true, message: '请输入密码', trigger: 'blur'}],
+                password: [{required: !crud.isEdit.value, message: '请输入密码', trigger: 'blur'}],
                 department_id: [{required: true, message: '请选择部门', trigger: 'change'}],
-            };
+            }));
             const resetPasswordRules = {
                 new_password: [{required: true, message: '请输入新密码', trigger: 'blur'}],
             };
@@ -772,21 +786,30 @@
 
                 crud.loading.value = true;
                 try {
+                    // (假设 /api/users/<id>/reset-password 路由存在)
                     await apiClient.patch(`/users/${crud.currentItem.id}/reset-password`, resetPasswordData);
                     ElMessage.success(`用户 ${crud.currentItem.username} 的密码重置成功！`);
                     resetPasswordDialogVisible.value = false;
                 } catch (error) {
                     console.error("重置密码失败:", error);
+                    // The error will be shown by the interceptor
                 } finally {
                     crud.loading.value = false;
                 }
             };
 
             onMounted(fetchDepartments);
+            // 非超管只能看自己
+            watch(() => props.isSuperuser, (newVal) => {
+                if (!newVal) {
+                    const currentUsername = localStorage.getItem('username');
+                    crud.items.value = crud.items.value.filter(u => u.username === currentUsername);
+                }
+            }, {immediate: true});
+
 
             return {
                 ...crud,
-                displayedItems, // <-- ADDED
                 formRules,
                 departments,
                 resetPasswordDialogVisible,
@@ -806,7 +829,7 @@
         template: `
           <el-card class="config-card">
             <template #header>
-              <div class="card-header"><span>源数据库管理</span>
+              <div class="card-header"><span>数据库管理</span>
                 <el-button type="primary" @click="openDialog()" :icon="ElementPlusIcons.Plus">添加数据库</el-button>
               </div>
             </template>
@@ -815,7 +838,16 @@
               <el-table-column v-if="isSuperuser" prop="department_name" label="所属部门" width="200"
                                sortable></el-table-column>
               <el-table-column prop="db_show_name" label="显示名称" sortable></el-table-column>
-              <el-table-column prop="db_type" label="类型" width="200"></el-table-column>
+
+              <el-table-column prop="sync_type" label="同步类型" width="160">
+                <template #default="scope">
+                  <el-tag :type="scope.row.sync_type === 'jdy2db' ? 'success' : 'primary'">
+                    {{ scope.row.sync_type === 'jdy2db' ? '简道云->数据库' : '数据库->简道云' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+
+              <el-table-column prop="db_type" label="类型" width="120"></el-table-column>
               <el-table-column prop="db_host" label="主机"></el-table-column>
               <el-table-column prop="db_port" label="端口" width="80"></el-table-column>
               <el-table-column prop="db_name" label="库名"></el-table-column>
@@ -845,17 +877,31 @@
                                :value="dept.id"></el-option>
                   </el-select>
                 </el-form-item>
-                <el-form-item label="显示名称" prop="db_show_name">
-                  <el-input v-model="currentItem.db_show_name" placeholder="例如：生产库"></el-input>
-                </el-form-item>
+
+                <el-row :gutter="20">
+                  <el-col :span="12">
+                    <el-form-item label="显示名称" prop="db_show_name">
+                      <el-input v-model="currentItem.db_show_name" placeholder="例如：生产库"></el-input>
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="12">
+                    <el-form-item label="同步类型" prop="sync_type">
+                      <el-select v-model="currentItem.sync_type" placeholder="选择此数据库的用途" :disabled="isEdit">
+                        <el-option label="数据库 -> 简道云" value="db2jdy"></el-option>
+                        <el-option label="简道云 -> 数据库" value="jdy2db"></el-option>
+                      </el-select>
+                    </el-form-item>
+                  </el-col>
+                </el-row>
+
                 <el-row :gutter="20">
                   <el-col :span="12">
                     <el-form-item label="数据库类型" prop="db_type">
                       <el-select v-model="currentItem.db_type" placeholder="选择数据库类型">
-                        <el-option label="MySQL" value="mysql+pymysql"></el-option>
-                        <el-option label="PostgreSQL" value="postgresql+psycopg2"></el-option>
-                        <!-- <el-option label="SQL Server" value="mssql+pyodbc"></el-option>-->
-                        <el-option label="Oracle" value="oracle+cx_oracle"></el-option>
+                         <el-option label="MySQL" value="MySQL"></el-option>
+                        <el-option label="PostgreSQL" value="PostgreSQL"></el-option>
+                        <el-option label="SQL Server" value="SQL Server"></el-option>
+                        <el-option label="Oracle" value="Oracle"></el-option>
                       </el-select>
                     </el-form-item>
                   </el-col>
@@ -912,7 +958,8 @@
         setup(props) {
             const defaultItem = {
                 db_show_name: '',
-                db_type: 'mysql',
+                sync_type: 'db2jdy',
+                db_type: 'MySQL',
                 db_host: 'localhost',
                 db_port: 3306,
                 db_name: '',
@@ -922,21 +969,23 @@
                 department_id: null,
                 db_args: ''
             };
+            // REFACTOR: 3.2 - API endpoint is /databases
             const crud = useCrud('/databases', '数据库', defaultItem, 'id');
             const departments = ref([]);
             // 测试连接的加载状态
             const testLoading = ref(false);
 
-            const formRules = {
+            const formRules = computed(() => ({
                 department_id: [{required: props.isSuperuser, message: '请选择部门', trigger: 'change'}],
                 db_show_name: [{required: true, message: '请输入显示名称', trigger: 'blur'}],
+                sync_type: [{required: true, message: '请选择同步类型', trigger: 'change'}], // REFACTOR: 3.6
                 db_type: [{required: true, message: '请选择类型', trigger: 'change'}],
                 db_host: [{required: true, message: '请输入主机', trigger: 'blur'}],
                 db_port: [{required: true, message: '请输入端口', trigger: 'blur'}],
                 db_name: [{required: true, message: '请输入库名', trigger: 'blur'}],
                 db_user: [{required: true, message: '请输入用户名', trigger: 'blur'}],
                 db_password: [{required: !crud.isEdit.value, message: '请输入密码', trigger: 'blur'}],
-            };
+            }));
 
             const fetchDepartments = async () => {
                 if (props.isSuperuser) {
@@ -1045,13 +1094,11 @@
             const defaultItem = {department_id: null, api_key: '', api_secret: ''};
             const crud = useCrud('/jdy-keys', '密钥', defaultItem, 'id');
             const departments = ref([]);
-
-            const keyRules = {
+            const keyRules = computed(() => ({
                 department_id: [{required: props.isSuperuser, message: '请选择部门', trigger: 'change'}],
                 api_key: [{required: true, message: '请输入 API Key', trigger: 'blur'}],
                 api_secret: [{required: false, message: '请输入 API Secret', trigger: 'blur'}],
-            };
-
+            }));
             const fetchDepartments = async () => {
                 if (props.isSuperuser) {
                     try {
@@ -1068,7 +1115,7 @@
     };
 
     // --- SyncTask Component (适配多租户) ---
-    const SyncTaskView = {
+    const SyncTaskViewDbToJdy = {
         props: ['isSuperuser'],
         template: `
           <el-card class="config-card">
@@ -1077,19 +1124,19 @@
                 <el-button type="primary" @click="openDialog()" :icon="ElementPlusIcons.Plus">添加任务</el-button>
               </div>
             </template>
-            <el-table :data="items" v-loading="loading" style="width: 100%" row-key="task_id">
-              <el-table-column prop="task_id" label="ID" width="60"></el-table-column>
+            <el-table :data="items" v-loading="loading" style="width: 100%" row-key="id">
+              <el-table-column prop="id" label="ID" width="60"></el-table-column>
               <el-table-column v-if="isSuperuser" prop="department_name" label="所属部门" width="180"
                                sortable></el-table-column>
               <el-table-column prop="task_name" label="任务名称" sortable></el-table-column>
-              <el-table-column prop="source_db_name" label="源数据库" width="150" sortable>
+              <el-table-column prop="db_show_name" label="源数据库" width="150" sortable>
                 <template #default="scope">
-                  <el-tag>{{ scope.row.source_db_name || 'N/A' }}</el-tag>
+                  <el-tag>{{ scope.row.db_show_name || 'N/A' }}</el-tag>
                 </template>
               </el-table-column>
-              <el-table-column prop="source_table" label="源表名" sortable></el-table-column>
-              <el-table-column prop="jdy_app_id" label="App ID"></el-table-column>
-              <el-table-column prop="jdy_entry_id" label="Entry ID"></el-table-column>
+              <el-table-column prop="table_name" label="源表名" sortable></el-table-column>
+              <el-table-column prop="app_id" label="App ID"></el-table-column>
+              <el-table-column prop="entry_id" label="Entry ID"></el-table-column>
               <el-table-column prop="sync_mode" label="同步模式" width="150"></el-table-column>
               <el-table-column prop="is_active" label="激活" width="70">
                 <template #default="scope">
@@ -1097,9 +1144,9 @@
                   </el-tag>
                 </template>
               </el-table-column>
-              <el-table-column prop="status" label="运行状态" width="100">
+              <el-table-column prop="sync_status" label="运行状态" width="100">
                 <template #default="scope">
-                  <el-tag :type="statusType(scope.row.status)"> {{ scope.row.status }}</el-tag>
+                  <el-tag :type="statusType(scope.row.sync_status)"> {{ scope.row.sync_status }}</el-tag>
                 </template>
               </el-table-column>
               <el-table-column prop="last_sync_time" label="上次同步时间" width="170">
@@ -1108,7 +1155,7 @@
               <el-table-column label="操作" width="300" fixed="right">
                 <template #default="scope">
                   <el-button size="small" @click="openDialog(scope.row)" :icon="ElementPlusIcons.Edit">编辑</el-button>
-                  <el-button size="small" type="danger" @click="deleteItem(scope.row.task_id)"
+                  <el-button size="small" type="danger" @click="deleteItem(scope.row.id)"
                              :icon="ElementPlusIcons.Delete">删除
                   </el-button>
                 </template>
@@ -1118,6 +1165,8 @@
             <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑任务' : '添加任务'" width="700px"
                        @close="closeDialog" class="form-dialog">
               <el-form ref="formRef" :model="currentItem" :rules="taskRules" label-position="top" label-width="150px">
+
+                <input type="hidden" v-model="currentItem.sync_type" />
 
                 <el-row :gutter="20">
                   <el-col :span="12">
@@ -1138,29 +1187,29 @@
 
                 <el-row :gutter="20">
                   <el-col :span="12">
-                    <el-form-item label="源数据库" prop="source_db_id">
-                      <el-select v-model="currentItem.source_db_id" placeholder="选择源数据库">
+                    <el-form-item label="源数据库" prop="database_id">
+                      <el-select v-model="currentItem.database_id" placeholder="选择源数据库">
                         <el-option v-for="db in filteredDatabases" :key="db.id"
-                                   :label="db.name" :value="db.id"></el-option>
+                                   :label="db.db_show_name" :value="db.id"></el-option>
                       </el-select>
                     </el-form-item>
                   </el-col>
                   <el-col :span="12">
-                    <el-form-item label="源数据库表名" prop="source_table">
-                      <el-input v-model="currentItem.source_table" placeholder="数据库中的表名或视图名"></el-input>
+                    <el-form-item label="源数据库表名" prop="table_name">
+                      <el-input v-model="currentItem.table_name" placeholder="数据库中的表名或视图名"></el-input>
                     </el-form-item>
                   </el-col>
                 </el-row>
 
                 <el-row :gutter="20">
                   <el-col :span="12">
-                    <el-form-item label="简道云 App ID" prop="jdy_app_id">
-                      <el-input v-model="currentItem.jdy_app_id"></el-input>
+                    <el-form-item label="简道云 App ID" prop="app_id">
+                      <el-input v-model="currentItem.app_id"></el-input>
                     </el-form-item>
                   </el-col>
                   <el-col :span="12">
-                    <el-form-item label="简道云 Entry ID" prop="jdy_entry_id">
-                      <el-input v-model="currentItem.jdy_entry_id"></el-input>
+                    <el-form-item label="简道云 Entry ID" prop="entry_id">
+                      <el-input v-model="currentItem.entry_id"></el-input>
                     </el-form-item>
                   </el-col>
                 </el-row>
@@ -1187,8 +1236,8 @@
                 <template v-if="currentItem.sync_mode === 'INCREMENTAL' || currentItem.sync_mode === 'BINLOG'">
                   <el-row :gutter="20">
                     <el-col :span="12">
-                      <el-form-item label="源表主键" prop="pk_field_names">
-                        <el-input v-model="currentItem.pk_field_names"
+                      <el-form-item label="源表主键" prop="business_keys">
+                        <el-input v-model="currentItem.business_keys"
                                   placeholder="e.g., id1,id2 (复合主键用英文逗号分隔)"></el-input>
                       </el-form-item>
                     </el-col>
@@ -1238,7 +1287,6 @@
                 </template>
 
                 <el-divider>通知配置</el-divider>
-
                 <el-row :gutter="20">
                   <el-col :span="12">
                     <el-form-item label="发送企微错误日志">
@@ -1266,11 +1314,11 @@
             const defaultTask = {
                 task_name: '',
                 department_id: null,
-                source_db_id: null,
-                source_table: '',
-                pk_field_names: '',
-                jdy_app_id: '',
-                jdy_entry_id: '',
+                database_id: null,
+                table_name: '',
+                business_keys: '',
+                app_id: '',
+                entry_id: '',
                 sync_mode: 'INCREMENTAL',
                 is_active: true,
                 incremental_field: '',
@@ -1280,23 +1328,27 @@
                 source_filter_sql: null,
                 is_full_replace_first: true,
                 send_error_log_to_wecom: false,
-                wecom_robot_webhook_url: null
+                wecom_robot_webhook_url: null,
+                sync_type: 'db2jdy'
             };
 
-            const crud = useCrud('/sync-tasks', '同步任务', defaultTask, 'task_id');
+            // REFACTOR: 3.6 - Fix API endpoint
+            const crud = useCrud('/sync-tasks?sync_type=db2jdy', '同步任务', defaultTask, 'id');
             const departments = ref([]);
-            const tenantDatabases = ref([]); // 存储所有数据库
+            const allDatabases = ref([]);
 
             // 计算属性，用于根据选择的部门过滤数据库下拉框
             const filteredDatabases = computed(() => {
+                // 过滤出 sync_type = 'db2jdy' 的数据库
+                let dbs = allDatabases.value.filter(db => db.sync_type === 'db2jdy');
                 if (props.isSuperuser) {
-                    if (!crud.currentItem.department_id) return []; // 管理员必须先选部门
-                    return tenantDatabases.value.filter(db => db.department_id === crud.currentItem.department_id);
+                    if (!crud.currentItem.department_id) return [];
+                    return dbs.filter(db => db.department_id === crud.currentItem.department_id);
                 }
-                return tenantDatabases.value; // 普通租户直接显示 (后端已过滤)
+                return dbs; // 非超管，allDatabases 本身就是过滤过的
             });
 
-            // 规则: 所有模式 (INCREMENTAL, FULL_REPLACE, BINLOG) 都需要主键
+            // 动态验证规则
             const validatePkField = (rule, value, callback) => {
                 if (crud.currentItem.sync_mode !== 'FULL_REPLACE' && !value) {
                     callback(new Error('请输入源表主键'));
@@ -1333,13 +1385,23 @@
                 }
             };
 
-            // --- END: MODIFIED VALIDATION LOGIC ---
-
+            const taskRules = computed(() => ({
+                task_name: [{required: true, message: '请输入任务名称', trigger: 'blur'}],
+                department_id: [{required: props.isSuperuser, message: '请选择所属部门', trigger: 'change'}],
+                database_id: [{required: true, message: '请选择源数据库', trigger: 'change'}],
+                table_name: [{required: true, message: '请输入源表名', trigger: 'blur'}],
+                app_id: [{required: true, message: '请输入 App ID', trigger: 'blur'}],
+                entry_id: [{required: true, message: '请输入 Entry ID', trigger: 'blur'}],
+                business_keys: [{validator: validatePkField, trigger: 'blur'}],
+                full_replace_time: [{validator: validateFullReplaceTime, trigger: 'change'}],
+                incremental_field: [{validator: validateIncrementalField, trigger: 'blur'}],
+                incremental_interval: [{validator: validateIncrementalInterval, trigger: 'change'}],
+            }));
 
             const onDepartmentChange = () => {
                 // 管理员切换部门时，清空已选的数据库
                 if (props.isSuperuser) {
-                    crud.currentItem.source_db_id = null;
+                    crud.currentItem.database_id = null;
                 }
             };
 
@@ -1353,39 +1415,36 @@
                     }
                 }
             };
-
-            // 获取数据库 (所有人)
-            const fetchTenantDatabases = async () => {
+            const fetchAllDatabases = async () => {
                 try {
-                    // /api/tenant-databases 后端会根据用户权限自动过滤
-                    tenantDatabases.value = (await apiClient.get('/tenant-databases')).data;
+                    // 获取所有数据库，然后在前端过滤
+                    allDatabases.value = (await apiClient.get('/databases')).data;
                 } catch (error) {
                     console.error("获取数据库列表失败:", error);
                 }
             };
 
-            const taskRules = {
-                task_name: [{required: true, message: '请输入任务名称', trigger: 'blur'}],
-                department_id: [{required: props.isSuperuser, message: '请选择所属部门', trigger: 'change'}],
-                source_db_id: [{required: true, message: '请选择源数据库', trigger: 'change'}],
-                source_table: [{required: true, message: '请输入源表名', trigger: 'blur'}],
-                jdy_app_id: [{required: true, message: '请输入 App ID', trigger: 'blur'}],
-                jdy_entry_id: [{required: true, message: '请输入 Entry ID', trigger: 'blur'}],
-
-                // 应用新的自定义验证器
-                pk_field_names: [{validator: validatePkField, trigger: 'blur'}],
-                full_replace_time: [{validator: validateFullReplaceTime, trigger: 'change'}],
-                incremental_field: [{validator: validateIncrementalField, trigger: 'blur'}],
-                incremental_interval: [{validator: validateIncrementalInterval, trigger: 'change'}],
-            };
+            // const taskRules = {
+            //     task_name: [{required: true, message: '请输入任务名称', trigger: 'blur'}],
+            //     department_id: [{required: props.isSuperuser, message: '请选择所属部门', trigger: 'change'}],
+            //     database_id: [{required: true, message: '请选择源数据库', trigger: 'change'}],
+            //     table_name: [{required: true, message: '请输入源表名', trigger: 'blur'}],
+            //     app_id: [{required: true, message: '请输入 App ID', trigger: 'blur'}],
+            //     entry_id: [{required: true, message: '请输入 Entry ID', trigger: 'blur'}],
+            //
+            //     // 应用新的自定义验证器
+            //     business_keys: [{validator: validatePkField, trigger: 'blur'}],
+            //     full_replace_time: [{validator: validateFullReplaceTime, trigger: 'change'}],
+            //     incremental_field: [{validator: validateIncrementalField, trigger: 'blur'}],
+            //     incremental_interval: [{validator: validateIncrementalInterval, trigger: 'change'}],
+            // };
 
             const formatDateTime = (isoDateTime) => isoDateTime ? new Date(isoDateTime).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai'}) : '-';
             const statusType = (status) => status === 'running' ? 'primary' : (status === 'error' ? 'danger' : 'info');
 
             watch(() => crud.dialogVisible.value, (newVal) => {
                 if (newVal) {
-                    // 打开弹窗时，确保数据库列表已加载
-                    fetchTenantDatabases();
+                    fetchAllDatabases();
                     if (props.isSuperuser) fetchDepartments();
 
                     // (原) 处理时间回显
@@ -1407,7 +1466,7 @@
                 ...crud,
                 taskRules,
                 departments,
-                tenantDatabases,
+                allDatabases,
                 filteredDatabases,
                 onDepartmentChange,
                 formatDateTime,
@@ -1417,13 +1476,320 @@
         }
     };
 
-    // --- SyncLog Component (适配多租户) ---
-    const SyncLogView = {
+    // --- SyncTask Component (JDY -> DB) ---
+    const SyncTaskViewJdyToDb = {
         props: ['isSuperuser'],
         template: `
           <el-card class="config-card">
             <template #header>
-              <div class="card-header"><span>错误日志查看</span>
+              <div class="card-header"><span>简道云 -> 数据库 (JDY to DB)</span>
+                <el-button type="primary" @click="openDialog()" :icon="ElementPlusIcons.Plus">添加任务</el-button>
+              </div>
+            </template>
+            <el-table :data="items" v-loading="loading" style="width: 100%" row-key="id">
+              <el-table-column prop="id" label="ID" width="60"></el-table-column>
+              <el-table-column v-if="isSuperuser" prop="department_name" label="所属部门" width="180"
+                               sortable></el-table-column>
+              <el-table-column prop="task_name" label="任务名称" sortable></el-table-column>
+              <el-table-column prop="db_show_name" label="目标数据库" width="150" sortable>
+                <template #default="scope">
+                  <el-tag type="success">{{ scope.row.db_show_name || 'N/A' }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="table_name" label="目标表名" sortable></el-table-column>
+              <el-table-column prop="app_id" label="App ID (自动)" width="150"></el-table-column>
+              <el-table-column prop="entry_id" label="Entry ID (自动)" width="150"></el-table-column>
+              <el-table-column prop="daily_sync_type" label="全量同步" width="120">
+                 <template #default="scope">{{ scope.row.daily_sync_type || 'N/A' }}</template>
+              </el-table-column>
+              <el-table-column prop="daily_sync_time" label="同步时间" width="100">
+                 <template #default="scope">{{ formatTime(scope.row.daily_sync_time) }}</template>
+              </el-table-column>
+              <el-table-column prop="is_active" label="激活" width="70">
+                <template #default="scope">
+                  <el-tag :type="scope.row.is_active ? 'success' : 'info'">{{ scope.row.is_active ? '是' : '否' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="300" fixed="right">
+                <template #default="scope">
+                  <el-button size="small" @click="openDialog(scope.row)" :icon="ElementPlusIcons.Edit">编辑</el-button>
+                  <el-button size="small" type="danger" @click="deleteItem(scope.row.id)"
+                             :icon="ElementPlusIcons.Delete">删除
+                  </el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+
+            <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑任务' : '添加任务'" width="700px"
+                       @close="closeDialog" class="form-dialog">
+              <el-form ref="formRef" :model="currentItem" :rules="taskRules" label-position="top" label-width="150px">
+
+                <input type="hidden" v-model="currentItem.sync_type"/>
+
+                <el-form-item label="Webhook URL (保存后生成，复制到简道云)" v-if="isEdit && currentItem.webhook_url">
+                  <el-input v-model="currentItem.webhook_url" readonly>
+                    <template #append>
+                      <el-button @click="copyWebhookUrl(currentItem.webhook_url)"
+                                 :icon="ElementPlusIcons.DocumentCopy"></el-button>
+                    </template>
+                  </el-input>
+                  <div class="form-item-note">将此 URL 粘贴到简道云对应表单的「数据推送」设置中。</div>
+                </el-form-item>
+
+                <el-row :gutter="20">
+                  <el-col :span="12">
+                    <el-form-item label="任务名称" prop="task_name">
+                      <el-input v-model="currentItem.task_name" placeholder="例如：销售订单接收"></el-input>
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="12">
+                    <el-form-item label="所属部门 (租户)" prop="department_id" v-if="isSuperuser">
+                      <el-select v-model="currentItem.department_id" placeholder="选择所属部门"
+                                 @change="onDepartmentChange">
+                        <el-option v-for="dept in departments" :key="dept.id"
+                                   :label="dept.department_name" :value="dept.id"></el-option>
+                      </el-select>
+                    </el-form-item>
+                  </el-col>
+                </el-row>
+
+                <el-row :gutter="20">
+                  <el-col :span="12">
+                    <el-form-item label="目标数据库" prop="database_id">
+                      <el-select v-model="currentItem.database_id" placeholder="选择目标数据库">
+                        <el-option v-for="db in filteredDatabases" :key="db.id"
+                                   :label="db.db_show_name" :value="db.id"></el-option>
+                      </el-select>
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="12">
+                    <el-form-item label="目标数据库表名" prop="table_name">
+                      <el-input v-model="currentItem.table_name" placeholder="数据库中的表名 (若不存在将自动创建)"></el-input>
+                    </el-form-item>
+                  </el-col>
+                </el-row>
+
+                <el-form-item label="简道云 App ID / Entry ID (选填)">
+                  <div class="form-item-note">通常无需填写。在首次收到 Webhook 数据时，系统将自动回填。</div>
+                  <el-row :gutter="20">
+                    <el-col :span="12">
+                      <el-input v-model="currentItem.app_id" placeholder="App ID (自动填充)"></el-input>
+                    </el-col>
+                    <el-col :span="12">
+                      <el-input v-model="currentItem.entry_id" placeholder="Entry ID (自动填充)"></el-input>
+                    </el-col>
+                  </el-row>
+                </el-form-item>
+
+
+                <el-divider>表结构配置</el-divider>
+
+                <el-row :gutter="20">
+                  <el-col :span="12">
+                    <el-form-item label="首次全量同步 (会覆盖目标数据)">
+                      <el-switch v-model="currentItem.is_full_replace_first"></el-switch>
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="12">
+                    <el-form-item label="任务激活">
+                      <el-switch v-model="currentItem.is_active"></el-switch>
+                    </el-form-item>
+                  </el-col>
+                </el-row>
+
+                <el-row :gutter="20">
+                  <el-col :span="12">
+                    <el-form-item label="列名使用拼音">
+                      <el-switch v-model="currentItem.label_to_pinyin"></el-switch>
+                      <div class="form-item-note">开启后，将使用字段的"标题"转为拼音作为列名 (e.g., "订单金额" ->
+                        "ding_dan_jin_e")。
+                      </div>
+                      <div class="form-item-note">关闭后，将优先使用字段的"别名" (如果设置了)，其次是"标题"原文。</div>
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="12">
+                    <el-form-item label="JSON/数组 存为字符串">
+                      <el-switch v-model="currentItem.json_as_string"></el-switch>
+                      <div class="form-item-note">开启后，子表单、附件、地址等字段将存为 JSON 字符串 (TEXT)。</div>
+                      <div class="form-item-note">关闭后，将尝试存为数据库的 JSON 类型 (若支持)。</div>
+                    </el-form-item>
+                  </el-col>
+                </el-row>
+
+                <el-divider>定时全量同步 (可选)</el-divider>
+                <el-row :gutter="20">
+                  <el-col :span="12">
+                    <el-form-item label="全量同步类型" prop="daily_sync_type">
+                      <el-select v-model="currentItem.daily_sync_type" placeholder="选择全量同步类型">
+                        <el-option label="ONCE (仅首次)" value="ONCE"></el-option>
+                        <el-option label="DAILY (每日定时)" value="DAILY"></el-option>
+                      </el-select>
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="12" v-if="currentItem.daily_sync_type === 'DAILY'">
+                    <el-form-item label="每日同步时间" prop="daily_sync_time">
+                      <el-time-picker v-model="currentItem.daily_sync_time_temp" format="HH:mm"
+                                      value-format="HH:mm:ss"
+                                      placeholder="选择时间"></el-time-picker>
+                    </el-form-item>
+                  </el-col>
+                </el-row>
+
+
+                <el-divider>通知配置</el-divider>
+                <el-row :gutter="20">
+                  <el-col :span="12">
+                    <el-form-item label="发送企微错误日志">
+                      <el-switch v-model="currentItem.send_error_log_to_wecom"></el-switch>
+                    </el-form-item>
+                  </el-col>
+                </el-row>
+                <el-form-item label="企微机器人 Webhook URL" prop="wecom_robot_webhook_url"
+                              v-if="currentItem.send_error_log_to_wecom">
+                  <el-input type="textarea" v-model="currentItem.wecom_robot_webhook_url"
+                            placeholder="如果打开了企微错误通知，请粘贴机器人 URL"></el-input>
+                </el-form-item>
+
+              </el-form>
+              <template #footer>
+                <el-button @click="closeDialog">取消</el-button>
+                <el-button type="primary" @click="saveItem" :loading="loading">保存</el-button>
+              </template>
+            </el-dialog>
+          </el-card>
+        `,
+        props: ['isSuperuser'],
+        setup(props) {
+            // REFACTOR: 3.6 - Default item for jdy2db
+            const defaultTask = {
+                task_name: '',
+                department_id: null,
+                database_id: null,
+                table_name: '',
+                is_active: true,
+                is_full_replace_first: true,
+                daily_sync_time_temp: null,
+                daily_sync_time: null,
+                daily_sync_type: 'ONCE',
+                json_as_string: false,
+                label_to_pinyin: false,
+                send_error_log_to_wecom: false,
+                wecom_robot_webhook_url: null,
+                sync_type: 'jdy2db' // REFACTOR: 3.6 - Hardcode type
+            };
+
+            // REFACTOR: 3.6 - Fix API endpoint
+            const crud = useCrud('/sync-tasks?sync_type=jdy2db', '同步任务', defaultTask, 'id');
+            const departments = ref([]);
+            const allDatabases = ref([]);
+
+            const filteredDatabases = computed(() => {
+                // 过滤出 sync_type = 'jdy2db' 的数据库
+                let dbs = allDatabases.value.filter(db => db.sync_type === 'jdy2db');
+                if (props.isSuperuser) {
+                    if (!crud.currentItem.department_id) return [];
+                    return dbs.filter(db => db.department_id === crud.currentItem.department_id);
+                }
+                return dbs;
+            });
+
+            const validateDailyTime = (rule, value, callback) => {
+                if (crud.currentItem.daily_sync_type === 'DAILY' && !crud.currentItem.daily_sync_time_temp) {
+                    callback(new Error('请选择每日同步时间'));
+                } else {
+                    callback();
+                }
+            };
+
+            const taskRules = computed(() => ({
+                task_name: [{required: true, message: '请输入任务名称', trigger: 'blur'}],
+                department_id: [{required: props.isSuperuser, message: '请选择所属部门', trigger: 'change'}],
+                database_id: [{required: true, message: '请选择目标数据库', trigger: 'change'}],
+                table_name: [{required: true, message: '请输入目标表名', trigger: 'blur'}],
+                daily_sync_time: [{validator: validateDailyTime, trigger: 'change'}],
+            }));
+
+            const onDepartmentChange = () => {
+                if (props.isSuperuser) {
+                    crud.currentItem.database_id = null;
+                }
+            };
+            const fetchDepartments = async () => {
+                if (props.isSuperuser) {
+                    try {
+                        departments.value = (await apiClient.get('/departments')).data;
+                    } catch (e) {
+                        console.error(e);
+                    }
+                }
+            };
+            const fetchAllDatabases = async () => {
+                try {
+                    allDatabases.value = (await apiClient.get('/databases')).data;
+                } catch (error) {
+                    console.error("获取数据库列表失败:", error);
+                }
+            };
+
+            const formatTime = (isoTime) => {
+                if (!isoTime) return '-';
+                try {
+                    // isoTime might be "HH:MM:SS" or "YYYY-MM-DDTHH:MM:SS"
+                    const timePart = isoTime.split('T').pop();
+                    return timePart.substring(0, 5); // "HH:MM"
+                } catch (e) {
+                    return isoTime;
+                }
+            };
+
+            const copyWebhookUrl = (url) => {
+                 navigator.clipboard.writeText(url).then(() => {
+                    ElMessage.success('Webhook URL 已复制到剪贴板！');
+                 }, (err) => {
+                    ElMessage.error('复制失败: ' + err);
+                 });
+            };
+
+            watch(() => crud.dialogVisible.value, (newVal) => {
+                if (newVal) {
+                    fetchAllDatabases();
+                    if (props.isSuperuser) fetchDepartments();
+                    // 回显时间
+                    if (crud.isEdit.value && crud.currentItem.daily_sync_time) {
+                        crud.currentItem.daily_sync_time_temp = crud.currentItem.daily_sync_time;
+                    } else if (newVal && !crud.isEdit.value) {
+                        crud.currentItem.daily_sync_time_temp = null;
+                        if (!props.isSuperuser) {
+                            const deptId = localStorage.getItem('department_id');
+                            crud.currentItem.department_id = deptId ? parseInt(deptId) : null;
+                        }
+                    }
+                }
+            });
+
+            return {
+                ...crud,
+                taskRules,
+                departments,
+                allDatabases,
+                filteredDatabases,
+                onDepartmentChange,
+                formatTime,
+                copyWebhookUrl,
+                ElementPlusIcons
+            };
+        }
+    };
+
+
+    // --- SyncLog Component (DB -> JDY) (REFACTORED) ---
+    const SyncLogViewDbToJdy = {
+        props: ['isSuperuser'],
+        template: `
+          <el-card class="config-card">
+            <template #header>
+              <div class="card-header"><span>错误日志 (DB -> JDY)</span>
                 <el-button @click="fetchItems" :icon="ElementPlusIcons.Refresh" :loading="loading">刷新</el-button>
               </div>
             </template>
@@ -1475,12 +1841,116 @@
         `,
         props: ['isSuperuser'],
         setup(props) {
-            // API 适配
-            const {items, loading, fetchItems} = useCrud('/error-logs', '日志');
-
-            // 适配多租户
+            // REFACTOR: 3.6 - Fix API endpoint
+            const {items, loading, fetchItems} = useCrud('/sync-logs?sync_type=db2jdy', '日志');
             const filters = reactive({dateRange: null, departmentIdFilter: '', taskIdFilter: ''});
 
+            const filteredLogs = computed(() => {
+                let logs = items.value;
+                if (filters.dateRange?.length === 2) {
+                    const [start, end] = [new Date(filters.dateRange[0]).getTime(), new Date(filters.dateRange[1]).getTime()];
+                    logs = logs.filter(log => {
+                        const t = new Date(log.timestamp).getTime();
+                        return t >= start && t <= end;
+                    });
+                }
+                if (props.isSuperuser && filters.departmentIdFilter) {
+                    logs = logs.filter(log => log.department_id === filters.departmentIdFilter);
+                }
+                if (filters.taskIdFilter) {
+                    logs = logs.filter(log => log.task_id === filters.taskIdFilter);
+                }
+                return logs;
+            });
+            const clearFilters = () => {
+                filters.dateRange = null;
+                filters.departmentIdFilter = '';
+                filters.taskIdFilter = '';
+            };
+            const formatDateTime = (isoDateTime) => isoDateTime ? new Date(isoDateTime).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai'}) : '-';
+            const formatPayload = (payloadStr) => {
+                if (!payloadStr) return 'N/A';
+                try {
+                    return JSON.stringify(JSON.parse(payloadStr), null, 2);
+                } catch (e) {
+                    return payloadStr;
+                }
+            };
+            return {
+                items,
+                loading,
+                fetchItems,
+                filters,
+                filteredLogs,
+                clearFilters,
+                formatDateTime,
+                formatPayload,
+                ElementPlusIcons
+            };
+        }
+    };
+
+    // --- SyncLog Component (JDY -> DB) (NEW) ---
+    const SyncLogViewJdyToDb = {
+        props: ['isSuperuser'],
+        template: `
+          <el-card class="config-card">
+            <template #header>
+              <div class="card-header"><span>错误日志 (JDY -> DB)</span>
+                <el-button @click="fetchItems" :icon="ElementPlusIcons.Refresh" :loading="loading">刷新</el-button>
+              </div>
+            </template>
+            <el-form :inline="true" :model="filters" class="log-filter-form">
+              <el-form-item label="时间范围">
+                <el-date-picker v-model="filters.dateRange" type="datetimerange" range-separator="至"
+                                start-placeholder="开始日期" end-placeholder="结束日期"
+                                value-format="YYYY-MM-DDTHH:mm:ss"
+                                :default-time="[new Date(2000, 1, 1, 0, 0, 0), new Date(2000, 2, 1, 23, 59, 59)]"/>
+              </el-form-item>
+              <el-form-item label="部门" v-if="isSuperuser">
+                <el-input v-model.number="filters.departmentIdFilter" placeholder="部门ID (数字)" clearable></el-input>
+              </el-form-item>
+              <el-form-item label="任务ID">
+                <el-input v-model.number="filters.taskIdFilter" placeholder="任务ID (数字)" clearable></el-input>
+              </el-form-item>
+              <el-form-item>
+                <el-button @click="clearFilters" :icon="ElementPlusIcons.CircleClose">清空筛选</el-button>
+              </el-form-item>
+            </el-form>
+            <el-table :data="filteredLogs" v-loading="loading" style="width: 100%" height="calc(100vh - 270px)">
+              <el-table-column type="expand">
+                <template #default="props">
+                  <div style="padding: 10px; background-color: #f9f9f9;"><p><strong>Traceback:</strong></p>
+                    <pre style="white-space: pre-wrap; word-wrap: break-word;">{{ props.row.traceback || 'N/A' }}</pre>
+                    <p><strong>Payload:</strong></p>
+                    <pre
+                        style="white-space: pre-wrap; word-wrap: break-word; max-height: 300px; overflow-y: auto;">{{ formatPayload(props.row.payload) }}</pre>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column prop="id" label="ID" width="70"></el-table-column>
+              <el-table-column prop="timestamp" label="时间" width="170" sortable>
+                <template #default="scope">{{ formatDateTime(scope.row.timestamp) }}</template>
+              </el-table-column>
+              <el-table-column prop="department_name" label="所属部门" width="120" v-if="isSuperuser"
+                               sortable></el-table-column>
+              <el-table-column prop="task_id" label="任务ID" width="100" sortable></el-table-column>
+              <el-table-column prop="table_name" label="表名" width="150" sortable></el-table-column>
+              <el-table-column prop="app_id" label="App ID" width="120"></el-table-column>
+              <el-table-column prop="entry_id" label="Entry ID" width="120"></el-table-column>
+              <el-table-column prop="error_message" label="错误信息" min-width="250">
+                <template #default="scope">
+                  <div style="white-space: pre-wrap;">{{ scope.row.error_message }}</div>
+                </template>
+              </el-table-column>
+            </el-table>
+          </el-card>
+        `,
+        props: ['isSuperuser'],
+        setup(props) {
+            // REFACTOR: 3.6 - Fix API endpoint
+            const {items, loading, fetchItems} = useCrud('/sync-logs?sync_type=jdy2db', '日志');
+            const filters = reactive({dateRange: null, departmentIdFilter: '', taskIdFilter: ''});
             const filteredLogs = computed(() => {
                 let logs = items.value;
                 if (filters.dateRange?.length === 2) {
@@ -1529,13 +1999,19 @@
 
     // --- Router Setup (适配多租户) ---
     const routes = [
-        {path: '/', redirect: '/sync-tasks'},
+        // REFACTOR: 3.6 - Default route
+        {path: '/', redirect: '/tasks-db-to-jdy'},
+
         {path: '/departments', component: DepartmentView},
         {path: '/users', component: UserView},
         {path: '/databases', component: DatabaseView},
         {path: '/jdy-keys', component: JdyKeyInfoView},
-        {path: '/sync-tasks', component: SyncTaskView},
-        {path: '/error-logs', component: SyncLogView}
+
+        // REFACTOR: 3.6 - Split routes
+        {path: '/tasks-db-to-jdy', component: SyncTaskViewDbToJdy},
+        {path: '/tasks-jdy-to-db', component: SyncTaskViewJdyToDb},
+        {path: '/logs-db-to-jdy', component: SyncLogViewDbToJdy},
+        {path: '/logs-jdy-to-db', component: SyncLogViewJdyToDb}
     ];
     const router = VueRouter.createRouter({history: VueRouter.createWebHashHistory(), routes});
 
@@ -1577,7 +2053,7 @@
                 if (!force) {
                     try {
                         // 调用 /api/logout (DELETE) 来吊销Token
-                        // 修正：auth.py 中没有 /logout 路由，所以我们跳过它
+                        // auth.py 中没有 /logout 路由，所以我们跳过它
                         // await apiClient.delete('/logout');
                     } catch (error) {
                         console.error("Logout failed, proceeding with client-side cleanup:", error);
@@ -1623,8 +2099,12 @@
     app.component('UserView', UserView);
     app.component('DatabaseView', DatabaseView);
     app.component('JdyKeyInfoView', JdyKeyInfoView);
-    app.component('SyncTaskView', SyncTaskView);
-    app.component('SyncLogView', SyncLogView);
+
+    // REFACTOR: 3.6 - Register new components
+    app.component('SyncTaskViewDbToJdy', SyncTaskViewDbToJdy);
+    app.component('SyncTaskViewJdyToDb', SyncTaskViewJdyToDb);
+    app.component('SyncLogViewDbToJdy', SyncLogViewDbToJdy);
+    app.component('SyncLogViewJdyToDb', SyncLogViewJdyToDb);
 
     // --- START FIX ---
     // 修复了将 ElementPlusIconsVue 错误地用于循环的 BUG

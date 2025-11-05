@@ -4,14 +4,13 @@ import os
 from datetime import timedelta
 
 from flask import Flask, g, abort, send_from_directory, jsonify
-from sqlalchemy.orm import scoped_session
+from sqlalchemy.orm import scoped_session, joinedload
 from sqlalchemy.exc import OperationalError
 from flask_jwt_extended import JWTManager
 from flask_cors import CORS
 
 from app.config import Config
 from app.models import ConfigSession, Department, User
-
 
 # --- 将 Scoped Session 移至顶层，以修复回调函数中的引用错误 ---
 config_session_scoped = scoped_session(ConfigSession)
@@ -31,7 +30,7 @@ def create_app():
     app.config["JWT_SECRET_KEY"] = os.environ.get("JWT_SECRET_KEY", "super-secret-dev-key")
     # 使用 Bearer 令牌, 而不是 cookies
     app.config["JWT_TOKEN_LOCATION"] = ["headers"]
-    app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=24) # 缩短 Access Token
+    app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=24)  # 缩短 Access Token
     app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(hours=24)  # 添加 Refresh Token
 
     # (移除) Cookie 相关配置
@@ -58,7 +57,10 @@ def create_app():
         session = g.config_session
 
         if session:
-            return session.query(User).get(identity)
+            # 预加载 department 信息
+            return session.query(User).options(
+                joinedload(User.department)
+            ).get(identity)
         return None
 
     # @jwt.additional_claims_loader
@@ -74,11 +76,11 @@ def create_app():
     # --- CORS 配置 ---
     CORS(app, supports_credentials=True, origins=[
         "http://localhost:5173", "http://127.0.0.1:5173",  # 常见的 Vite/Vue 开发端口
-        "http://localhost:5000", "http://127.0.0.1:5000",  # 后端服务端口
+        f"http://localhost:{Config.PORT}", f"http://127.0.0.1:{Config.PORT}",  # 后端服务端口
 
         # 保留服务器配置
-        "http://0.0.0.0:5173",
-        "http://0.0.0.0:5000",
+        f"http://0.0.0.0:{Config.PORT}",
+        "http://0.0.0.0:5173",  # 保留 vite
 
         # 密码允许所有 10.x.x.x 网段的 IP (http 或 https)
         re.compile(r"^https?://10\..*")
@@ -208,5 +210,5 @@ def create_app():
             # 其他所有路径都返回 index.html
             return send_from_directory(app.static_folder, 'index.html')
 
-    print("Flask App created with JWT (Bearer), CORS, and static frontend serving.")
+    print(f"Flask App created with JWT (Bearer), CORS (Port: {Config.PORT}), and static frontend serving.")
     return app

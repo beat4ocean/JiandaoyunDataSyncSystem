@@ -13,22 +13,22 @@ from app.models import User
 auth_bp = Blueprint('auth_bp', __name__)
 
 
-# --- 权限装饰器 ---
-
-def superuser_required(fn):
-    """
-    自定义装饰器：检查JWT声明，确保用户是超级管理员。
-    """
-
-    @wraps(fn)
-    @jwt_required()
-    def wrapper(*args, **kwargs):
-        claims = get_jwt()
-        if not claims.get('is_superuser', False):
-            return jsonify({"msg": "Admins only!"}), 403
-        return fn(*args, **kwargs)
-
-    return wrapper
+# # --- 权限装饰器 ---
+#
+# def superuser_required(fn):
+#     """
+#     自定义装饰器：检查JWT声明，确保用户是超级管理员。
+#     """
+#
+#     @wraps(fn)
+#     @jwt_required()
+#     def wrapper(*args, **kwargs):
+#         claims = get_jwt()
+#         if not claims.get('is_superuser', False):
+#             return jsonify({"msg": "Admins only!"}), 403
+#         return fn(*args, **kwargs)
+#
+#     return wrapper
 
 
 # --- 认证路由 ---
@@ -97,46 +97,46 @@ def login():
         pass
 
 
-@auth_bp.route('/api/users/change-password', methods=['PATCH'])
-@jwt_required()
-def change_password():
-    """
-    非超管用户修改自己的密码
-    """
-    data = request.get_json()
-    old_password = data.get('old_password')
-    new_password = data.get('new_password')
-
-    if not old_password or not new_password:
-        return jsonify({"msg": "Missing old or new password"}), 400
-
-    # 从 JWT 的 identity 中获取 user_id (这将是一个字符串)
-    user_id = get_jwt_identity()
-    if not user_id:
-        return jsonify({"msg": "Invalid token identity"}), 401
-
-    session = g.config_session  # 使用 g.config_session
-    try:
-        # session.get() 可以处理字符串 '1'
-        user = session.query(User).get(user_id)
-        if not user:
-            return jsonify({"msg": "User not found"}), 404
-
-        # 检查是否是超管在修改自己的密码 (超管也应通过此路由修改自己的密码)
-        # 检查旧密码
-        if user.check_password(old_password):
-            user.set_password(new_password)
-            session.commit()
-            return jsonify({"msg": "Password updated successfully"}), 200
-        else:
-            return jsonify({"msg": "Invalid old password"}), 401
-
-    except Exception as e:
-        session.rollback()
-        logging.error(f"Change password error: {e}")
-        return jsonify({"msg": "Internal server error"}), 500
-    finally:
-        pass  # 移除 session.close()
+# @auth_bp.route('/api/users/change-password', methods=['PATCH'])
+# @jwt_required()
+# def change_password():
+#     """
+#     非超管用户修改自己的密码
+#     """
+#     data = request.get_json()
+#     old_password = data.get('old_password')
+#     new_password = data.get('new_password')
+#
+#     if not old_password or not new_password:
+#         return jsonify({"msg": "Missing old or new password"}), 400
+#
+#     # 从 JWT 的 identity 中获取 user_id (这将是一个字符串)
+#     user_id = get_jwt_identity()
+#     if not user_id:
+#         return jsonify({"msg": "Invalid token identity"}), 401
+#
+#     session = g.config_session  # 使用 g.config_session
+#     try:
+#         # session.get() 可以处理字符串 '1'
+#         user = session.query(User).get(user_id)
+#         if not user:
+#             return jsonify({"msg": "User not found"}), 404
+#
+#         # 检查是否是超管在修改自己的密码 (超管也应通过此路由修改自己的密码)
+#         # 检查旧密码
+#         if user.check_password(old_password):
+#             user.set_password(new_password)
+#             session.commit()
+#             return jsonify({"msg": "Password updated successfully"}), 200
+#         else:
+#             return jsonify({"msg": "Invalid old password"}), 401
+#
+#     except Exception as e:
+#         session.rollback()
+#         logging.error(f"Change password error: {e}")
+#         return jsonify({"msg": "Internal server error"}), 500
+#     finally:
+#         pass  # 移除 session.close()
 
 
 # --- Refresh 路由 ---

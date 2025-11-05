@@ -183,10 +183,10 @@ if __name__ == "__main__":
         sys.exit(1)
 
     # 6. 启动 Flask Web 服务器 (使用 Waitress)
-    print("Starting Flask web server with Waitress on http://0.0.0.0:5000...")
+    print(f"Starting Flask web server with Waitress on http://0.0.0.0:{Config.PORT}...")
     try:
-        # 我们将保持 5000 端口，并确保前端也使用 5000。
-        serve(app, host='0.0.0.0', port=5000, threads=4)
+        # 使用 Config 中的端口
+        serve(app, host='0.0.0.0', port=Config.PORT, threads=4)
     except (KeyboardInterrupt, SystemExit):
         print("Flask server received shutdown signal.")
     finally:
