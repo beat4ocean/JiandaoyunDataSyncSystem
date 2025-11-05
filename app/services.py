@@ -48,7 +48,8 @@ def get_dynamic_session(task: SyncTask) -> Generator[Any, Any, None]:
 
     # 检查缓存
     if db_id not in dynamic_engine_cache:
-        print(f"task_id:[{task.task_id}] Creating new dynamic engine for source DB: {db_info.db_show_name} (ID: {db_id})")
+        print(
+            f"task_id:[{task.task_id}] Creating new dynamic engine for source DB: {db_info.db_show_name} (ID: {db_id})")
         # 构建连接字符串
         db_url = (
             f"{db_info.db_type}://{db_info.db_user}:{quote_plus(db_info.db_password)}@"
@@ -389,7 +390,10 @@ class SyncService:
         for field in pk_fields:
             if field not in row:
                 raise ValueError(f"task_id:[{task.task_id}] Composite PK field '{field}' not found in row data.")
-            pk_values.append(row[field])
+            # 修复 TypeError: Object of type date is not JSON serializable bug
+            # pk_values.append(row[field])
+            row_value = json.loads(json.dumps(row[field], default=json_serializer))
+            pk_values.append(row_value)
 
         return pk_fields, pk_values
 
@@ -799,7 +803,8 @@ class SyncService:
                 # 1. 如果是 DATE 类型，总是截断
                 if col_type_name == 'DATE':
                     last_sync_time_for_query = last_sync_time.replace(hour=0, minute=0, second=0, microsecond=0)
-                    print(f"task_id:[{task.task_id}] Detected DATE type. Querying >= {last_sync_time_for_query} (Truncated)")
+                    print(
+                        f"task_id:[{task.task_id}] Detected DATE type. Querying >= {last_sync_time_for_query} (Truncated)")
 
                 # 2. 如果是 DATETIME，执行数据探测
                 elif col_type_name.startswith('DATETIME'):
@@ -838,7 +843,8 @@ class SyncService:
                 else:
                     # 3. 如果是 TIMESTAMP 或其他类型，使用精确时间
                     last_sync_time_for_query = last_sync_time
-                    print(f"task_id:[{task.task_id}] Detected {col_type_name} type. Querying >= {last_sync_time_for_query}")
+                    print(
+                        f"task_id:[{task.task_id}] Detected {col_type_name} type. Querying >= {last_sync_time_for_query}")
 
                 # 5. 获取源数据 (带 SQL 过滤)
                 base_query = (
