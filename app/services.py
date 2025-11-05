@@ -1046,7 +1046,7 @@ class SyncService:
                     return  # 退出线程
 
             # 3. 在线程启动时创建一次性的 ConfigSession 来更新状态 (如果上面没运行)
-            if not task.is_full_replace_first:  # 仅在非首次运行时
+            else:  # 仅在非首次运行时
                 with ConfigSession() as session:
                     self._update_task_status(session, task, status='running')
                     session.refresh(task)  # 确保 task 对象是最新的

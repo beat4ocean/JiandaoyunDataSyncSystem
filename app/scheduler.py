@@ -294,7 +294,6 @@ def remove_task_from_scheduler(task_id: int):
 def add_or_update_task_in_scheduler(task: SyncTask):
     """
     根据 SyncTask 对象在调度器中添加或更新一个作业。
-    注意: BINLOG 任务由 binlog_manager 自动管理，此处跳过。
     """
     job_id = f"task_{task.task_id}"
 
@@ -315,7 +314,8 @@ def add_or_update_task_in_scheduler(task: SyncTask):
                 args=[task.task_id],
                 id=job_id,
                 replace_existing=True,
-                max_instances=1  # (关键) 防止并发
+                max_instances=1,  # (关键) 防止并发
+                misfire_grace_time=60  # 增加misfire_grace_time以防任务堆积
             )
         else:
             # 任务激活但没有时间，应移除
@@ -334,7 +334,8 @@ def add_or_update_task_in_scheduler(task: SyncTask):
                 id=job_id,
                 replace_existing=True,
                 max_instances=1,  # (关键) 防止并发
-                next_run_time=datetime.now(TZ_UTC_8) + timedelta(seconds=10)  # 10秒后启动
+                next_run_time=datetime.now(TZ_UTC_8) + timedelta(seconds=10),  # 10秒后启动
+                misfire_grace_time=60  # 增加misfire_grace_time以防任务堆积
             )
         else:
             # 任务激活但没有间隔，应移除
@@ -343,10 +344,21 @@ def add_or_update_task_in_scheduler(task: SyncTask):
             remove_task_from_scheduler(task.task_id)
 
     elif task.sync_mode == 'BINLOG':
-        # BINLOG 任务由 binlog_manager 自动处理。
-        # 但如果任务 *从* 另一种模式 *切换到* BINLOG，我们需要移除旧的作业。
-        print(f"Task {job_id} (BINLOG) is active. Ensuring no old CRON/INTERVAL job exists.")
-        remove_task_from_scheduler(task.task_id)
+        # # BINLOG 任务由 binlog_manager 自动处理。
+        # # 但如果任务 *从* 另一种模式 *切换到* BINLOG，我们需要移除旧的作业。
+        # print(f"Task {job_id} (BINLOG) is active. Ensuring no old CRON/INTERVAL job exists.")
+
+        # 添加 BINLOG 监听器管理器
+        scheduler.add_job(
+            check_and_start_new_binlog_listeners,
+            trigger='interval',
+            minutes=Config.CHECK_INTERVAL_MINUTES,  # 每 CHECK_INTERVAL_MINUTES 检查一次是否有新/停止的 binlog 任务
+            id='binlog_manager',
+            replace_existing=True,
+            max_instances=1,  # (关键) 防止并发
+            next_run_time=datetime.now(TZ_UTC_8) + timedelta(seconds=5),  # 5秒后启动
+            misfire_grace_time=60  # 增加misfire_grace_time以防任务堆积
+        )
 
 
 # --- 启动调度器 ---
@@ -359,19 +371,7 @@ def start_scheduler(app: Flask):
     with app.app_context():
         print("Starting APScheduler...")
         try:
-            with ConfigSession() as config_session:
-                # 1. 预加载 department 和 source_database
-                tasks = config_session.query(SyncTask).options(
-                    joinedload(SyncTask.department),
-                    joinedload(SyncTask.source_database)
-                ).filter_by(is_active=True).all()
-                print(f"Found {len(tasks)} active tasks to schedule.")
-
-                for task in tasks:
-                    # 调用新的可重用函数来添加每个作业
-                    add_or_update_task_in_scheduler(task)
-
-            # 2. 添加 BINLOG 监听器管理器
+            # 1. 添加 BINLOG 监听器管理器
             scheduler.add_job(
                 check_and_start_new_binlog_listeners,
                 trigger='interval',
@@ -379,10 +379,11 @@ def start_scheduler(app: Flask):
                 id='binlog_manager',
                 replace_existing=True,
                 max_instances=1,  # (关键) 防止并发
-                next_run_time=datetime.now(TZ_UTC_8) + timedelta(seconds=5)  # 5秒后启动
+                next_run_time=datetime.now(TZ_UTC_8) + timedelta(seconds=5),  # 5秒后启动
+                misfire_grace_time=60  # 增加misfire_grace_time以防任务堆积
             )
 
-            # 3. 添加字段映射刷新器
+            # 2. 添加字段映射刷新器
             scheduler.add_job(
                 update_all_field_mappings_job,
                 trigger='interval',
@@ -390,7 +391,8 @@ def start_scheduler(app: Flask):
                 id='field_mapping_updater',
                 replace_existing=True,
                 max_instances=1,  # (关键) 防止并发
-                next_run_time=datetime.now(TZ_UTC_8) + timedelta(seconds=3)  # 3秒后首次启动
+                next_run_time=datetime.now(TZ_UTC_8) + timedelta(seconds=3),  # 3秒后首次启动
+                misfire_grace_time=60  # 增加misfire_grace_time以防任务堆积
             )
 
             scheduler.start()
@@ -398,4 +400,47 @@ def start_scheduler(app: Flask):
 
         except Exception as e:
             print(f"CRITICAL: Failed to start scheduler: {e}")
+            traceback.print_exc()
+
+
+# --- 刷新调度器 ---
+
+def refresh_scheduler(app: Flask):
+    """
+    更新作业并启动调度器。
+    现在为每个任务动态创建作业。
+    """
+    with app.app_context():
+        print("Refreshing APScheduler...")
+        try:
+            # 1. 添加定时任务
+            with ConfigSession() as config_session:
+
+                # 1. 删除失效任务
+                not_active_tasks = config_session.query(SyncTask).options(
+                    joinedload(SyncTask.department),
+                    joinedload(SyncTask.source_database)
+                ).filter_by(is_active=False).all()
+                print(f"Found {len(not_active_tasks)} not active tasks to schedule.")
+
+                for task in not_active_tasks:
+                    # 调用新的可重用函数来添加每个作业
+                    remove_task_from_scheduler(task)
+
+                # 1. 添加生效任务
+                active_tasks = config_session.query(SyncTask).options(
+                    joinedload(SyncTask.department),
+                    joinedload(SyncTask.source_database)
+                ).filter_by(is_active=True).all()
+                print(f"Found {len(active_tasks)} active tasks to schedule.")
+
+                for task in active_tasks:
+                    # 调用新的可重用函数来添加每个作业
+                    add_or_update_task_in_scheduler(task)
+
+            # scheduler.start()
+            print("Scheduler refreshed successfully with dynamic jobs.")
+
+        except Exception as e:
+            print(f"CRITICAL: Failed to refresh scheduler: {e}")
             traceback.print_exc()
