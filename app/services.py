@@ -471,9 +471,9 @@ class SyncService:
                                                                          ids_to_delete)
                     success_count = sum(resp.get('success_count', 0) for resp in delete_responses)
                     total_deleted += success_count
-                    if success_count != len(data_ids):
-                        log_sync_error(task_config=task,
-                                       extra_info=f"task_id:[{task.task_id}] Delete mismatch. Requested: {len(data_ids)}, Deleted: {success_count}.")
+                    # if success_count != len(data_ids):
+                    #     log_sync_error(task_config=task,
+                    #                    extra_info=f"task_id:[{task.task_id}] Delete mismatch. Requested: {len(data_ids)}, Deleted: {success_count}.")
                 except Exception as e:
                     log_sync_error(
                         task_config=task,
@@ -622,9 +622,9 @@ class SyncService:
                     # delete_batch_data 返回一个列表，需要对列表中的每个响应求和
                     success_count = sum(resp.get('success_count', 0) for resp in delete_responses)
                     total_deleted += success_count
-                    if success_count != len(data_ids):
-                        log_sync_error(task_config=task,
-                                       extra_info=f"task_id:[{task.task_id}] Delete mismatch. Requested: {len(data_ids)}, Deleted: {success_count}.")
+                    # if success_count != len(data_ids):
+                    #     log_sync_error(task_config=task,
+                    #                    extra_info=f"task_id:[{task.task_id}] Delete mismatch. Requested: {len(data_ids)}, Deleted: {success_count}.")
 
                     data_id = jdy_data[-1]['_id']
                 print(f"task_id:[{task.task_id}] Jdy data deleted ({total_deleted} items). Fetching from source DB...")
