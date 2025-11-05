@@ -1,18 +1,24 @@
 import datetime
 import json
 import logging
+import re
 import time
 import time as time_module
 import traceback
-from datetime import datetime, time as time_obj, date, timezone, timedelta
+from datetime import datetime, date, time, timedelta, timezone
+from datetime import time as time_obj
 from decimal import Decimal
 from functools import wraps
 from typing import Dict, Any
 from urllib.parse import quote_plus, urlunparse
 
 import requests
+from pypinyin import pinyin, Style
+from sqlalchemy import (String, Float, DateTime, Text, JSON, Time, Boolean, BigInteger, Integer)
 from sqlalchemy import create_engine, text
-from sqlalchemy.exc import OperationalError, DBAPIError
+from sqlalchemy.dialects.mysql import LONGTEXT
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import OperationalError
 
 TZ_UTC_8 = timezone(timedelta(hours=8))
 
@@ -153,10 +159,10 @@ def log_sync_error(task_config: 'SyncTask' = None,
         # 延迟导入 SyncTask 以进行类型检查
         from app.models import SyncTask
         if isinstance(task_config, SyncTask):
-            task_id = task_config.task_id
-            app_id = task_config.jdy_app_id
-            entry_id = task_config.jdy_entry_id
-            table_name = task_config.source_table
+            task_id = task_config.id
+            app_id = task_config.app_id
+            entry_id = task_config.entry_id
+            table_name = task_config.table_name
             department_id = task_config.department.id
             department_name = task_config.department.department_name
 
@@ -255,6 +261,225 @@ def log_sync_error(task_config: 'SyncTask' = None,
             # print("log_sync_error: 关闭独立创建的会话。")
             session.close()
 
+
+# --- 简道云同步数据库 增加内容开始 ---
+# --- 名称与类型转换 ---
+
+def convert_to_pinyin(name: str) -> str:
+    """将包含中文的名称转换为全小写的拼音下划线风格，便于用作表名"""
+    if not name:
+        return ""
+    # 检查名称中是否包含中文字符
+    if re.search(r'[\u4e00-\u9fa5]', name):
+        # 如果有，先将中文转换为拼音
+        pinyin_list = pinyin(name, style=Style.NORMAL)
+        # 将拼音列表连接成一个字符串
+        name = '_'.join(item[0] for item in pinyin_list if item and item[0])  # 添加检查防止空item
+
+    # 对转换后（或原始的英文）字符串进行清理
+    # 1. 替换所有非字母、数字、下划线的字符为空字符串
+    name = re.sub(r'[^a-zA-Z0-9_]', '', name)
+    # 2. 将一个或多个连续的下划线合并为单个下划线
+    name = re.sub(r'_+', '_', name)
+    # 3. 确保不以下划线开头或结尾
+    name = name.strip('_')
+    # 4. 转换为小写
+    name = name.lower()
+    # 5. 如果名称为空或变为纯下划线，提供默认名称
+    if not name or name == '_':
+        return "invalid_name"
+    # 6. 确保不以数字开头 (如果数据库有此限制)
+    if name[0].isdigit():
+        name = '_' + name
+
+    return name
+
+
+def get_table_name(payload: dict) -> (str, str):
+    """从数据中生成表名，并将中文转换为拼音，确保表名合法。"""
+    data = payload.get('data')
+    op = payload.get('op')
+
+    # 优先从 data 中获取 name 或 formName
+    form_name = None
+    if isinstance(data, dict):
+        # form_update 事件使用 'name'
+        if op == 'form_update':
+            form_name = data.get('name')
+        # 其他事件通常使用 'formName'
+        if not form_name:
+            form_name = data.get('formName')
+
+    # 如果 data 中没有，尝试从 payload 顶层获取（某些旧事件可能如此）
+    if not form_name:
+        form_name = payload.get('formName')
+
+    # 如果都没有，提供一个基于 entryId 的默认值
+    if not form_name:
+        entry_id_from_data = data.get('entryId') if isinstance(data, dict) else None
+        entry_id_from_payload = payload.get('entryId')
+        entry_id = entry_id_from_data or entry_id_from_payload
+        form_name = f"unknown_form_{entry_id}" if entry_id else "unknown_form"
+        print(f"警告: 无法从 payload 中确定表单名称，使用默认值: {form_name}")
+
+    pinyin_name = convert_to_pinyin(form_name)
+    # 返回原始名称和转换后的名称
+    return pinyin_name, form_name
+
+
+def get_column_name(widget: dict, use_label_pinyin: bool) -> str:
+    """
+    根据动态配置获取数据库列名（已重构）。
+    1. 字段别名 (name)，如果不是默认的 _widget_ 开头
+    2. 字段标题 (label)，根据配置决定是否转拼音
+    3. 字段ID (widgetName) 作为备用
+    :param widget: 简道云的字段对象
+    :param use_label_pinyin: 是否将 Label 转为拼音
+    :return: 数据库列名
+    """
+    alias = widget.get('name')
+    label = widget.get('label')
+    widget_name = widget.get('widgetName')  # 这是字段 ID，通常是 _widget_ 开头
+
+    final_name = None
+
+    # 1. 优先使用别名 (如果已设置且非默认)
+    if alias and isinstance(alias, str) and not alias.startswith('_widget_'):
+        # 别名通常是用户自定义的，可能包含非法字符，需要清理
+        final_name = alias
+        # print(f"使用别名: {alias} -> {final_name}")
+
+    # 2. 其次使用 label
+    if not final_name and label and isinstance(label, str):
+        if use_label_pinyin:
+            final_name = convert_to_pinyin(label)
+            # print(f"使用标签 (拼音): {label} -> {final_name}")
+        else:
+            final_name = label
+            # print(f"使用标签 (原文清理): {label} -> {final_name}")
+
+    # 3. 最后备用 widgetName (字段 ID)
+    if not final_name and widget_name and isinstance(widget_name, str):
+        # widgetName 通常是 _widget_xxx
+        final_name = widget_name
+        # print(f"使用 Widget Name: {widget_name} -> {final_name}")
+
+    # 添加一个最终的非空检查
+    if not final_name:
+        print(f"警告：无法为 widget {widget} 生成有效的列名，将使用 'invalid_column'")
+        final_name = 'invalid_column'
+
+    return final_name
+
+
+def get_sql_type(jdy_type: str, data_value: any):
+    """
+    根据简道云的字段类型（优先）或值的Python类型推断出合适的 SQLAlchemy 数据类型。
+    :param jdy_type: 从 `form_fields_mapping` 表中获取的简道云字段类型字符串。
+    :param data_value: 字段的实际值，用于备用推断。
+    :return: SQLAlchemy 类型实例 (e.g., Text(), Float(), JSON())。
+    """
+    # 简道云字段类型到SQLAlchemy类型的映射 (返回类型类)
+    JDY_TYPE_TO_SQLALCHEMY_CLASS = {
+        'text': Text, 'textarea': Text, 'serial_number': String,  # Use String for serial
+        'radiogroup': String, 'combo': String, 'calculation': Text,  # Calculation might be long
+        'number': Float, 'money': Float,  # Add money type
+        'datetime': DateTime, 'date': DateTime, 'time': Time,  # Add date and time
+        'address': JSON, 'location': JSON, 'signature': JSON,
+        'user': JSON, 'dept': JSON, 'phone': JSON, 'member': JSON,  # member is alias for user/dept
+        'lookup': JSON, 'linkdata': JSON, 'formula': JSON,  # Treat formula results as potentially complex
+        'checkboxgroup': JSON, 'combocheck': JSON, 'image': JSON,
+        'upload': JSON, 'subform': JSON, 'widget_relation': JSON,  # Relation widget
+        'usergroup': JSON, 'deptgroup': JSON,
+        'cascader': JSON,  # Add cascader
+        'rate': Float,  # Add rate
+        'progress': Integer,  # Add progress
+        'autonumber': BigInteger,  # Add autonumber (treat as big int)
+        'flowstate': BigInteger,  # Keep as BigInteger
+        'boolean': Boolean  # Add boolean explicitly
+    }
+
+    sql_type_class = None
+
+    # 1. 优先根据简道云的字段类型进行映射
+    if jdy_type and jdy_type in JDY_TYPE_TO_SQLALCHEMY_CLASS:
+        sql_type_class = JDY_TYPE_TO_SQLALCHEMY_CLASS[jdy_type]
+        # print(f"JDY Type '{jdy_type}' mapped to {sql_type_class.__name__}")
+
+    # 2. 如果类型映射成功，但需要根据值调整 (例如 String vs Text)
+    if sql_type_class:
+        if sql_type_class in (Text, String) and isinstance(data_value, str):
+            if len(data_value) > 65535:
+                # print(f"Value length > 65535, promoting to LONGTEXT")
+                return LONGTEXT()
+            elif len(data_value) > 1024:
+                # print(f"Value length > 1024, promoting to TEXT")
+                return Text()
+            else:
+                # print(f"Value fits in String(1024)")
+                # For serial_number, radiogroup, combo, allow longer String if needed, e.g., String(255)
+                # Adjust based on expected max length for these types
+                return String(1024)
+        elif sql_type_class is Float and isinstance(data_value, int):
+            # Allow integers to be stored in Float columns
+            # print("Integer value for Float type, allowed.")
+            return Float()
+        elif sql_type_class is BigInteger and isinstance(data_value, (int, str)):
+            # Allow potential string representation of big integers
+            try:
+                int(data_value)  # Check if convertible
+                # print("String/Int value for BigInteger type, allowed.")
+                return BigInteger()
+            except (ValueError, TypeError):
+                print(f"警告：值 '{data_value}' 无法转换为 BigInteger，将使用 Text。")
+                return Text()  # Fallback if value cannot be converted
+        # If type is mapped and doesn't need value adjustment, return instance
+        # print(f"Returning instance: {sql_type_class.__name__}()")
+        return sql_type_class
+
+    # 3. 如果没有提供简道云类型或类型未知，则回退到基于值的推断
+    # print(f"No JDY type or unknown type '{jdy_type}', inferring from value type: {type(data_value).__name__}")
+    if isinstance(data_value, bool):
+        return Boolean()
+    if isinstance(data_value, int):
+        # Consider magnitude for Int vs BigInt if necessary
+        return BigInteger()  # Default to BigInteger for safety
+    if isinstance(data_value, float):
+        return Float()
+    if isinstance(data_value, (dict, list)):
+        return JSON()
+    if isinstance(data_value, str):
+        # 尝试检查是否为日期时间格式
+        try:
+            # Add more robust date/time checking if needed
+            if len(data_value) >= 10:  # Basic check
+                # Try parsing common formats
+                datetime.fromisoformat(data_value.replace('Z', '+00:00'))
+                return DateTime()
+        except (ValueError, TypeError):
+            pass  # Not a standard ISO datetime
+
+        # 检查是否像时间 "HH:MM:SS"
+        if re.match(r'^\d{2}:\d{2}:\d{2}$', data_value):
+            try:
+                time.fromisoformat(data_value)
+                return Time()
+            except ValueError:
+                pass  # Not a valid time string
+
+        # 根据长度决定使用 String/TEXT/LONGTEXT
+        if len(data_value) > 65535:
+            return LONGTEXT()
+        elif len(data_value) > 1024:
+            return Text()
+        return String(1024)  # Default string length
+
+    # Default fallback for unknown types
+    # print("Unknown value type, falling back to Text()")
+    return Text()
+
+
+# --- 简道云同步数据库 增加内容结束 ---
 
 # --- “测试连接”功能函数 ---
 def test_db_connection(db_info: Dict[str, Any]) -> (bool, str):

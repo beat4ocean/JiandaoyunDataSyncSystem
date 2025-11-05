@@ -171,7 +171,7 @@
         <template v-else>
             <div class="app-container">
                 <el-header height="60px">
-                    <h2>MySQL同步至简道云配置</h2>
+                    <h2>数据同步配置</h2>
                     <div>
                         <span>你好, {{ username }} ({{ isSuperuser ? '超级管理员' : '租户: ' + departmentName }})</span>
                         <el-button type="danger" link @click="logout" style="margin-left: 15px;">退出登录</el-button>
@@ -501,7 +501,7 @@
     const LoginView = {
         template: `
           <el-card class="login-card">
-            <h1 class="login-title">MySQL -> 简道云 数据同步系统</h1>
+            <h1 class="login-title">简道云数据同步系统</h1>
             <h2>登录</h2>
             <el-form @submit.prevent="submitLogin" ref="loginFormRef" :model="loginForm" :rules="loginRules"
                      label-position="top">
@@ -1087,9 +1087,9 @@
                   <el-tag>{{ scope.row.source_db_name || 'N/A' }}</el-tag>
                 </template>
               </el-table-column>
-              <el-table-column prop="source_table" label="源表名" sortable></el-table-column>
-              <el-table-column prop="jdy_app_id" label="App ID"></el-table-column>
-              <el-table-column prop="jdy_entry_id" label="Entry ID"></el-table-column>
+              <el-table-column prop="table_name" label="源表名" sortable></el-table-column>
+              <el-table-column prop="app_id" label="App ID"></el-table-column>
+              <el-table-column prop="entry_id" label="Entry ID"></el-table-column>
               <el-table-column prop="sync_mode" label="同步模式" width="150"></el-table-column>
               <el-table-column prop="is_active" label="激活" width="70">
                 <template #default="scope">
@@ -1138,29 +1138,29 @@
 
                 <el-row :gutter="20">
                   <el-col :span="12">
-                    <el-form-item label="源数据库" prop="source_db_id">
-                      <el-select v-model="currentItem.source_db_id" placeholder="选择源数据库">
+                    <el-form-item label="源数据库" prop="database_id">
+                      <el-select v-model="currentItem.database_id" placeholder="选择源数据库">
                         <el-option v-for="db in filteredDatabases" :key="db.id"
                                    :label="db.name" :value="db.id"></el-option>
                       </el-select>
                     </el-form-item>
                   </el-col>
                   <el-col :span="12">
-                    <el-form-item label="源数据库表名" prop="source_table">
-                      <el-input v-model="currentItem.source_table" placeholder="数据库中的表名或视图名"></el-input>
+                    <el-form-item label="源数据库表名" prop="table_name">
+                      <el-input v-model="currentItem.table_name" placeholder="数据库中的表名或视图名"></el-input>
                     </el-form-item>
                   </el-col>
                 </el-row>
 
                 <el-row :gutter="20">
                   <el-col :span="12">
-                    <el-form-item label="简道云 App ID" prop="jdy_app_id">
-                      <el-input v-model="currentItem.jdy_app_id"></el-input>
+                    <el-form-item label="简道云 App ID" prop="app_id">
+                      <el-input v-model="currentItem.app_id"></el-input>
                     </el-form-item>
                   </el-col>
                   <el-col :span="12">
-                    <el-form-item label="简道云 Entry ID" prop="jdy_entry_id">
-                      <el-input v-model="currentItem.jdy_entry_id"></el-input>
+                    <el-form-item label="简道云 Entry ID" prop="entry_id">
+                      <el-input v-model="currentItem.entry_id"></el-input>
                     </el-form-item>
                   </el-col>
                 </el-row>
@@ -1187,8 +1187,8 @@
                 <template v-if="currentItem.sync_mode === 'INCREMENTAL' || currentItem.sync_mode === 'BINLOG'">
                   <el-row :gutter="20">
                     <el-col :span="12">
-                      <el-form-item label="源表主键" prop="pk_field_names">
-                        <el-input v-model="currentItem.pk_field_names"
+                      <el-form-item label="源表主键" prop="business_keys">
+                        <el-input v-model="currentItem.business_keys"
                                   placeholder="e.g., id1,id2 (复合主键用英文逗号分隔)"></el-input>
                       </el-form-item>
                     </el-col>
@@ -1266,11 +1266,11 @@
             const defaultTask = {
                 task_name: '',
                 department_id: null,
-                source_db_id: null,
-                source_table: '',
-                pk_field_names: '',
-                jdy_app_id: '',
-                jdy_entry_id: '',
+                database_id: null,
+                table_name: '',
+                business_keys: '',
+                app_id: '',
+                entry_id: '',
                 sync_mode: 'INCREMENTAL',
                 is_active: true,
                 incremental_field: '',
@@ -1339,7 +1339,7 @@
             const onDepartmentChange = () => {
                 // 管理员切换部门时，清空已选的数据库
                 if (props.isSuperuser) {
-                    crud.currentItem.source_db_id = null;
+                    crud.currentItem.database_id = null;
                 }
             };
 
@@ -1367,13 +1367,13 @@
             const taskRules = {
                 task_name: [{required: true, message: '请输入任务名称', trigger: 'blur'}],
                 department_id: [{required: props.isSuperuser, message: '请选择所属部门', trigger: 'change'}],
-                source_db_id: [{required: true, message: '请选择源数据库', trigger: 'change'}],
-                source_table: [{required: true, message: '请输入源表名', trigger: 'blur'}],
-                jdy_app_id: [{required: true, message: '请输入 App ID', trigger: 'blur'}],
-                jdy_entry_id: [{required: true, message: '请输入 Entry ID', trigger: 'blur'}],
+                database_id: [{required: true, message: '请选择源数据库', trigger: 'change'}],
+                table_name: [{required: true, message: '请输入源表名', trigger: 'blur'}],
+                app_id: [{required: true, message: '请输入 App ID', trigger: 'blur'}],
+                entry_id: [{required: true, message: '请输入 Entry ID', trigger: 'blur'}],
 
                 // 应用新的自定义验证器
-                pk_field_names: [{validator: validatePkField, trigger: 'blur'}],
+                business_keys: [{validator: validatePkField, trigger: 'blur'}],
                 full_replace_time: [{validator: validateFullReplaceTime, trigger: 'change'}],
                 incremental_field: [{validator: validateIncrementalField, trigger: 'blur'}],
                 incremental_interval: [{validator: validateIncrementalInterval, trigger: 'change'}],

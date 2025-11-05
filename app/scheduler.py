@@ -14,7 +14,7 @@ from sqlalchemy.orm import joinedload
 
 from app.config import Config
 from app.models import ConfigSession, SyncTask
-from app.services import SyncService, FieldMappingService
+from app.db2jdy_services import SyncService, FieldMappingService
 from app.utils import log_sync_error, TZ_UTC_8
 
 # 全局调度器实例
@@ -37,10 +37,10 @@ def run_task_wrapper(task_id: int):
 
     with ConfigSession() as config_session:
         try:
-            # 预加载 department 和 source_database
+            # 预加载 department 和 database
             task = config_session.query(SyncTask).options(
                 joinedload(SyncTask.department),
-                joinedload(SyncTask.source_database)
+                joinedload(SyncTask.database)
             ).get(task_id)
 
             # 1. 检查任务是否有效
@@ -60,20 +60,20 @@ def run_task_wrapper(task_id: int):
                 return
 
             # 检查源数据库配置
-            if not task.source_database:
+            if not task.database:
                 print(f"[{thread_name}] Task {task_id} missing Source Database config. Skipping.")
                 log_sync_error(task_config=task, extra_info="Task skipped: Missing Source Database config.")
                 return
 
             # 2. (关键) 并发检查: 如果任务已在运行, 则丢弃本次执行
-            if task.status == 'running':
+            if task.sync_status == 'running':
                 print(f"[{thread_name}] Task {task_id} is already running. Skipping this run.")
                 return
 
             print(f"[{thread_name}] Starting task: {task.task_name} (Mode: {task.sync_mode})")
 
             # # 3. 运行前准备 (添加 _id 等)
-            # sync_service._prepare_source_table(task)
+            # sync_service._prepare_table(task)
 
             # 4. 执行任务
             if task.sync_mode == 'FULL_REPLACE':
@@ -93,7 +93,7 @@ def run_task_wrapper(task_id: int):
             # 确保状态被设置
             try:
                 if task:
-                    task.status = 'error'
+                    task.sync_status = 'error'
                     config_session.commit()
             except:
                 config_session.rollback()
@@ -109,10 +109,10 @@ def run_binlog_listener_in_thread(task_id: int):
 
         # 获取任务对象 (binlog 监听器需要它)
         with ConfigSession() as session:
-            # 预加载 department 和 source_database
+            # 预加载 department 和 database
             task = session.query(SyncTask).options(
                 joinedload(SyncTask.department),
-                joinedload(SyncTask.source_database)
+                joinedload(SyncTask.database)
             ).get(task_id)
 
             if not task:
@@ -126,7 +126,7 @@ def run_binlog_listener_in_thread(task_id: int):
                 return
 
             # 检查源数据库配置
-            if not task.source_database:
+            if not task.database:
                 print(f"[{task_id}] Task {task_id} missing Source Database config. Skipping.")
                 log_sync_error(task_config=task, extra_info="Task skipped: Missing Source Database config.")
                 return
@@ -142,7 +142,7 @@ def run_binlog_listener_in_thread(task_id: int):
             try:
                 task = session.query(SyncTask).get(task_id)
                 if task:
-                    task.status = 'error'
+                    task.sync_status = 'error'
                     session.commit()
             except Exception as db_e:
                 print(f"[BinlogListener-{task_id}] CRITICAL: Failed to set error status after crash: {db_e}")
@@ -163,16 +163,16 @@ def check_and_start_new_binlog_listeners():
     with ConfigSession() as config_session:
         try:
             # 1. 查找所有激活的 BINLOG 任务
-            # 预加载 department 和 source_database
+            # 预加载 department 和 database
             active_binlog_tasks = config_session.query(SyncTask).options(
                 joinedload(SyncTask.department),
-                joinedload(SyncTask.source_database)
+                joinedload(SyncTask.database)
             ).filter(
                 SyncTask.is_active == True,
                 SyncTask.sync_mode == 'BINLOG'
             ).all()
 
-            active_task_ids = {task.task_id for task in active_binlog_tasks}
+            active_task_ids = {task.id for task in active_binlog_tasks}
 
             # 2. 查找需要停止的监听器
             tasks_to_stop = running_binlog_listeners - active_task_ids
@@ -194,26 +194,26 @@ def check_and_start_new_binlog_listeners():
                         continue
 
                     # (关键) 检查是否已在运行 (以防万一)
-                    if task.status == 'running' and task.task_id in running_binlog_listeners:
+                    if task.sync_status == 'running' and task.id in running_binlog_listeners:
                         continue
 
                     # 检查 API Key
                     if not task.department or not task.department.jdy_key_info or not task.department.jdy_key_info.api_key:
-                        print(f"[{thread_name}] Task {task.task_id} missing API Key. Cannot start listener.")
+                        print(f"[{thread_name}] Task {task.id} missing API Key. Cannot start listener.")
                         log_sync_error(task_config=task, extra_info="Binlog listener cannot start: Missing API Key.")
                         continue
 
                     # 检查源数据库
-                    if not task.source_database:
-                        print(f"[{thread_name}] Task {task.task_id} missing Source Database. Cannot start listener.")
+                    if not task.database:
+                        print(f"[{thread_name}] Task {task.id} missing Source Database. Cannot start listener.")
                         log_sync_error(task_config=task,
                                        extra_info="Binlog listener cannot start: Missing Source Database.")
                         continue
 
-                    print(f"[{thread_name}] Starting listener for task: {task.task_id}...")
+                    print(f"[{thread_name}] Starting listener for task: {task.id}...")
 
                     # # 在启动监听器前, 准备源表 (添加 _id 等)
-                    # sync_service._prepare_source_table(task)
+                    # sync_service._prepare_table(task)
 
                     listener_thread = threading.Thread(
                         target=run_binlog_listener_in_thread,
@@ -257,13 +257,13 @@ def update_all_field_mappings_job():
                 try:
                     # 检查 API Key
                     if not task.department or not task.department.jdy_key_info or not task.department.jdy_key_info.api_key:
-                        print(f"[{thread_name}] Task {task.task_id} missing API Key. Skipping mapping update.")
+                        print(f"[{thread_name}] Task {task.id} missing API Key. Skipping mapping update.")
                         log_sync_error(task_config=task, extra_info="Mapping update skipped: Missing API Key.")
                         continue
 
                     mapping_service.update_form_fields_mapping(config_session, task)
                 except Exception as task_err:
-                    print(f"[{thread_name}] Failed to update mappings for task {task.task_id}: {task_err}")
+                    print(f"[{thread_name}] Failed to update mappings for task {task.id}: {task_err}")
                     # 记录错误, 但继续处理其他任务
                     log_sync_error(task_config=task, error=task_err,
                                    extra_info="Scheduled field mapping update failed.")
@@ -299,13 +299,13 @@ def add_or_update_task_in_scheduler(task: SyncTask):
     根据 SyncTask 对象在调度器中添加或更新一个作业。
     防止刷新时重置现有的 next_run_time
     """
-    job_id = f"task_{task.task_id}"
+    job_id = f"task_{task.id}"
     existing_job = scheduler.get_job(job_id)
 
     # 1. 任务被禁用
     if not task.is_active:
         if existing_job:
-            remove_task_from_scheduler(task.task_id)
+            remove_task_from_scheduler(task.id)
             print(f"[{job_id}] Task is inactive, removing from schedule.")
         return
 
@@ -323,9 +323,9 @@ def add_or_update_task_in_scheduler(task: SyncTask):
                 'minute': task.full_replace_time.minute
             }
         else:
-            print(f"Warning: Task {task.task_id} (FULL_REPLACE) is active but has no time. Removing.")
+            print(f"Warning: Task {task.id} (FULL_REPLACE) is active but has no time. Removing.")
             if existing_job:
-                remove_task_from_scheduler(task.task_id)
+                remove_task_from_scheduler(task.id)
             return
 
     elif task.sync_mode == 'INCREMENTAL':
@@ -334,9 +334,9 @@ def add_or_update_task_in_scheduler(task: SyncTask):
             new_trigger_type = 'interval'
             new_trigger_args = {'minutes': task.incremental_interval}
         else:
-            print(f"Warning: Task {task.task_id} (INCREMENTAL) is active but has no interval. Removing.")
+            print(f"Warning: Task {task.id} (INCREMENTAL) is active but has no interval. Removing.")
             if existing_job:
-                remove_task_from_scheduler(task.task_id)
+                remove_task_from_scheduler(task.id)
             return
 
     elif task.sync_mode == 'BINLOG':
@@ -344,7 +344,7 @@ def add_or_update_task_in_scheduler(task: SyncTask):
         # 确保移除旧的作业（例如从 CRON 切换过来的）
         if existing_job:
             print(f"[{job_id}] Task changed to BINLOG. Ensuring no old CRON/INTERVAL job exists.")
-            remove_task_from_scheduler(task.task_id)
+            remove_task_from_scheduler(task.id)
         return  # BINLOG tasks don't have a 'task_X' job
 
     # 3. Job 存在: 检查是否需要修改
@@ -415,7 +415,7 @@ def add_or_update_task_in_scheduler(task: SyncTask):
         scheduler.add_job(
             run_task_wrapper,
             trigger=new_trigger_type,
-            args=[task.task_id],
+            args=[task.id],
             id=job_id,
             max_instances=1,
             misfire_grace_time=60,
@@ -463,7 +463,7 @@ def start_scheduler(app: Flask):
                 with ConfigSession() as config_session:
                     active_tasks = config_session.query(SyncTask).options(
                         joinedload(SyncTask.department),
-                        joinedload(SyncTask.source_database)
+                        joinedload(SyncTask.database)
                     ).filter_by(is_active=True).all()
 
                     print(f"Loading {len(active_tasks)} active tasks at startup...")
@@ -494,17 +494,17 @@ def refresh_scheduler(app: Flask):
             with ConfigSession() as config_session:
 
                 # 1. 删除失效任务，我们需要知道数据库中所有的 task_id，而不仅仅是 active=False 的
-                all_db_task_ids = {task.task_id for task in config_session.query(SyncTask.task_id).all()}
+                all_db_task_ids = {task.id for task in config_session.query(SyncTask.id).all()}
                 all_scheduler_task_ids = {
                     int(job.id.split('_')[-1]) for job in scheduler.get_jobs()
-                    # 排除 task_refresher 任务，应为 job_id = f"task_{task.task_id}"
+                    # 排除 task_refresher 任务，应为 job_id = f"task_{task.id}"
                     if job.id.startswith('task_') and job.id.split('_')[-1].isdigit()
                 }
 
                 tasks_to_remove_ids = all_scheduler_task_ids - all_db_task_ids
 
                 # 还需要检查那些在数据库中但 is_active=False 的
-                inactive_tasks_in_db = config_session.query(SyncTask.task_id).filter_by(is_active=False).all()
+                inactive_tasks_in_db = config_session.query(SyncTask.id).filter_by(is_active=False).all()
                 inactive_task_ids = {task_id for (task_id,) in inactive_tasks_in_db}
 
                 tasks_to_remove_ids.update(inactive_task_ids.intersection(all_scheduler_task_ids))
@@ -517,7 +517,7 @@ def refresh_scheduler(app: Flask):
                 # 2. 添加/更新生效任务
                 active_tasks = config_session.query(SyncTask).options(
                     joinedload(SyncTask.department),
-                    joinedload(SyncTask.source_database)
+                    joinedload(SyncTask.database)
                 ).filter_by(is_active=True).all()
                 print(f"Found {len(active_tasks)} active tasks to check/update.")
 

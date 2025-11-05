@@ -8,7 +8,7 @@ from sqlalchemy import select, update, delete, desc
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
-from app.models import JdyKeyInfo, SyncTask, SyncErrLog, FormFieldMapping, Department, DatabaseInfo
+from app.models import JdyKeyInfo, SyncTask, SyncErrLog, FormFieldMapping, Department, Database
 from app.scheduler import add_or_update_task_in_scheduler, remove_task_from_scheduler
 
 api_bp = Blueprint('api', __name__, url_prefix='/api')
@@ -133,7 +133,7 @@ def delete_jdy_key(key_id):
 def get_sync_tasks():
     session = g.config_session
     try:
-        tasks = session.scalars(select(SyncTask).order_by(SyncTask.task_id)).all()
+        tasks = session.scalars(select(SyncTask).order_by(SyncTask.id)).all()
         return jsonify([row_to_dict(task) for task in tasks])
     except Exception as e:
         print(f"Error getting SyncTasks: {e}\n{traceback.format_exc()}")
@@ -172,28 +172,28 @@ def add_sync_task():
             if not department_id:
                 return jsonify({"error": f"Department '{department_name}' not found."}), 400
 
-        # --- 查询 source_db_id ---
-        source_db_id = data.get('source_db_id')
-        if not source_db_id:
-            source_db_name = data.get('source_db_name')
-            if source_db_name:
-                source_db = session.scalar(select(DatabaseInfo).where(DatabaseInfo.db_show_name == source_db_name))
+        # --- 查询 database_id ---
+        database_id = data.get('database_id')
+        if not database_id:
+            db_show_name = data.get('db_show_name')
+            if db_show_name:
+                source_db = session.scalar(select(Database).where(Database.db_show_name == db_show_name))
                 if source_db:
-                    source_db_id = source_db.id
+                    database_id = source_db.id
                     if not source_db.is_active:
-                        return jsonify({"error": f"Source DB '{source_db_name}' is not active."}), 400
+                        return jsonify({"error": f"Source DB '{db_show_name}' is not active."}), 400
 
-            if not source_db_id:
-                return jsonify({"error": f"Database '{source_db_id}' not found."}), 400
+            if not database_id:
+                return jsonify({"error": f"Database '{database_id}' not found."}), 400
 
         new_task = SyncTask(
             task_name=data.get('task_name'),
-            source_db_id=source_db_id,
+            database_id=database_id,
             department_id=department_id,
-            source_table=data.get('source_table'),
-            pk_field_names=data.get('pk_field_names'),
-            jdy_app_id=data.get('jdy_app_id'),
-            jdy_entry_id=data.get('jdy_entry_id'),
+            table_name=data.get('table_name'),
+            business_keys=data.get('business_keys'),
+            app_id=data.get('app_id'),
+            entry_id=data.get('entry_id'),
             sync_mode=data.get('sync_mode', 'INCREMENTAL'),
             incremental_field=data.get('incremental_field'),
             incremental_interval=data.get('incremental_interval'),
@@ -203,7 +203,7 @@ def add_sync_task():
             is_active=data.get('is_active', True),
             send_error_log_to_wecom=data.get('send_error_log_to_wecom', False),
             wecom_robot_webhook_url=data.get('wecom_robot_webhook_url'),
-            status='idle'  # Initial status
+            sync_status='idle'  # Initial status
         )
         session.add(new_task)
         session.commit()  # 提交以获取 task_id
@@ -212,7 +212,7 @@ def add_sync_task():
         # 重新查询更新后的任务，以确保所有字段 (包括 .department) 都是最新的
         final_task = session.query(SyncTask).options(
             joinedload(SyncTask.department)
-        ).get(new_task.task_id)
+        ).get(new_task.id)
 
         if final_task:
             add_or_update_task_in_scheduler(final_task)
@@ -251,27 +251,27 @@ def update_sync_task(task_id):
             if not department_id:
                 return jsonify({"error": f"Department '{department_name}' not found."}), 400
 
-        # --- 查询 source_db_id ---
-        source_db_id = data.get('source_db_id')
-        if not source_db_id:
-            source_db_name = data.get('source_db_name')
-            if source_db_name:
-                source_db = session.scalar(select(DatabaseInfo).where(DatabaseInfo.db_show_name == source_db_name))
+        # --- 查询 database_id ---
+        database_id = data.get('database_id')
+        if not database_id:
+            db_show_name = data.get('db_show_name')
+            if db_show_name:
+                source_db = session.scalar(select(Database).where(Database.db_show_name == db_show_name))
                 if source_db:
-                    source_db_id = source_db.id
+                    database_id = source_db.id
                     if not source_db.is_active:
-                        return jsonify({"error": f"Source DB '{source_db_name}' is not active."}), 400
+                        return jsonify({"error": f"Source DB '{db_show_name}' is not active."}), 400
 
-            if not source_db_id:
-                return jsonify({"error": f"Database '{source_db_id}' not found."}), 400
+            if not database_id:
+                return jsonify({"error": f"Database '{database_id}' not found."}), 400
 
         update_values = {
             'task_name': data.get('task_name'),
-            'source_db_id': source_db_id,
-            'source_table': data.get('source_table'),
-            'pk_field_names': data.get('pk_field_names'),
-            'jdy_app_id': data.get('jdy_app_id'),
-            'jdy_entry_id': data.get('jdy_entry_id'),
+            'database_id': database_id,
+            'table_name': data.get('table_name'),
+            'business_keys': data.get('business_keys'),
+            'app_id': data.get('app_id'),
+            'entry_id': data.get('entry_id'),
             'department_id': department_id,
             'sync_mode': data.get('sync_mode'),
             'incremental_field': data.get('incremental_field'),
@@ -284,7 +284,7 @@ def update_sync_task(task_id):
             'wecom_robot_webhook_url': data.get('wecom_robot_webhook_url'),
         }
 
-        stmt = update(SyncTask).where(SyncTask.task_id == task_id).values(**update_values)
+        stmt = update(SyncTask).where(SyncTask.id == task_id).values(**update_values)
         result = session.execute(stmt)
         session.commit()
 
@@ -295,7 +295,7 @@ def update_sync_task(task_id):
         # 重新查询更新后的任务，以确保所有字段 (包括 .department) 都是最新的
         updated_task = session.query(SyncTask).options(
             joinedload(SyncTask.department),
-            joinedload(SyncTask.source_database)
+            joinedload(SyncTask.database)
         ).get(task_id)
 
         if updated_task:
@@ -325,7 +325,7 @@ def delete_sync_task(task_id):
         remove_task_from_scheduler(task_id)
 
         # 使用 task_id
-        stmt = delete(SyncTask).where(SyncTask.task_id == task_id)
+        stmt = delete(SyncTask).where(SyncTask.id == task_id)
         result = session.execute(stmt)
         session.commit()
         if result.rowcount == 0:
@@ -347,8 +347,14 @@ def get_sync_logs():
         limit = request.args.get('limit', 100, type=int)
         offset = request.args.get('offset', 0, type=int)
 
+        # --- REFACTOR: 19. 过滤 sync_type ---
+        sync_type_filter = request.args.get('sync_type')
+        query = select(SyncErrLog)
+        if sync_type_filter in ['db2jdy', 'jdy2db']:
+            query = query.where(SyncErrLog.sync_type == sync_type_filter)
+
         logs = session.scalars(
-            select(SyncErrLog)
+            query
             .order_by(desc(SyncErrLog.timestamp))
             .limit(limit)
             .offset(offset)

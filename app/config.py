@@ -27,8 +27,8 @@ class Config:
     # SOURCE_DB_PASSWORD = quote_plus(os.getenv('SOURCE_DB_PASSWORD', 'password'))
     # SOURCE_DB_HOST = os.getenv('SOURCE_DB_HOST', 'localhost')
     # SOURCE_DB_PORT = int(os.getenv('SOURCE_DB_PORT', '3306'))
-    # # services.py 需要 (Binlog 和 _is_view)
-    # SOURCE_DB_NAME = os.getenv('SOURCE_DB_NAME', 'source_db_name')
+    # # db2jdy_services.py 需要 (Binlog 和 _is_view)
+    # SOURCE_DB_NAME = os.getenv('SOURCE_DB_NAME', 'db_show_name')
     #
     # # 3. Binlog 专用连接 (通常是只读副本)
     # BINLOG_DB_USER = os.getenv('BINLOG_DB_USER', 'binlog_user')

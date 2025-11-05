@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 from datetime import datetime
 
+from passlib.hash import pbkdf2_sha256 as sha256
 from sqlalchemy import (Index, Boolean, Time, create_engine, MetaData, Column, Integer, String,
                         DateTime, Text, UniqueConstraint, ForeignKey)
 from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import sessionmaker, DeclarativeBase, relationship
-from passlib.hash import pbkdf2_sha256 as sha256
 
 from app.config import CONFIG_DB_URL, DB_CONNECT_ARGS
 from app.utils import TZ_UTC_8
@@ -43,8 +43,8 @@ class Department(ConfigBase):
     # --- 租户拥有的资源 (Relationships) ---
     # 1. 租户下的用户
     users = relationship("User", back_populates="department", cascade="all, delete-orphan")
-    # 2. 租户的数据库配置
-    database_infos = relationship("DatabaseInfo", back_populates="department", cascade="all, delete-orphan")
+    # 2. 租户的数据库配置 (1:N 关系)
+    databases = relationship("Database", back_populates="department", cascade="all, delete-orphan")
     # 3. 租户的简道云 Key (1:1 关系)
     jdy_key_info = relationship("JdyKeyInfo", back_populates="department", uselist=False, cascade="all, delete-orphan")
     # 4. 租户的同步任务
@@ -90,12 +90,15 @@ class User(ConfigBase):
 
 # --- 数据库模型 ---
 
-class DatabaseInfo(ConfigBase):
+class Database(ConfigBase):
     """
     存储 *源* 数据库连接配置，并关联到 *一个* 租户
     """
     __tablename__ = 'database'
     id = Column(Integer, primary_key=True, autoincrement=True)
+
+    sync_type = Column(String(50), nullable=False, comment="同步类型: db2jdy (数据库->简道云), jdy2db (简道云->数据库)")
+
     db_show_name = Column(String(50), nullable=False, comment="数据库显示名称 (e.g., 质量部门专用数据库)")
 
     db_type = Column(String(50), nullable=False, comment="数据库类型(e.g. mysql, postgresql, oracle, mssql)")
@@ -115,10 +118,10 @@ class DatabaseInfo(ConfigBase):
                         comment="更新时间")
 
     # 关系应指向 Department
-    department = relationship("Department", back_populates="database_infos")
+    department = relationship("Department", back_populates="databases")
 
     # 此数据库配置被哪些同步任务使用
-    sync_tasks = relationship("SyncTask", back_populates="source_database")
+    sync_tasks = relationship("SyncTask", back_populates="database")
 
     __table_args__ = (
         # 确保同一个租户下的显示名称是唯一的
@@ -126,6 +129,18 @@ class DatabaseInfo(ConfigBase):
         # 确保连接信息是唯一的
         UniqueConstraint('db_type', 'db_host', 'db_port', 'db_name', 'db_user', name='uq_db_connection_info'),
     )
+
+    def get_connection_string(self):
+        if self.db_type == 'MySQL':
+            return f"mysql+pymysql://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}?charset=utf8mb4"
+        elif self.db_type == 'SQL Server':
+            return f"mssql+pymssql://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}?charset=utf8"
+        elif self.db_type == 'PostgreSQL':
+            return f"postgresql+psycopg2://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
+        elif self.db_type == 'Oracle':
+            return f"oracle+cx_oracle://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
+        else:
+            raise ValueError(f"Unsupported database type: {self.db_type}")
 
 
 # --- 简道云密钥模型 ---
@@ -151,34 +166,39 @@ class JdyKeyInfo(ConfigBase):
     department = relationship("Department", back_populates="jdy_key_info")
 
 
-# --- 同步配置信息模型 ---
+# --- 数据同步配置信息模型 ---
 
 class SyncTask(ConfigBase):
     """
-    存储同步任务的配置信息，并关联到 *一个* 租户
+    存储数据同步配置信息 (双向)，并关联到 *一个* 租户
     """
     __tablename__ = 'sync_tasks'
 
-    task_id = Column(Integer, primary_key=True, autoincrement=True, comment="任务ID")
+    id = Column(Integer, primary_key=True, autoincrement=True, comment="任务ID")
+
+    sync_type = Column(String(10), nullable=False, server_default='db2jdy', comment="任务同步类型: db2jdy, jdy2db")
+
+    # 任务名称
     task_name = Column(String(255), nullable=True, comment="任务名称")
 
-    # 1. 关联到 DatabaseInfo
-    source_db_id = Column(Integer, ForeignKey('database.id'), nullable=False, comment="源数据库ID")
-    # 2. 源表名
-    source_table = Column(String(255), nullable=False, comment="源数据库表名")
+    # 1. 关联到 Database
+    database_id = Column(Integer, ForeignKey('database.id'), nullable=False, comment="数据库ID")
 
-    # 业务主键
-    pk_field_names = Column(String(255), nullable=False, comment="源表主键字段名 (复合主键用英文逗号分隔)")
+    # 2. 源表名 (db2jdy) 或 目标表名 (jdy2db)
+    table_name = Column(String(255), nullable=True, comment="数据库表名 (源或目标)")
+
+    # 业务主键 (db2jdy)
+    business_keys = Column(String(255), nullable=True, comment="数据表主键字段名 (复合主键用英文逗号分隔)")
 
     # 简道云配置
-    jdy_app_id = Column(String(100), nullable=False, comment="简道云应用ID")
-    jdy_entry_id = Column(String(100), nullable=False, comment="简道云表单ID")
+    app_id = Column(String(100), nullable=True, comment="简道云应用ID (jdy2db 模式下可由 webhook 自动填充)")
+    entry_id = Column(String(100), nullable=True, comment="简道云表单ID (jdy2db 模式下可由 webhook 自动填充)")
 
     # 直接使用外键关联到 Department.id
     department_id = Column(Integer, ForeignKey('Department.id'), nullable=False, comment="关联的租户ID")
 
-    # 同步模式
-    sync_mode = Column(String(50), nullable=False, default='INCREMENTAL',
+    # --- db2jdy (数据库 -> 简道云) 专属配置 ---
+    sync_mode = Column(String(50), nullable=True, default='INCREMENTAL',
                        comment="同步模式 (FULL_REPLACE, INCREMENTAL, BINLOG)")
     # 增量同步依赖的时间字段
     incremental_field = Column(String(100), comment="增量同步依赖的时间字段 (仅 INCREMENTAL 模式)")
@@ -189,15 +209,17 @@ class SyncTask(ConfigBase):
     # 源数据 SQL 过滤器
     source_filter_sql = Column(Text, nullable=True, comment="源数据库过滤 SQL (用于 INCREMENTAL 和 FULL_REPLACE模式)")
 
-    # 状态和日志
-    status = Column(String(20), default='idle', comment="任务状态 (idle, running, error, disabled)")
-    # 上次同步时间
-    last_sync_time = Column(DateTime, comment="上次同步时间 (用于 INCREMENTAL 和 FULL_REPLACE模式)")
     last_binlog_file = Column(String(255), comment="上次同步的 binlog 文件 (用于 BINLOG)")
     last_binlog_pos = Column(Integer, comment="上次同步的 binlog 位置 (用于 BINLOG)")
+
+    # --- 状态和日志 (通用) ---
+    # 状态和日志
+    sync_status = Column(String(20), default='idle', comment="任务状态 (idle, running, error, disabled)")
+    # 上次同步时间
+    last_sync_time = Column(DateTime, comment="上次同步时间 (用于 INCREMENTAL 和 FULL_REPLACE模式)")
     # 是否首次同步执行全量覆盖同步
     is_full_replace_first = Column(Boolean, default=True,
-                                   comment="是否首次同步执行全量覆盖同步 (用于 INCREMENTAL 和 BINLOG 模式)")
+                                   comment="是否首次同步执行全量覆盖同步 (用于 INCREMENTAL, BINLOG, jdy2db)")
     is_active = Column(Boolean, default=True, comment="任务是否启用")
     send_error_log_to_wecom = Column(Boolean, default=False, nullable=False, comment="是否发送错误日志到企微")
     wecom_robot_webhook_url = Column(String(500), nullable=True, comment="企业微信机器人 Webhook URL")
@@ -206,18 +228,28 @@ class SyncTask(ConfigBase):
     updated_at = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), onupdate=lambda: datetime.now(TZ_UTC_8),
                         comment="更新时间")
 
+    # --- jdy2db (简道云 -> 数据库) 专属配置 ---
+    daily_sync_time = Column(Time, nullable=True, comment="简道云同步数据库的每日全量同步时间")
+    daily_sync_type = Column(String(20), nullable=True, default='DAILY', comment="DAILY, ONCE")
+    json_as_string = Column(Boolean, default=False, nullable=False, comment="是否将JSON存储为字符串")
+    label_to_pinyin = Column(Boolean, default=False, nullable=False, comment="是否将label转换为拼音作为列名")
+    webhook_url = Column(String(500), nullable=True, comment="简道云同步数据库的WebHook URL (后端自动生成)")
+
     # 关系1: 指向 Department
     department = relationship("Department", back_populates="sync_tasks")
 
-    # --- 关系2: 指向源数据库 ---
-    source_database = relationship("DatabaseInfo", back_populates="sync_tasks")
+    # # 关系2：指向 ApiKey
+    # api_key = relationship('ApiKey', back_populates='sync_tasks')
+
+    # 关系3: 指向源/目标数据库 ---
+    database = relationship("Database", back_populates="sync_tasks")
 
     # 与 FormFieldMapping 的 1:N 关系
     field_mappings = relationship("FormFieldMapping", back_populates="task", cascade="all, delete-orphan")
 
     __table_args__ = (
-        Index('idx_mode_status', 'sync_mode', 'status'),
-        UniqueConstraint('jdy_app_id', 'jdy_entry_id', name='uq_app_entry'),
+        Index('idx_mode_status', 'sync_mode', 'sync_status'),
+        UniqueConstraint('app_id', 'entry_id', name='uq_app_entry'),
     )
 
 
@@ -233,7 +265,7 @@ class FormFieldMapping(ConfigBase):
     id = Column(Integer, primary_key=True, autoincrement=True)
 
     # 明确指定 ForeignKey
-    task_id = Column(Integer, ForeignKey('sync_tasks.task_id'), nullable=False, comment="关联的任务ID")
+    task_id = Column(Integer, ForeignKey('sync_tasks.id'), nullable=False, comment="关联的任务ID")
 
     form_name = Column(String(255), nullable=True, comment="简道云表单名")
     widget_name = Column(String(255), nullable=False, comment="字段ID (e.g., _widget_xxx, 用于 API 提交)")
@@ -270,6 +302,8 @@ class SyncErrLog(ConfigBase):
     """
     __tablename__ = 'sync_err_log'
     id = Column(Integer, primary_key=True, autoincrement=True)
+
+    sync_type = Column(String(10), nullable=False, server_default='db2jdy', comment="任务同步类型: db2jdy, jdy2db")
 
     # 允许 task_id 为空, 以防 task_config 未传入
     task_id = Column(Integer, nullable=True, comment="关联的任务ID")
