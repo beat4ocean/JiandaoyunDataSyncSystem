@@ -2,6 +2,7 @@ import atexit
 import os
 import sys
 import traceback
+from datetime import datetime, timedelta
 
 import dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -23,7 +24,7 @@ try:
         config_engine, config_metadata, ConfigSession, User, Department
     )
     from app.scheduler import scheduler, start_scheduler, refresh_scheduler
-    from app.utils import log_sync_error
+    from app.utils import log_sync_error, TZ_UTC_8
 except ImportError as e:
     print(f"启动失败：无法导入应用模块。请确保 app 目录和所有文件都存在。 {e}")
     print(traceback.format_exc())
@@ -159,20 +160,29 @@ if __name__ == "__main__":
     # 4.2. 添加字段映射刷新器
     start_scheduler(app)
 
-    # 5、 启动调度器，定时刷新任务
+    # 5、将定时刷新任务作业 *添加* 到主调度器
     try:
-        scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
-        scheduler.add_job(refresh_scheduler, 'interval', minutes=Config.CHECK_INTERVAL_MINUTES, args=[app],
-                          misfire_grace_time=60)  # 增加misfire_grace_time以防任务堆积
-        scheduler.start()
-        # 屏蔽不显示
-        # print(f"定时任务调度器已启动，每 {CHECK_INTERVAL_MINUTES} 分钟检查一次。")
+        # 使用从 app.scheduler 导入的 *同一个* 调度器实例
+        scheduler.add_job(
+            refresh_scheduler,
+            'interval',
+            minutes=Config.CHECK_INTERVAL_MINUTES,
+            args=[app],
+            id='task_refresher',  # 添加一个唯一的 ID
+            replace_existing=True,
+            misfire_grace_time=60,
+            # 15秒后启动, 避开其他启动任务
+            next_run_time=datetime.now(TZ_UTC_8) + timedelta(seconds=15)
+        )
+
+        print(f"Task refresher job added to main scheduler, runs every {Config.CHECK_INTERVAL_MINUTES} minutes.")
+
     except Exception as e:
         print(f"启动调度器失败: {e}")
         log_sync_error(error=e, extra_info="Failed to start APScheduler")
         sys.exit(1)
 
-    # 5. 启动 Flask Web 服务器 (使用 Waitress)
+    # 6. 启动 Flask Web 服务器 (使用 Waitress)
     print("Starting Flask web server with Waitress on http://0.0.0.0:5000...")
     try:
         # 我们将保持 5000 端口，并确保前端也使用 5000。
