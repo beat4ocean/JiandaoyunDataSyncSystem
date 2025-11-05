@@ -4,6 +4,7 @@ import sys
 import traceback
 
 import dotenv
+from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError
@@ -20,8 +21,8 @@ try:
     from app import create_app
     from app.models import (
         config_engine, config_metadata, ConfigSession, User, Department
-)
-    from app.scheduler import scheduler, start_scheduler
+    )
+    from app.scheduler import scheduler, start_scheduler, refresh_scheduler
     from app.utils import log_sync_error
 except ImportError as e:
     print(f"启动失败：无法导入应用模块。请确保 app 目录和所有文件都存在。 {e}")
@@ -40,7 +41,9 @@ def initialize_databases(app: Flask):
 
         # 1. 创建一个"根"连接（不指定数据库名称），用于创建数据库
         try:
-            admin_engine = create_engine(f"mysql+pymysql://{Config.CONFIG_DB_USER}:{Config.CONFIG_DB_PASSWORD}@{Config.CONFIG_DB_HOST}:{Config.CONFIG_DB_PORT}/?charset=utf8mb4", connect_args=DB_CONNECT_ARGS)
+            admin_engine = create_engine(
+                f"mysql+pymysql://{Config.CONFIG_DB_USER}:{Config.CONFIG_DB_PASSWORD}@{Config.CONFIG_DB_HOST}:{Config.CONFIG_DB_PORT}/?charset=utf8mb4",
+                connect_args=DB_CONNECT_ARGS)
 
             with admin_engine.connect() as connection:
                 # 检查并创建配置数据库
@@ -152,7 +155,22 @@ if __name__ == "__main__":
     atexit.register(shutdown_scheduler)
 
     # 4. 启动调度器
+    # 4.1. 添加 BINLOG 监听器管理器
+    # 4.2. 添加字段映射刷新器
     start_scheduler(app)
+
+    # 5、 启动调度器，定时刷新任务
+    try:
+        scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
+        scheduler.add_job(refresh_scheduler, 'interval', minutes=Config.CHECK_INTERVAL_MINUTES, args=[app],
+                          misfire_grace_time=60)  # 增加misfire_grace_time以防任务堆积
+        scheduler.start()
+        # 屏蔽不显示
+        # print(f"定时任务调度器已启动，每 {CHECK_INTERVAL_MINUTES} 分钟检查一次。")
+    except Exception as e:
+        print(f"启动调度器失败: {e}")
+        log_sync_error(error=e, extra_info="Failed to start APScheduler")
+        sys.exit(1)
 
     # 5. 启动 Flask Web 服务器 (使用 Waitress)
     print("Starting Flask web server with Waitress on http://0.0.0.0:5000...")
