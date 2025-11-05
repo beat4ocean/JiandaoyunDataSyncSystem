@@ -579,12 +579,14 @@ class SyncService:
     def _run_full_sync(self, config_session: Session, task: SyncTask, delete_first: bool):
         """
         内部全量同步逻辑, 支持SQL过滤和选择性删除
+        流式查询以处理大数据量
         """
         mode = "FULL_REPLACE" if delete_first else "INITIAL_SYNC"
         print(f"task_id:[{task.task_id}] Running {mode} sync...")
 
         total_deleted = 0
         total_created = 0
+        total_source_rows = 0
 
         if not task.department or not task.department.jdy_key_info or not task.department.jdy_key_info.api_key:
             raise ValueError(f"Task {task.task_id} missing department or API key for {mode}.")
@@ -629,55 +631,74 @@ class SyncService:
             else:
                 print(f"task_id:[{task.task_id}] Skipping deletion for {mode}.")
 
-            # 3. 构建带 SQL 过滤的查询
+            # 3. 构建带 SQL 过滤的查询, 并使用流式处理
             with get_dynamic_session(task) as source_session:
                 base_query = f"SELECT * FROM `{task.source_table}`"
                 params = {}
                 if task.source_filter_sql:
                     base_query += f" WHERE {task.source_filter_sql}"
 
-                rows = source_session.execute(text(base_query), params).mappings().all()
+                # --- 性能优化: 使用流式查询 ---
+                # 移除: rows = source_session.execute(text(base_query), params).mappings().all()
+                # sqlalchemy < 2 版本
+                # result_stream = source_session.execution_options(stream_results=True).execute(text(base_query), params)
+                # sqlalchemy >= 2 版本
+                result_stream = source_session.connection().execution_options(stream_results=True).execute(
+                    text(base_query), params)
 
-            # 4. 批量创建数据
-            batch_data = []
-            for row in rows:
-                row_dict = dict(row)
-                data_payload = self._transform_row_to_jdy(row_dict, payload_map)
-                if data_payload:
-                    batch_data.append(data_payload)
+                has_processed_rows = False
 
-                if len(batch_data) >= 100:  # API 限制 100
+                # 4. 批量创建数据
+                batch_data = []
+                for row in result_stream.mappings():
+                    has_processed_rows = True
+                    total_source_rows += 1
+
+                    row_dict = dict(row)
+                    data_payload = self._transform_row_to_jdy(row_dict, payload_map)
+                    if data_payload:
+                        batch_data.append(data_payload)
+
+                    if len(batch_data) >= 100:  # API 限制 100
+                        trans_id = str(uuid.uuid4())
+                        responses = data_api_create.create_batch_data(
+                            task.jdy_app_id, task.jdy_entry_id,
+                            data_list=batch_data, transaction_id=trans_id
+                        )
+                        # create_batch_data 返回一个列表，需要对列表中的每个响应求和
+                        success_count = sum(resp.get('success_count', 0) for resp in responses)
+                        total_created += success_count
+                        if success_count != len(batch_data):
+                            log_sync_error(task_config=task,
+                                           extra_info=f"task_id:[{task.task_id}] Create mismatch. Req: {len(batch_data)}, Created: {success_count}. TransID: {trans_id}")
+                        batch_data = []
+
+                # 处理最后一个批次
+                if batch_data:
                     trans_id = str(uuid.uuid4())
                     responses = data_api_create.create_batch_data(
                         task.jdy_app_id, task.jdy_entry_id,
                         data_list=batch_data, transaction_id=trans_id
                     )
-                    # 密码create_batch_data 返回一个列表，需要对列表中的每个响应求和
+                    # create_batch_data 返回一个列表，需要对列表中的每个响应求和
                     success_count = sum(resp.get('success_count', 0) for resp in responses)
                     total_created += success_count
                     if success_count != len(batch_data):
                         log_sync_error(task_config=task,
                                        extra_info=f"task_id:[{task.task_id}] Create mismatch. Req: {len(batch_data)}, Created: {success_count}. TransID: {trans_id}")
-                    batch_data = []
 
-            if batch_data:
-                trans_id = str(uuid.uuid4())
-                responses = data_api_create.create_batch_data(
-                    task.jdy_app_id, task.jdy_entry_id,
-                    data_list=batch_data, transaction_id=trans_id
-                )
-                # 密码create_batch_data 返回一个列表，需要对列表中的每个响应求和
-                success_count = sum(resp.get('success_count', 0) for resp in responses)
-                total_created += success_count
-                if success_count != len(batch_data):
-                    log_sync_error(task_config=task,
-                                   extra_info=f"task_id:[{task.task_id}] Create mismatch. Req: {len(batch_data)}, Created: {success_count}. TransID: {trans_id}")
+                # 检查是否因为没有数据而退出循环
+                if not has_processed_rows:
+                    if task.source_filter_sql:
+                        print(f"task_id:[{task.task_id}] No data found WHERE {task.source_filter_sql}.")
+                    else:
+                        print(f"task_id:[{task.task_id}] No data found.")
 
             print(
-                f"task_id:[{task.task_id}] {mode} sync completed. Source rows: {len(rows)}, Created in Jdy: {total_created}.")
-            if len(rows) != total_created:
+                f"task_id:[{task.task_id}] {mode} sync completed. Source rows: {total_source_rows}, Created in Jdy: {total_created}.")
+            if total_source_rows != total_created:
                 log_sync_error(task_config=task,
-                               extra_info=f"task_id:[{task.task_id}] FINAL COUNT MISMATCH. Source: {len(rows)}, Created: {total_created}.")
+                               extra_info=f"task_id:[{task.task_id}] FINAL COUNT MISMATCH. Source: {total_source_rows}, Created: {total_created}.")
 
             # 更新时间, 但不更新状态 (由调用者更新)
             self._update_task_status(config_session, task,
@@ -811,10 +832,10 @@ class SyncService:
                     print(f"task_id:[{task.task_id}] Detected DATETIME type. Probing data ...")
                     is_fake_datetime = False
 
-                    # 探测查询，限制1000条
+                    # 探测查询，限制100条
                     probe_query = text(
                         f"SELECT `{task.incremental_field}` FROM `{task.source_table}` "
-                        f"WHERE `{task.incremental_field}` IS NOT NULL LIMIT 1000"
+                        f"WHERE `{task.incremental_field}` IS NOT NULL LIMIT 100"
                     )
                     probe_results = source_session.execute(probe_query).fetchall()
 
@@ -856,16 +877,31 @@ class SyncService:
                 if task.source_filter_sql:
                     base_query += f" AND ({task.source_filter_sql})"
 
-                rows = source_session.execute(text(base_query), params).mappings().all()
+                # --- 2. 性能优化: 流式查询 ---
+                # 移除: rows = source_session.execute(text(base_query), params).mappings().all()
 
-                if not rows:
-                    print(f"task_id:[{task.task_id}] No new data found since {last_sync_time_for_query}.")
-                    self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
-                    return
+                # if not rows:
+                #     print(f"task_id:[{task.task_id}] No new data found since {last_sync_time_for_query}.")
+                #     self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
+                #     return
 
-                # 6. 遍历并 Upsert
+                # 1. 不要使用 .all()，而是获取结果迭代器
+                # 2. 使用 stream_results=True 启用服务器端游标，防止数据库连接因长时间处理而超时
+                # sqlalchemy < 2 版本
+                # result_stream = source_session.execution_options(stream_results=True).execute(text(base_query), params)
+                # sqlalchemy >= 2 版本
+                result_stream = source_session.connection().execution_options(stream_results=True).execute(
+                    text(base_query), params)
+
+                # 标记是否处理了任何行
+                has_processed_rows = False
                 count_new, count_updated = 0, 0
-                for row in rows:
+
+                # 6. 遍历新增/更新
+                # for row in rows:
+                # 直接遍历迭代器，这会从数据库中逐行（或按小批量）获取数据
+                for row in result_stream.mappings():
+                    has_processed_rows = True  # 标记已处理
                     row_dict = dict(row)
                     try:
                         self._get_pk_fields_and_values(task, row_dict)
@@ -919,6 +955,12 @@ class SyncService:
                         #     count_new += 1
                         #     # 传入 row_dict 以进行复合主键回写
                         #     self._writeback_id_to_source(source_session, task, new_jdy_id, row_dict)
+
+                # 检查是否因为没有数据而退出循环
+                if not has_processed_rows:
+                    print(f"task_id:[{task.task_id}] No new data found since {last_sync_time_for_query}.")
+                    self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
+                    return
 
             print(f"task_id:[{task.task_id}] INCREMENTAL sync completed. New: {count_new}, Updated: {count_updated}.")
             self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
