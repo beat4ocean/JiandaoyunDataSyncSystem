@@ -825,9 +825,13 @@ def handle_jdy_webhook():
     timestamp = request.args.get('timestamp')
     signature_from_header = request.headers.get('X-JDY-Signature')
 
-    if not all([dpt_name, db_id_str, table_name]):
-        logger.error(f"[Webhook] 400: URL 参数不完整 (dpt, db_id, table)")
-        return jsonify({"error": "Webhook URL 已失效: URL (dpt, db_id, table)"}), 410  # 410 GONE 表示配置已失效
+    # table_name 可不传
+    # if not all([dpt_name, db_id_str, table_name]):
+    #     logger.error(f"[Webhook] 400: URL 参数不完整 (dpt, db_id, table)")
+    #     return jsonify({"error": "Webhook URL 已失效: URL (dpt, db_id, table)"}), 410  # 410 GONE 表示配置已失效
+    if not all([dpt_name, db_id_str]):
+        logger.error(f"[Webhook] 400: URL 参数不完整 (dpt, db_id)")
+        return jsonify({"error": "Webhook URL 已失效: URL (dpt, db_id)"}), 410  # 410 GONE 表示配置已失效
 
     try:
         db_id = int(db_id_str)
