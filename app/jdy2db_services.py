@@ -99,8 +99,10 @@ class FieldMappingService:
 
         # 4. 清理 final_name 中的非法字符
         if final_name:
-            # 替换所有非字母、数字、下划线的字符为空字符串
-            final_name = re.sub(r'[^a-zA-Z0-9_]', '', final_name)
+            # # 替换所有非字母、数字、下划线的字符为空字符串
+            # final_name = re.sub(r'[^a-zA-Z0-9_]', '', final_name)
+            # 保留中文、英文、数字、下划线
+            final_name = re.sub(r'[^a-zA-Z0-9_\u4e00-\u9fff]', '', final_name)
             # 确保不以数字开头 (如果数据库有此限制)
             if final_name and final_name[0].isdigit():
                 final_name = '_' + final_name
