@@ -2,6 +2,7 @@
 import json
 import logging
 import re
+import threading
 from datetime import datetime, time
 
 from sqlalchemy import inspect, Table, Column, String, text, JSON, DateTime, Text, BigInteger, Float
@@ -12,7 +13,7 @@ from sqlalchemy.sql.sqltypes import TypeEngine, Integer, Boolean, Time
 
 from app import Config
 from app.jdy_api import FormApi, DataApi
-from app.models import (SyncTask, FormFieldMapping, ConfigSession)
+from app.models import (SyncTask, FormFieldMapping, ConfigSession, Department)
 from app.utils import (retry, convert_to_pinyin, log_sync_error, TZ_UTC_8, get_dynamic_engine, get_dynamic_session,
                        get_dynamic_metadata)
 
@@ -62,14 +63,14 @@ class FieldMappingService:
     def get_column_name(self, widget: dict, use_label_pinyin: bool) -> str:
         """
         根据动态配置获取数据库列名。
-        1. 字段别名 (name)，如果不是默认的 _widget_ 开头
+        1. 字段别名 (name)，如果不是默认的 _widget_xxx
         2. 字段标题 (label)，根据配置决定是否转拼音
         3. 字段ID (widgetName) 作为备用
         :param widget: 简道云的字段对象
         :param use_label_pinyin: 是否将 Label 转为拼音
         :return: 数据库列名
         """
-        widget_name = widget.get('widgetName')  # 这是字段 ID，通常是 _widget_ 开头
+        widget_name = widget.get('widgetName')  # 这是字段 ID，通常是 _widget_xxx
         widget_alias = widget.get('name')
         label = widget.get('label')
 
@@ -107,8 +108,8 @@ class FieldMappingService:
 
         # 添加一个最终的非空检查
         if not final_name:
-            print(f"警告：无法为 widget {widget} 生成有效的列名，将使用 'invalid_column'")
-            final_name = 'invalid_column'
+            print(f"警告：无法为 widget {widget} 生成有效的列名.")
+            final_name = None
 
         return final_name
 
@@ -179,7 +180,7 @@ class FieldMappingService:
             # If type is mapped and doesn't need value adjustment, return instance
             # print(f"Returning instance: {sql_type_class.__name__}()")
 
-            return sql_type_class
+            return sql_type_class()  # 修正：返回实例
 
         # 3. 如果没有提供简道云类型或类型未知，则回退到基于值的推断
         # print(f"No JDY type or unknown type '{jdy_type}', inferring from value type: {type(data_value).__name__}")
@@ -497,6 +498,44 @@ class Jdy2DbSyncService:
                 logger.error(f"任务 {task_config.id} 缺少 App/Entry ID，且无法从 Webhook 负载中提取。")
                 return  # 无法继续
 
+        # --- 检查是否需要启动后台全量同步 ---
+        if op in ('data_create', 'data_update', 'data_remove', 'data_recover', 'form_update'):
+            table = self.get_table_if_exists(table_name, dynamic_engine)
+
+            if table is None or task_config.is_full_replace_first:
+                logger.info(
+                    f"任务 {task_config.id}: 触发首次全量同步 (is_full_replace_first={task_config.is_full_replace_first}, table_exists={table is not None})")
+
+                # 1. (同步) 确保表结构存在
+                if table is None:
+                    try:
+                        logger.info(f"表 {table_name} 不存在，将根据 API Schema 创建...")
+                        # 调用 API 获取真实 schema，而不是传递 data 负载
+                        form_widgets = api_client.get_form_widgets(app_id, entry_id)
+                        # 组装为特定的 form_schema
+                        form_schema_data = {'widgets': form_widgets, 'name': form_name}
+                        table = self.get_or_create_table_from_schema(table_name, form_schema_data, task_config,
+                                                                     dynamic_engine, dynamic_metadata)
+                        logger.info(f"表 {table_name} 已同步创建。")
+                    except Exception as schema_err:
+                        logger.error(f"任务 {task_config.id}: 同步创建表结构失败: {schema_err}", exc_info=True)
+                        log_sync_error(task_config, schema_err, payload, "首次同步-创建表结构失败")
+                        return  # 创建表失败，无法继续
+
+                # 2. (异步) 启动后台全量同步
+                logger.info(f"[Task {task_config.id}]: 启动后台全量数据拉取...")
+                thread = threading.Thread(
+                    target=self._run_initial_full_sync,
+                    args=(task_config.id,)  # 仅传递 task_id
+                )
+                thread.daemon = True  # 设置为守护线程
+                thread.start()
+
+                # 3. (同步) 立即返回
+                # 全量同步已启动，将包含当前数据，故跳过当前 webhook 的单独处理。
+                logger.info(f"任务 {task_config.id}: 首次全量同步后台任务已启动，跳过当前 webhook (op={op}) 的单独处理。")
+                return
+
         # --- 3. 根据操作类型处理 ---
         try:
             # 3.1 form_update 单独处理
@@ -535,38 +574,6 @@ class Jdy2DbSyncService:
                     logger.info(f"表 {table_name} 不存在，根据数据创建...")
                     table = self.get_or_create_table_from_data(table_name, [data], task_config, dynamic_engine,
                                                                dynamic_metadata)
-
-                # # --- 检查是否需要 "首次全量覆盖" ---
-                # todo
-                # if (table is None or task_config.is_full_replace_first) and op != 'data_remove':
-                #   此处拉起一个独立进程，用于处理 "首次全量覆盖"
-                #   处理完成后，更新 task_config.is_full_replace_first 为 False
-
-                if (table is None or task_config.is_full_replace_first) and op != 'data_remove':
-                    logger.info(
-                        f"任务 {task_config.id}: 触发首次全量同步 (is_full_replace_first={task_config.is_full_replace_first}, table_exists={table is not None})")
-
-                    # 1. 确保表结构存在 (如果表不存在)
-                    if table is None:
-                        table = self.get_or_create_table_from_schema(table_name, data, task_config, dynamic_engine,
-                                                                     dynamic_metadata)
-
-                    # 2. 实例化 DataApi
-                    data_api_client = DataApi(
-                        api_key=task_config.department.jdy_key_info.api_key,
-                        host=Config.JDY_API_HOST,
-                        qps=30  # query_list_data
-                    )
-                    # 3. 执行全量同步
-                    self.sync_historical_data(task_config, data_api_client)
-
-                    # 4. [关键] 标记首次全量已完成
-                    task_config.is_full_replace_first = False
-                    config_session.commit()
-
-                    # 5. 全量同步已包含当前数据，直接返回
-                    logger.info(f"任务 {task_config.id}: 首次全量同步完成，跳过当前 webhook (op={op}) 的单独处理。")
-                    return
 
                 # 如果是 data_remove 且表不存在，则无需操作
                 if table is None and op == 'data_remove':
@@ -627,6 +634,82 @@ class Jdy2DbSyncService:
             # config_session 的回滚由 routes.py 处理
             log_sync_error(task_config=task_config, error=e, payload=payload,
                            extra_info="Unexpected error during webhook processing")
+
+    # --- 后台全量同步方法 ---
+
+    @retry()
+    def _run_initial_full_sync(self, task_id: int):
+        """
+        在后台线程中执行首次全量同步。
+        此方法必须是完全独立的，并创建自己的数据库会话。
+        """
+        logger.info(f"[Task {task_id} BG]: 后台首次全量同步线程启动...")
+
+        # 1. 创建此线程专用的 ConfigSession
+        config_session = ConfigSession()
+        task_config = None  # 必须从新会话中重新获取
+
+        try:
+            # 2. 重新获取任务配置 (必须 joinedload 依赖)
+            task_config = config_session.query(SyncTask).options(
+                joinedload(SyncTask.department).joinedload(Department.jdy_key_info),
+                joinedload(SyncTask.database),
+            ).get(task_id)
+
+            if not task_config:
+                logger.error(f"[Task {task_id} BG]: 在后台线程中找不到任务，线程退出。")
+                return
+            if not task_config.is_active:
+                logger.error(f"[Task {task_id} BG]: 任务已禁用，线程退出。")
+                return
+            if task_config.sync_status != 'idle':
+                logger.error(f"[Task {task_id} BG]: 任务正在运行中，线程退出。")
+                return
+            if not (task_config.app_id, task_config.entry_id):
+                logger.error(f"[Task {task_id} BG]: 缺少 app_id 或 entry_id，线程退出。")
+                return
+
+            # 3. 实例化 DataApi
+            if not task_config.department or not task_config.department.jdy_key_info:
+                logger.error(f"[Task {task_id} BG]: 任务缺少部门或密钥信息，线程退出。")
+                return
+
+            api_key = task_config.department.jdy_key_info.api_key
+            data_api_client = DataApi(
+                api_key=api_key,
+                host=Config.JDY_API_HOST,
+                qps=30
+            )
+
+            # 4. 执行全量同步 (self.sync_historical_data)
+            # 此方法会记录自己的成功/失败状态和日志
+            self.sync_historical_data(task_config, data_api_client)
+
+            # 5. [关键] 标记首次全量已完成
+            # 再次查询最新的 task_config，以防在同步期间被修改
+            task_to_update = config_session.query(SyncTask).get(task_id)
+            if task_to_update:
+                task_to_update.is_full_replace_first = False
+                config_session.commit()
+                logger.info(f"[Task {task_id} BG]: 首次全量同步标志 (is_full_replace_first=False) 已成功更新。")
+            else:
+                logger.warning(f"[Task {task_id} BG]: 无法在提交 'is_full_replace_first' 时再次找到任务。")
+
+
+        except Exception as e:
+            logger.error(f"[Task {task_id} BG]: 后台全量同步线程失败: {e}", exc_info=True)
+            if config_session:
+                config_session.rollback()
+            # 记录错误 (task_config 可能是 None)
+            log_sync_error(
+                task_config=task_config,  # 传递可能已加载的 task_config
+                error=e,
+                extra_info=f"后台首次全量同步失败 (Task {task_id})"
+            )
+        finally:
+            if config_session:
+                config_session.close()
+            logger.info(f"[Task {task_id} BG]: 后台线程退出。")
 
     # --- 数据库表结构 (DDL) ---
 
@@ -715,7 +798,27 @@ class Jdy2DbSyncService:
                                         metadata) -> Table:
         """
         根据 form_update 事件中的 schema 数据获取或创建表。
-        --- 8. 动态引擎/元数据 ---
+        "op": "form_update",
+        "data": {
+            "appId": "6607ac2c0d1f1a7ae4807f44",
+            "createTime": "2025-04-03T08:08:58.458Z",
+            "entryId": "67ee421a6003aa139515e0cf",
+            "name": "问题管理主表",
+            "widgets": [
+                {
+                    "label": "问题ID",
+                    "name": "question_id",
+                    "type": "text",
+                    "widgetName": "_widget_1742961087355"
+                }]
+
+        表单接口返回：
+        "widgets": [
+        {
+            "name": "_widget_1529400746031",
+            "widgetName": "_widget_1529400746031",
+            "label": "单行文本",
+            "type": "text"
         """
         table = self.get_table_if_exists(table_name, engine)
         if table is not None:
