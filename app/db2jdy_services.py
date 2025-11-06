@@ -86,7 +86,7 @@ class FieldMappingService:
         """
         从简道云 API 更新指定任务的字段映射缓存
         """
-        print(f"task_id:[{task.id}] Updating field mappings for task...")
+        logger.info(f"task_id:[{task.id}] Updating field mappings for task...")
 
         if not task.department or not task.department.jdy_key_info or not task.department.jdy_key_info.api_key:
             log_sync_error(
@@ -114,10 +114,10 @@ class FieldMappingService:
                 try:
                     data_modify_time = datetime.fromisoformat(data_modify_time_str.replace('Z', '+00:00'))
                 except ValueError:
-                    print(f"task_id:[{task.id}] Warning: Could not parse dataModifyTime '{data_modify_time_str}'.")
+                    logger.info(f"task_id:[{task.id}] Warning: Could not parse dataModifyTime '{data_modify_time_str}'.")
 
             if not widgets:
-                print(f"task_id:[{task.id}] No widgets found for form.")
+                logger.info(f"task_id:[{task.id}] No widgets found for form.")
                 return
 
             # 4. 删除旧映射
@@ -149,7 +149,7 @@ class FieldMappingService:
 
             config_session.add_all(new_mappings)
             config_session.commit()
-            print(f"task_id:[{task.id}] Successfully updated {len(new_mappings)} field mappings.")
+            logger.info(f"task_id:[{task.id}] Successfully updated {len(new_mappings)} field mappings.")
 
         except (requests.exceptions.RequestException, requests.exceptions.HTTPError) as e:
             config_session.rollback()
@@ -182,7 +182,7 @@ class Db2JdySyncService:
         检查源表, 如果是物理表 (BASE TABLE) 则添加 _id 字段和索引。
         此方法在任务首次运行前调用。
         """
-        print(f"task_id:[{task.id}] Preparing source table: {task.table_name}...")
+        logger.info(f"task_id:[{task.id}] Preparing source table: {task.table_name}...")
 
         # 动态获取引擎和会话
         try:
@@ -210,7 +210,7 @@ class Db2JdySyncService:
                 table_type = result[0] if result else None
 
                 if table_type == 'VIEW':
-                    print(f"task_id:[{task.id}] Source is a VIEW. Skipping _id column check.")
+                    logger.info(f"task_id:[{task.id}] Source is a VIEW. Skipping _id column check.")
                     return  # 视图, 正常退出
 
                 if table_type != 'BASE TABLE':
@@ -221,20 +221,20 @@ class Db2JdySyncService:
                 # 3. 检查 `_id` 列是否存在
                 columns = [col['name'] for col in inspector.get_columns(task.table_name)]
                 if '_id' not in columns:
-                    print(f"task_id:[{task.id}] Adding `_id` column to table '{task.table_name}'...")
+                    logger.info(f"task_id:[{task.id}] Adding `_id` column to table '{task.table_name}'...")
                     try:
                         # 提交在会话级别处理
                         source_conn.execute(
                             text(f"ALTER TABLE `{task.table_name}` ADD COLUMN `_id` VARCHAR(50) NULL DEFAULT NULL"))
                         source_conn.execute(text(f"ALTER TABLE `{task.table_name}` ADD INDEX `idx__id` (`_id`)"))
                         source_conn.commit()
-                        print(f"task_id:[{task.id}] Successfully added `_id` column and index.")
+                        logger.info(f"task_id:[{task.id}] Successfully added `_id` column and index.")
                     except Exception as alter_e:
                         source_conn.rollback()
                         log_sync_error(task_config=task, error=alter_e,
                                        extra_info=f"task_id:[{task.id}] Failed to add `_id` column to '{task.table_name}'.")
                 else:
-                    print(f"task_id:[{task.id}] `_id` column already exists.")
+                    logger.info(f"task_id:[{task.id}] `_id` column already exists.")
 
         except NoSuchTableError:
             log_sync_error(task_config=task,
@@ -275,7 +275,7 @@ class Db2JdySyncService:
             # self._view_status_cache[cache_key] = is_view
 
             if is_view:
-                print(f"task_id:[{task.id}] Source table {task.table_name} is a VIEW.")
+                logger.info(f"task_id:[{task.id}] Source table {task.table_name} is a VIEW.")
 
             return is_view
 
@@ -435,7 +435,7 @@ class Db2JdySyncService:
             log_sync_error(
                 task_config=task,
                 error=e,
-                extra_info=f"task_id:[{task.id}] V5 API error finding Jdy ID by PK."
+                extra_info=f"task_id:[{task.id}] V5 API error finding Jdy _id by PK."
             )
             return None
 
@@ -451,7 +451,7 @@ class Db2JdySyncService:
         将简道云 _id 回写到源数据库
         """
         if self._is_view(task):
-            # print(f"task_id:[{task.id}] Skipping _id writeback for VIEW.")
+            # logger.info(f"task_id:[{task.id}] Skipping _id writeback for VIEW.")
             return  # 视图不能回写
 
         try:
@@ -516,7 +516,7 @@ class Db2JdySyncService:
             config_session.commit()
         except Exception as e:
             config_session.rollback()
-            print(f"task_id:[{task.id}] CRITICAL: Failed to update task status to {status}: {e}")
+            logger.info(f"task_id:[{task.id}] CRITICAL: Failed to update task status to {status}: {e}")
 
     # --- 公共同步方法 ---
     # --- 首次全量同步的内部方法 ---
@@ -532,7 +532,7 @@ class Db2JdySyncService:
             return
 
         mode = "FULL_REPLACE" if delete_first else "INITIAL_SYNC"
-        print(f"task_id:[{task.id}] Running {mode} sync...")
+        logger.info(f"task_id:[{task.id}] Running {mode} sync...")
 
         total_deleted = 0
         total_created = 0
@@ -555,7 +555,7 @@ class Db2JdySyncService:
 
             # 2. 仅在 delete_first=True 时删除
             if delete_first:
-                print(f"task_id:[{task.id}] Deleting all data from Jdy...")
+                logger.info(f"task_id:[{task.id}] Deleting all data from Jdy...")
                 data_id = None
                 while True:
                     response = data_api_query.query_list_data(
@@ -571,7 +571,7 @@ class Db2JdySyncService:
 
                     # delete_batch_data 返回一个列表，需要对列表中的每个响应求和
                     success_count = sum(resp.get('success_count', 0) for resp in delete_responses)
-                    print(f"task_id:[{task.id}] Deleted {success_count} items.")
+                    logger.info(f"task_id:[{task.id}] Deleted {success_count} items.")
 
                     total_deleted += success_count
                     # if success_count != len(data_ids):
@@ -579,9 +579,9 @@ class Db2JdySyncService:
                     #                    extra_info=f"task_id:[{task.id}] Delete mismatch. Requested: {len(data_ids)}, Deleted: {success_count}.")
 
                     data_id = jdy_data[-1]['_id']
-                print(f"task_id:[{task.id}] Jdy data deleted ({total_deleted} items). Fetching from source DB...")
+                logger.info(f"task_id:[{task.id}] Jdy data deleted ({total_deleted} items). Fetching from source DB...")
             else:
-                print(f"task_id:[{task.id}] Skipping deletion for {mode}.")
+                logger.info(f"task_id:[{task.id}] Skipping deletion for {mode}.")
 
             # 3. 构建带 SQL 过滤的查询, 并使用流式处理
             with get_dynamic_session(task) as source_session:
@@ -619,12 +619,12 @@ class Db2JdySyncService:
                         )
                         # create_batch_data 返回一个列表，需要对列表中的每个响应求和
                         success_count = sum(resp.get('success_count', 0) for resp in responses)
-                        print(f"task_id:[{task.id}] Created {success_count} items.")
+                        logger.info(f"task_id:[{task.id}] Created {success_count} items.")
 
                         total_created += success_count
                         if success_count != len(batch_data):
                             log_sync_error(task_config=task,
-                                           extra_info=f"task_id:[{task.id}] Create mismatch. Req: {len(batch_data)}, Created: {success_count}. TransID: {trans_id}")
+                                           extra_info=f"task_id:[{task.id}] Create mismatch. Req: {len(batch_data)}, Created: {success_count}. Trans_id: {trans_id}")
                         batch_data = []
 
                 # 处理最后一个批次
@@ -636,7 +636,7 @@ class Db2JdySyncService:
                     )
                     # create_batch_data 返回一个列表，需要对列表中的每个响应求和
                     success_count = sum(resp.get('success_count', 0) for resp in responses)
-                    print(f"task_id:[{task.id}] Created {success_count} items.")
+                    logger.info(f"task_id:[{task.id}] Created {success_count} items.")
 
                     total_created += success_count
                     if success_count != len(batch_data):
@@ -646,11 +646,11 @@ class Db2JdySyncService:
                 # 检查是否因为没有数据而退出循环
                 if not has_processed_rows:
                     if task.source_filter_sql:
-                        print(f"task_id:[{task.id}] No data found WHERE {task.source_filter_sql}.")
+                        logger.info(f"task_id:[{task.id}] No data found WHERE {task.source_filter_sql}.")
                     else:
-                        print(f"task_id:[{task.id}] No data found.")
+                        logger.info(f"task_id:[{task.id}] No data found.")
 
-            print(
+            logger.info(
                 f"task_id:[{task.id}] {mode} sync completed. Source rows: {total_source_rows}, Created in Jdy: {total_created}.")
             if total_source_rows != total_created:
                 log_sync_error(task_config=task,
@@ -684,7 +684,7 @@ class Db2JdySyncService:
         #                    extra_info=f"task_id:[{task.id}] FULL_REPLACE mode is not allowed for VIEWS. Skipping task.")
         #     return
 
-        print(f"task_id:[{task.id}] Running FULL_REPLACE sync (Scheduled)...")
+        logger.info(f"task_id:[{task.id}] Running FULL_REPLACE sync (Scheduled)...")
         self._update_task_status(config_session, task, status='running')
 
         try:
@@ -710,7 +710,7 @@ class Db2JdySyncService:
             self._update_task_status(config_session, task, status='error')
             return
 
-        print(f"task_id:[{task.id}] Running INCREMENTAL sync...")
+        logger.info(f"task_id:[{task.id}] Running INCREMENTAL sync...")
         self._update_task_status(config_session, task, status='running')
 
         if not task.department or not task.department.jdy_key_info or not task.department.jdy_key_info.api_key:
@@ -728,7 +728,7 @@ class Db2JdySyncService:
 
             # 1. 检查是否需要首次全量同步
             if task.is_full_replace_first:
-                print(f"task_id:[{task.id}] First run: Executing initial full replace...")
+                logger.info(f"task_id:[{task.id}] First run: Executing initial full replace...")
                 try:
                     # 调用全量同步
                     self._run_full_sync(config_session, task, delete_first=True)
@@ -737,7 +737,7 @@ class Db2JdySyncService:
                                              status='idle',
                                              last_sync_time=current_sync_time,
                                              is_full_replace_first=False)
-                    print(f"task_id:[{task.id}] Initial full sync complete.")
+                    logger.info(f"task_id:[{task.id}] Initial full sync complete.")
                     return  # 本次运行结束
                 except Exception as e:
                     # 首次全量同步失败, 保持 is_full_replace_first=True, 设为 error
@@ -794,7 +794,7 @@ class Db2JdySyncService:
                     # 探测字段: updated_time
                     field_for_probing = raw_field.split(',')[0].strip().replace('`', '')
                     is_complex_field = True
-                    print(
+                    logger.debug(
                         f"task_id:[{task.id}] Detected comma-separated fields. Query: {incremental_field_for_query}, ProbeField: {field_for_probing}")
 
                 elif 'coalesce(' in raw_field.lower() or 'ifnull(' in raw_field.lower():
@@ -816,7 +816,7 @@ class Db2JdySyncService:
                     else:
                         field_for_probing = raw_field  # 回退
 
-                    print(
+                    logger.debug(
                         f"task_id:[{task.id}] Detected complex function. Query: {incremental_field_for_query}, ProbeField: {field_for_probing}")
 
                 else:
@@ -824,7 +824,7 @@ class Db2JdySyncService:
                     incremental_field_for_query = f"`{raw_field}`"
                     field_for_probing = raw_field.replace('`', '')
                     is_complex_field = False
-                    print(
+                    logger.debug(
                         f"task_id:[{task.id}] Detected simple field. Query: {incremental_field_for_query}, ProbeField: {field_for_probing}")
 
                 # 2. 检查探测字段 (field_for_probing) 的类型
@@ -851,12 +851,12 @@ class Db2JdySyncService:
                 # 3. 如果是 DATE 类型，总是截断
                 if col_type_name == 'DATE':
                     last_sync_time_for_query = last_sync_time.replace(hour=0, minute=0, second=0, microsecond=0)
-                    print(
+                    logger.debug(
                         f"task_id:[{task.id}] Detected DATE type. Querying >= {last_sync_time_for_query} (Truncated)")
 
                 # 4. 如果是 DATETIME，执行数据探测
                 elif col_type_name.startswith('DATETIME'):
-                    print(f"task_id:[{task.id}] Detected DATETIME type. Probing data ...")
+                    logger.debug(f"task_id:[{task.id}] Detected DATETIME type. Probing data ...")
                     is_fake_datetime = False
 
                     # 探测查询，限制100条
@@ -868,7 +868,7 @@ class Db2JdySyncService:
 
                     # 没有数据，无法判断。为安全起见，使用截断（防止丢失数据）
                     if not probe_results:
-                        print(f"task_id:[{task.id}] No data found for probing.")
+                        logger.debug(f"task_id:[{task.id}] No data found for probing.")
                         is_fake_datetime = True
                     else:
                         min_time = time_obj(0, 0, 0)
@@ -876,23 +876,23 @@ class Db2JdySyncService:
                         for row in probe_results:
                             dt_val = row[0]
                             if dt_val is not None and dt_val.time() != min_time:
-                                # print(f"task_id:[{task.id}] Detected DATETIME type is yyyy-MM-dd HH:mm:ss.")
+                                # logger.debug(f"task_id:[{task.id}] Detected DATETIME type is yyyy-MM-dd HH:mm:ss.")
                                 all_are_midnight = False
                                 break
                         is_fake_datetime = all_are_midnight
 
                     if is_fake_datetime:
-                        print(
+                        logger.debug(
                             f"task_id:[{task.id}] Probe confirms yyyy-MM-dd 00:00:00 DATETIME format. Using truncated timestamp.")
                         last_sync_time_for_query = last_sync_time.replace(hour=0, minute=0, second=0, microsecond=0)
                     else:
-                        print(
+                        logger.debug(
                             f"task_id:[{task.id}] Probe found yyyy-MM-dd HH:mm:ss DATETIME format. Using exact timestamp.")
                         last_sync_time_for_query = last_sync_time
                 else:
                     # 3. 如果是 TIMESTAMP 或其他类型，使用精确时间
                     last_sync_time_for_query = last_sync_time
-                    print(
+                    logger.debug(
                         f"task_id:[{task.id}] Detected {col_type_name} type. Querying >= {last_sync_time_for_query}")
 
                 # 6. 获取源数据 (带 SQL 过滤)
@@ -909,7 +909,7 @@ class Db2JdySyncService:
                 # 移除: rows = source_session.execute(text(base_query), params).mappings().all()
 
                 # if not rows:
-                #     print(f"task_id:[{task.id}] No new data found since {last_sync_time_for_query}.")
+                #     logger.info(f"task_id:[{task.id}] No new data found since {last_sync_time_for_query}.")
                 #     self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
                 #     return
 
@@ -967,7 +967,7 @@ class Db2JdySyncService:
                                            extra_info=f"task_id:[{task.id}] Failed to update data.")
                         else:
                             count_updated += 1
-                            print(f"task_id:[{task.id}] Updated data with _id: {jdy_id}.")
+                            logger.debug(f"task_id:[{task.id}] Updated data with _id: {jdy_id}.")
 
                     else:
                         # 新增
@@ -983,18 +983,18 @@ class Db2JdySyncService:
                                            extra_info=f"task_id:[{task.id}] Failed to create data.")
                         else:
                             count_new += 1
-                            print(f"task_id:[{task.id}] Created data with _id: {new_jdy_id}.")
+                            logger.debug(f"task_id:[{task.id}] Created data with _id: {new_jdy_id}.")
                             # 是否需要回写，有待商榷，实际可不用回写
                             # # 传入 row_dict 以进行复合主键回写
                             # self._writeback_id_to_source(source_session, task, new_jdy_id, row_dict)
 
                 # 检查是否因为没有数据而退出循环
                 if not has_processed_rows:
-                    print(f"task_id:[{task.id}] No new data found since {last_sync_time_for_query}.")
+                    logger.info(f"task_id:[{task.id}] No new data found since {last_sync_time_for_query}.")
                     self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
                     return
 
-            print(f"task_id:[{task.id}] INCREMENTAL sync completed. New: {count_new}, Updated: {count_updated}.")
+            logger.info(f"task_id:[{task.id}] INCREMENTAL sync completed. New: {count_new}, Updated: {count_updated}.")
             self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
 
         except Exception as e:
@@ -1021,7 +1021,7 @@ class Db2JdySyncService:
 
         thread_name = f"BinlogListener-{task.id}"
         current_thread().name = thread_name
-        print(f"[{thread_name}] Starting...")
+        logger.info(f"[{thread_name}] Starting...")
 
         if not task.department or not task.department.jdy_key_info or not task.department.jdy_key_info.api_key:
             log_sync_error(
@@ -1064,7 +1064,7 @@ class Db2JdySyncService:
         try:
             # 2. 检查是否需要首次全量同步 (在启动监听器之前)
             if task.is_full_replace_first:
-                print(f"[{thread_name}] First run: Executing initial full replace...")
+                logger.info(f"[{thread_name}] First run: Executing initial full replace...")
                 try:
                     with ConfigSession() as config_session:
                         self._run_full_sync(config_session, task, delete_first=True)
@@ -1074,7 +1074,7 @@ class Db2JdySyncService:
                                                  status='running',  # 保持 running, 因为我们要继续启动 binlog
                                                  last_sync_time=datetime.now(TZ_UTC_8),
                                                  is_full_replace_first=False)
-                        print(f"[{thread_name}] Initial full sync complete. Proceeding to binlog...")
+                        logger.info(f"[{thread_name}] Initial full sync complete. Proceeding to binlog...")
                 except Exception as e:
                     # 首次全量同步失败, 记录日志, 将任务设为 error 并退出线程
                     log_sync_error(task_config=task, error=e,
@@ -1112,7 +1112,7 @@ class Db2JdySyncService:
                 skip_to_timestamp=task.last_sync_time.timestamp() if task.last_sync_time else None
             )
 
-            print(f"[{thread_name}] Listening for binlog events...")
+            logger.info(f"[{thread_name}] Listening for binlog events...")
 
             for binlog_event in stream:
                 log_file = stream.log_file
@@ -1123,7 +1123,7 @@ class Db2JdySyncService:
                     with ConfigSession() as config_session, get_dynamic_session(task) as source_session:
                         current_task_state = config_session.query(SyncTask).get(task.id)
                         if not current_task_state or not current_task_state.is_active:
-                            print(f"[{thread_name}] Task disabled. Stopping listener.")
+                            logger.info(f"[{thread_name}] Task disabled. Stopping listener.")
                             break  # 退出 for 循环
 
                         for row in binlog_event.rows:
@@ -1149,7 +1149,7 @@ class Db2JdySyncService:
                                                    error=create_response,
                                                    extra_info=f"[{thread_name}] Failed to create data.")
                                 else:
-                                    print(f"task_id:[{task.id}] Created data with _id: {new_jdy_id}")
+                                    logger.debug(f"task_id:[{task.id}] Created data with _id: {new_jdy_id}")
                                     # binlog 模式不需要回写_id, 会导致binlog被重复激发
                                     # # 传入 row['values']
                                     # self._writeback_id_to_source(source_session, task, new_jdy_id, row['values'])
@@ -1181,7 +1181,7 @@ class Db2JdySyncService:
                                                        error=update_response,
                                                        extra_info=f"task_id:[{task.id}] Failed to update data.")
                                     else:
-                                        print(f"task_id:[{task.id}] Updated data with _id: {update_jdy_id}")
+                                        logger.debug(f"task_id:[{task.id}] Updated data with _id: {update_jdy_id}")
 
                                 else:
                                     # log_sync_error(task_config=task,
@@ -1206,7 +1206,7 @@ class Db2JdySyncService:
                                                        error=create_response,
                                                        extra_info=f"[{thread_name}] Failed to create data.")
                                     else:
-                                        print(
+                                        logger.debug(
                                             f"task_id:[{task.id}] Update event: Jdy ID not found, Created data with _id: {new_jdy_id}")
 
                             elif isinstance(binlog_event, DeleteRowsEvent):
@@ -1227,7 +1227,7 @@ class Db2JdySyncService:
                                                        error=delete_response,
                                                        extra_info=f"[{thread_name}] Failed to delete data.")
                                     else:
-                                        print(f"task_id:[{task.id}] Deleted data with _id: {jdy_id}")
+                                        logger.debug(f"task_id:[{task.id}] Deleted data with _id: {jdy_id}")
                                 else:
                                     log_sync_error(task_config=task,
                                                    extra_info=f"[{thread_name}] Delete event skipped: Jdy ID not found.",
@@ -1264,7 +1264,7 @@ class Db2JdySyncService:
         finally:
             if stream:
                 stream.close()
-            print(f"[{thread_name}] Listener shut down.")
+            logger.warning(f"[{thread_name}] Listener shut down.")
             with ConfigSession() as session:
                 task_status = session.query(SyncTask).get(task.id)
                 if task_status and task_status.sync_status == 'running':

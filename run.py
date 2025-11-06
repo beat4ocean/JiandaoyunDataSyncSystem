@@ -5,7 +5,6 @@ import traceback
 from datetime import datetime, timedelta
 
 import dotenv
-from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError

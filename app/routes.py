@@ -23,7 +23,7 @@ from app.utils import test_db_connection, log_sync_error, validate_signature
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-api_bp = Blueprint.error('api', __name__, url_prefix='/api')
+api_bp = Blueprint('api', __name__, url_prefix='/api')
 
 
 # 辅助函数：将 SQLAlchemy 对象（包括关联对象）转换为字典

@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 from datetime import datetime
-from urllib.parse import quote_plus
 
 from passlib.hash import pbkdf2_sha256 as sha256
 from sqlalchemy import (Index, Boolean, Time, create_engine, MetaData, Column, Integer, String,

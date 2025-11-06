@@ -1585,17 +1585,18 @@ class Jdy2DbSyncService:
                 on_duplicate_stmt = stmt.on_duplicate_key_update(_id=stmt.inserted._id)  # 无意义的更新，但能触发逻辑
 
             session.execute(on_duplicate_stmt)
-            logger.debug(f"成功 Upsert 数据 (ID: {data_id}) 到表 '{table.name}'。")
+            logger.debug(
+                f"task_id:[{task_config.id}] Data upserted successfully (_id: {data_id}) to table '{table.name}'.")
             # commit 移到 handle_webhook_data 末尾
 
         except SQLAlchemyError as e:
             logger.error(
-                f"task_id:[{task_config.id}] Failed to upsert data (ID: {data_id}) to table '{table.name}': {e}",
+                f"task_id:[{task_config.id}] Failed to upsert data (_id: {data_id}) to table '{table.name}': {e}",
                 exc_info=False)
             # (rollback 和 log_sync_error 移到 handle_webhook_data 的 except 块中)
             raise  # 重新抛出，让 handle_webhook_data 捕获并回滚
         except Exception as e:
-            logger.error(f"task_id:[{task_config.id}] Unexpected error during upsert data (ID: {data_id}): {e}",
+            logger.error(f"task_id:[{task_config.id}] Unexpected error during upsert data (_id: {data_id}): {e}",
                          exc_info=True)
             raise
 
@@ -1608,20 +1609,20 @@ class Jdy2DbSyncService:
                            json.dumps(data, ensure_ascii=False, default=str))
             return
 
-        logger.info(f"task_id:[{task_config.id}] Preparing to delete data (ID: {data_id}) from '{table.name}'...")
+        logger.debug(f"task_id:[{task_config.id}] Preparing to delete data (_id: {data_id}) from '{table.name}'...")
         try:
             stmt = table.delete().where(table.c._id == data_id)
             result = session.execute(stmt)
             # (commit 移到 handle_webhook_data 的 with 块末尾)
             if result.rowcount == 0:
                 logger.warning(
-                    f"task_id:[{task_config.id}] Warning: Attempted to delete data (ID: {data_id}), but not found in database.")
+                    f"task_id:[{task_config.id}] Warning: Attempted to delete data (_id: {data_id}), but not found in database.")
             else:
-                logger.info(
-                    f"task_id:[{task_config.id}] Successfully deleted data (ID: {data_id}) from '{table.name}'.")
+                logger.debug(
+                    f"task_id:[{task_config.id}] Successfully deleted data (_id: {data_id}) from '{table.name}'.")
         except SQLAlchemyError as e:
             logger.error(
-                f"task_id:[{task_config.id}] Failed to delete data (ID: {data_id}) from table '{table.name}': {e}",
+                f"task_id:[{task_config.id}] Failed to delete data (_id: {data_id}) from table '{table.name}': {e}",
                 exc_info=True)
             # (rollback 和 log_sync_error 移到 handle_webhook_data 的 except 块中)
             raise
