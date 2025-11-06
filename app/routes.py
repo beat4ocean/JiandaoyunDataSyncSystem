@@ -509,8 +509,9 @@ def add_sync_task():
             return jsonify({"error": f"任务类型 '{sync_type}' 与所选数据库的类型 '{source_db.sync_type}' 不匹配。"}), 400
 
         table_name = data.get('table_name')
-        if not table_name:
-            return jsonify({"error": "必须提供 table_name"}), 400
+        # table_name 可根据规则生成
+        # if not table_name:
+        #     return jsonify({"error": "必须提供表名"}), 400
 
         # --- 4. 初始化任务对象 ---
         new_task = SyncTask(
