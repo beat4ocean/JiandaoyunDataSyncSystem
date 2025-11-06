@@ -306,19 +306,22 @@ def convert_to_pinyin(name: str) -> str | None:
 
 # 获取数据库连接字符串
 def get_connection_url(db_type, db_host, db_port, db_name, db_user, db_password, db_args):
-    if db_type == 'MySQL':
+    if not db_type or not db_type.strip():
+        raise ValueError(f"Unsupported database type: {db_type}")
+
+    elif db_type.upper() == 'MYSQL' or db_type.upper() == 'MYSQL+PYMYSQL':
         db_url = f"mysql+pymysql://{db_user}:{quote_plus(db_password)}@{db_host}:{db_port}/{db_name}"
         if db_args:
             db_url += f"?{db_args}"
-    elif db_type == 'SQL Server':
+    elif db_type.upper() == 'SQL SERVER' or db_type.upper() == 'MSSQL+PYMSSQL':
         db_url = f"mssql+pymssql://{db_user}:{quote_plus(db_password)}@{db_host}:{db_port}/{db_name}"
         if db_args:
             db_url += f"?{db_args}"
-    elif db_type == 'PostgreSQL':
+    elif db_type.upper() == 'POSTGRESQL' or db_type.upper() == 'POSTGRESQL+PSYCOPG2':
         db_url = f"postgresql+psycopg2://{db_user}:{quote_plus(db_password)}@{db_host}:{db_port}/{db_name}"
         if db_args:
             db_url += f"?{db_args}"
-    elif db_type == 'Oracle':
+    elif db_type.upper() == 'ORACLE' or db_type.upper() == 'ORACLE+CX_ORACLE':
         db_url = f"oracle+cx_oracle://{db_user}:{quote_plus(db_password)}@{db_host}:{db_port}/{db_name}"
         if db_args:
             db_url += f"?{db_args}"

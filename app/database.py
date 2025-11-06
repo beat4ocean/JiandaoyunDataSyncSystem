@@ -31,7 +31,6 @@ inspected_tables_cache: dict[str, dict[str, Table]] = {}
 dynamic_metadata_cache: dict[str, MetaData] = {}
 
 
-
 # --- 获取动态引擎 ---
 @contextmanager
 def get_dynamic_session(task: SyncTask) -> Generator[Any, Any, None]:
@@ -65,9 +64,12 @@ def get_dynamic_session(task: SyncTask) -> Generator[Any, Any, None]:
 
         # 构建连接字符串
         db_url = (
-            f"{db_info.db_type}://{db_info.db_user}:{quote_plus(db_info.db_password)}@"
-            f"{db_info.db_host}:{db_info.db_port}/{db_info.db_name}?{db_info.db_args}"
+            f"{driver}://{db_info.db_user}:{quote_plus(db_info.db_password)}@"
+            f"{db_info.db_host}:{db_info.db_port}/{db_info.db_name}"
         )
+
+        if db_info.db_args:
+            db_url += f"?{db_info.db_args}"
 
         engine = create_engine(db_url, pool_recycle=3600, connect_args=DB_CONNECT_ARGS)
         session_local = sessionmaker(bind=engine)
