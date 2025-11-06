@@ -261,13 +261,13 @@
                                     <el-icon>
                                         <Warning/>
                                     </el-icon>
-                                    <span>日志 (DB->JDY)</span>
+                                    <span>数据库->简道云</span>
                                 </el-menu-item>
                                 <el-menu-item index="/logs-jdy-to-db">
                                     <el-icon>
-                                        <WarningFilled/>
+                                        <Warning/>
                                     </el-icon>
-                                    <span>日志 (JDY->DB)</span>
+                                    <span>简道云->数据库</span>
                                 </el-menu-item>
                             </el-sub-menu>
 
@@ -636,7 +636,7 @@
         `,
         setup() {
             const defaultItem = {id: null, department_name: '', is_active: true};
-            // REFACTOR: 3.2 - API endpoint is /departments
+            // 3.2 - API endpoint is /departments
             const crud = useCrud('/departments', '部门', defaultItem, 'id');
             const formRules = {
                 // id: [{required: true, message: '请输入部门ID', trigger: 'blur'}],
@@ -969,7 +969,7 @@
                 department_id: null,
                 db_args: ''
             };
-            // REFACTOR: 3.2 - API endpoint is /databases
+            // 3.2 - API endpoint is /databases
             const crud = useCrud('/databases', '数据库', defaultItem, 'id');
             const departments = ref([]);
             // 测试连接的加载状态
@@ -978,7 +978,7 @@
             const formRules = computed(() => ({
                 department_id: [{required: props.isSuperuser, message: '请选择部门', trigger: 'change'}],
                 db_show_name: [{required: true, message: '请输入显示名称', trigger: 'blur'}],
-                sync_type: [{required: true, message: '请选择同步类型', trigger: 'change'}], // REFACTOR: 3.6
+                sync_type: [{required: true, message: '请选择同步类型', trigger: 'change'}], // 3.6
                 db_type: [{required: true, message: '请选择类型', trigger: 'change'}],
                 db_host: [{required: true, message: '请输入主机', trigger: 'blur'}],
                 db_port: [{required: true, message: '请输入端口', trigger: 'blur'}],
@@ -1120,7 +1120,7 @@
         template: `
           <el-card class="config-card">
             <template #header>
-              <div class="card-header"><span>数据库->简道云 同步任务管理</span>
+              <div class="card-header"><span>数据库 -> 简道云 同步任务管理</span>
                 <el-button type="primary" @click="openDialog()" :icon="ElementPlusIcons.Plus">添加任务</el-button>
               </div>
             </template>
@@ -1332,7 +1332,7 @@
                 sync_type: 'db2jdy'
             };
 
-            // REFACTOR: 3.6 - Fix API endpoint
+            // 3.6 - Fix API endpoint
             const crud = useCrud('/sync-tasks?sync_type=db2jdy', '同步任务', defaultTask, 'id');
             const departments = ref([]);
             const allDatabases = ref([]);
@@ -1482,7 +1482,7 @@
         template: `
           <el-card class="config-card">
             <template #header>
-              <div class="card-header"><span>简道云 -> 数据库 (JDY to DB)</span>
+              <div class="card-header"><span>简道云 -> 数据库 同步任务管理</span>
                 <el-button type="primary" @click="openDialog()" :icon="ElementPlusIcons.Plus">添加任务</el-button>
               </div>
             </template>
@@ -1602,10 +1602,10 @@
                   <el-col :span="12">
                     <el-form-item label="列名使用拼音">
                       <el-switch v-model="currentItem.label_to_pinyin"></el-switch>
-                      <div class="form-item-note">开启后，将使用字段的"标题"转为拼音作为列名 (e.g., "订单金额" ->
-                        "ding_dan_jin_e")。
+                      <div class="form-item-note">开启后，将使用字段的"标题"转为拼音作为列名 (e.g., "金额" ->
+                        "jin_e")。
                       </div>
-                      <div class="form-item-note">关闭后，将优先使用字段的"别名" (如果设置了)，其次是"标题"原文。</div>
+                      <div class="form-item-note">关闭后，将优先使用字段的"别名"</div>
                     </el-form-item>
                   </el-col>
                   <el-col :span="12">
@@ -1661,7 +1661,7 @@
         `,
         props: ['isSuperuser'],
         setup(props) {
-            // REFACTOR: 3.6 - Default item for jdy2db
+            // 3.6 - Default item for jdy2db
             const defaultTask = {
                 task_name: '',
                 department_id: null,
@@ -1676,10 +1676,10 @@
                 label_to_pinyin: false,
                 send_error_log_to_wecom: false,
                 wecom_robot_webhook_url: null,
-                sync_type: 'jdy2db' // REFACTOR: 3.6 - Hardcode type
+                sync_type: 'jdy2db' // 3.6 - Hardcode type
             };
 
-            // REFACTOR: 3.6 - Fix API endpoint
+            // 3.6 - Fix API endpoint
             const crud = useCrud('/sync-tasks?sync_type=jdy2db', '同步任务', defaultTask, 'id');
             const departments = ref([]);
             const allDatabases = ref([]);
@@ -1789,7 +1789,7 @@
         template: `
           <el-card class="config-card">
             <template #header>
-              <div class="card-header"><span>错误日志 (DB -> JDY)</span>
+              <div class="card-header"><span>数据库 -> 简道云 错误日志管理</span>
                 <el-button @click="fetchItems" :icon="ElementPlusIcons.Refresh" :loading="loading">刷新</el-button>
               </div>
             </template>
@@ -1841,7 +1841,7 @@
         `,
         props: ['isSuperuser'],
         setup(props) {
-            // REFACTOR: 3.6 - Fix API endpoint
+            // 3.6 - Fix API endpoint
             const {items, loading, fetchItems} = useCrud('/sync-logs?sync_type=db2jdy', '日志');
             const filters = reactive({dateRange: null, departmentIdFilter: '', taskIdFilter: ''});
 
@@ -1896,7 +1896,7 @@
         template: `
           <el-card class="config-card">
             <template #header>
-              <div class="card-header"><span>错误日志 (JDY -> DB)</span>
+              <div class="card-header"><span>简道云 -> 数据库 错误日志管理</span>
                 <el-button @click="fetchItems" :icon="ElementPlusIcons.Refresh" :loading="loading">刷新</el-button>
               </div>
             </template>
@@ -1948,7 +1948,7 @@
         `,
         props: ['isSuperuser'],
         setup(props) {
-            // REFACTOR: 3.6 - Fix API endpoint
+            // 3.6 - Fix API endpoint
             const {items, loading, fetchItems} = useCrud('/sync-logs?sync_type=jdy2db', '日志');
             const filters = reactive({dateRange: null, departmentIdFilter: '', taskIdFilter: ''});
             const filteredLogs = computed(() => {
@@ -1999,7 +1999,7 @@
 
     // --- Router Setup (适配多租户) ---
     const routes = [
-        // REFACTOR: 3.6 - Default route
+        // 3.6 - Default route
         {path: '/', redirect: '/tasks-db-to-jdy'},
 
         {path: '/departments', component: DepartmentView},
@@ -2007,7 +2007,7 @@
         {path: '/databases', component: DatabaseView},
         {path: '/jdy-keys', component: JdyKeyInfoView},
 
-        // REFACTOR: 3.6 - Split routes
+        // 3.6 - Split routes
         {path: '/tasks-db-to-jdy', component: SyncTaskViewDbToJdy},
         {path: '/tasks-jdy-to-db', component: SyncTaskViewJdyToDb},
         {path: '/logs-db-to-jdy', component: SyncLogViewDbToJdy},
@@ -2100,7 +2100,7 @@
     app.component('DatabaseView', DatabaseView);
     app.component('JdyKeyInfoView', JdyKeyInfoView);
 
-    // REFACTOR: 3.6 - Register new components
+    // 3.6 - Register new components
     app.component('SyncTaskViewDbToJdy', SyncTaskViewDbToJdy);
     app.component('SyncTaskViewJdyToDb', SyncTaskViewJdyToDb);
     app.component('SyncLogViewDbToJdy', SyncLogViewDbToJdy);
