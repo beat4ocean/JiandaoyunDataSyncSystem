@@ -1194,7 +1194,7 @@ class Jdy2DbSyncService:
             self.inspected_tables_cache[engine_url_key].pop(table.name, None)
 
         new_table = self.get_table_if_exists(table.name, engine)
-        if new_table:
+        if new_table is not None:
             logger.info(f"task_id:[{task_config.id}] Table '{table.name}' structure updated and reloaded.")
             return new_table
         else:
@@ -1444,7 +1444,7 @@ class Jdy2DbSyncService:
                     self.inspected_tables_cache[engine_url_key].pop(table_name, None)
 
                 new_table = self.get_table_if_exists(table_name, engine)
-                if new_table:
+                if new_table is not None:
                     logger.info(f"task_id:[{task_id}] Table '{table_name}' definition refreshed.")
                     return new_table
                 else:
