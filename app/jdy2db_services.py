@@ -50,7 +50,7 @@ class FieldMappingService:
     #     # # 如果都没有，提供一个基于 entryId 的默认值
     #     # if not form_name:
     #     #     entry_id_from_data = data.get('entryId') if isinstance(data, dict) else None
-    #     #     entry_id_from_payload = payload.get('entryId')
+    #     #     entry_id_from_payload = payload.get('entry_id')
     #     #     entry_id = entry_id_from_data or entry_id_from_payload
     #     #     form_name = f"unknown_form_{entry_id}" if entry_id else "unknown_form"
     #     #     logger.warning(f"Unable to determine form name from payload; using default value: {form_name}")

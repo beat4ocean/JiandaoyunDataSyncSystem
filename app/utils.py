@@ -157,7 +157,7 @@ def log_sync_error(task_config: 'SyncTask' = None,
     table_name = None
     department_id = None
     department_name = None
-    sync_type = 'db2jdy'
+    sync_type = None  # 移除错误的默认值
 
     if task_config:
         # 延迟导入 SyncTask 以进行类型检查

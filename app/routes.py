@@ -819,6 +819,9 @@ def handle_jdy_webhook():
     dpt_name = request.args.get('dpt')
     db_id_str = request.args.get('db_id')
     table_name = request.args.get('table')
+    # 来自 ?table= 的 "" 正确匹配数据库中的 NULL
+    if table_name and table_name.strip() == "":
+        table_name = None
 
     # --- [鉴权] 获取签名参数 ---
     nonce = request.args.get('nonce')
@@ -905,8 +908,8 @@ def handle_jdy_webhook():
 
         op = payload.get('op')
         data = payload.get('data')
-        app_id = data.get('appId') or payload.get('appId')
-        entry_id = data.get('entryId') or payload.get('entryId')
+        app_id = data.get('appId') or payload.get('app_id')
+        entry_id = data.get('entryId') or payload.get('entry_id')
 
         # --- 6. 查找任务配置 (SyncTask) ---
         task_config = session.scalar(
@@ -915,7 +918,12 @@ def handle_jdy_webhook():
                 SyncTask.sync_type == 'jdy2db',
                 SyncTask.department_id == key_info.department_id,
                 SyncTask.database_id == db_id,
-                SyncTask.table_name == table_name,
+                # 有可能用户还没填写表名，想让系统自动生成表名
+                # SyncTask.table_name == table_name,
+                # (
+                #         (SyncTask.table_name == table_name) |
+                #         ((SyncTask.table_name.is_(None)) & (table_name is None))
+                # ),
                 SyncTask.is_active == True
             )
             # 预加载所需的关系
@@ -958,8 +966,8 @@ def handle_jdy_webhook():
     except Exception as e:
         session.rollback()
         # 尝试从 payload 中获取 app_id 和 entry_id (如果解析成功)
-        app_id_log = locals().get('payload', {}).get('appId', 'N/A')
-        entry_id_log = locals().get('payload', {}).get('entryId', 'N/A')
+        app_id_log = locals().get('payload', {}).get('app_id', 'N/A')
+        entry_id_log = locals().get('payload', {}).get('entry_id', 'N/A')
 
         logger.error(
             f"[Webhook] 500: (App: {app_id_log}, Entry: {entry_id_log}) 处理失败: {e}\n{traceback.format_exc()}")
