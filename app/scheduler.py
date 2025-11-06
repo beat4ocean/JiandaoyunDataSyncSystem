@@ -42,6 +42,7 @@ def run_db2jdy_task_wrapper(task_id: int):
     sync_service = Db2JdySyncService()
 
     with (ConfigSession() as config_session):
+        task = None
         try:
             # 预加载 department 和 database
             task = config_session.query(SyncTask).options(
@@ -119,6 +120,7 @@ def run_jdy2db_task_wrapper(task_id: int):
     logger.debug(f"[{thread_name}] Starting Jdy->DB daily full sync...")
 
     with ConfigSession() as config_session:
+        task = None
         try:
             logger.debug(f"[Scheduler] task_id:[{task_id}] jdy2db: Running full sync...")
 

@@ -277,8 +277,8 @@ class FieldMappingService:
                     continue
                 api_widget_names.add(widget_name)
 
-                # 统一计算列名
-                column_name = self.get_column_name(widget, task_config.label_to_pinyin)
+                # # 统一计算列名
+                # column_name = self.get_column_name(widget, task_config.label_to_pinyin)
 
                 # 检查这个字段是否已存在于数据库
                 mapping_to_update = existing_map.get(widget_name)
@@ -690,9 +690,11 @@ class Jdy2DbSyncService:
             if not task_config.is_active:
                 logger.error(f"task_id:[{task_id}]: Task is disabled, thread exiting.")
                 return
-            if task_config.sync_status != 'idle':
+
+            if task_config.sync_status == 'running':
                 logger.error(f"task_id:[{task_id}]: Task is already running, thread exiting.")
                 return
+
             if not (task_config.app_id, task_config.entry_id):
                 logger.error(f"task_id:[{task_id}]: Missing app_id or entry_id, thread exiting.")
                 return
@@ -701,6 +703,8 @@ class Jdy2DbSyncService:
             if not task_config.department or not task_config.department.jdy_key_info:
                 logger.error(
                     f"task_id:[{task_id}]: Task missing department or key info, thread exiting.")
+                task_config.sync_status = 'error'
+                config_session.commit()
                 return
 
             api_key = task_config.department.jdy_key_info.api_key
@@ -711,14 +715,17 @@ class Jdy2DbSyncService:
             )
 
             # 4. 执行全量同步 (self.sync_historical_data)
-            # 此方法会记录自己的成功/失败状态和日志
+            # 设置状态为 running
+            task_config.sync_status = 'running'
+            config_session.commit()
+
             self.sync_historical_data(task_config, data_api_client)
 
             # 5. [关键] 标记首次全量已完成
             # 再次查询最新的 task_config，以防在同步期间被修改
             try:
                 task_to_update = config_session.query(SyncTask).get(task_id)
-                if task_to_update:
+                if task_to_update and task_to_update.sync_status == 'idle':  # 确保是成功状态
                     task_to_update.is_full_replace_first = False
                     config_session.commit()
                     logger.info(
@@ -741,13 +748,29 @@ class Jdy2DbSyncService:
             logger.error(f"task_id:[{task_id}]: Background full sync thread failed: {e}",
                          exc_info=True)
             if config_session:
-                config_session.rollback()
+                try:
+                    config_session.rollback()
+                except Exception:
+                    pass
             # 记录错误 (task_config 可能是 None)
             log_sync_error(
                 task_config=task_config,  # 传递可能已加载的 task_config
                 error=e,
                 extra_info=f"后台首次全量同步失败 (task_id:[{task_id}])"
             )
+            # 确保在线程崩溃时状态被设为 error
+            try:
+                if task_config:  # (如果 task_config 已加载)
+                    task_config.sync_status = 'error'
+                    config_session.commit()
+            except Exception as e_status:
+                logger.error(
+                    f"task_id:[{task_id}]: CRITICAL: Failed to set error status after thread crash: {e_status}")
+                if config_session:
+                    try:
+                        config_session.rollback()
+                    except Exception:
+                        pass
         finally:
             if config_session:
                 config_session.close()
@@ -1652,6 +1675,20 @@ class Jdy2DbSyncService:
 
         # 每次同步都使用新的会话
         config_session = ConfigSession()
+
+        # 在 sync_historical_data 开始时 task_config 是从当前 config_session 加载的
+        try:
+            task_config = config_session.query(SyncTask).options(
+                joinedload(SyncTask.department).joinedload(Department.jdy_key_info),
+                joinedload(SyncTask.database),
+            ).get(task_config.id)
+            if not task_config:
+                logger.error(f"task_id:[{task_config.id}] Task not found in config_session for full sync.")
+                return
+        except Exception as e_fetch:
+            logger.error(f"task_id:[{task_config.id}] Failed to fetch task in config_session: {e_fetch}")
+            config_session.close()
+            return
 
         # --- 11. 动态引擎/会话 ---
         try:
