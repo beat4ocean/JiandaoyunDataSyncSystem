@@ -127,7 +127,7 @@ class Database(ConfigBase):
         # 确保同一个租户下的显示名称是唯一的
         UniqueConstraint('department_id', 'db_show_name', name='uq_dept_db_show_name'),
         # 确保连接信息是唯一的
-        UniqueConstraint('department_id', 'db_type', 'db_host', 'db_port', 'db_name', 'db_user',
+        UniqueConstraint('department_id', 'db_show_name', 'db_type', 'db_host', 'db_port', 'db_name', 'db_user',
                          name='uq_dept_db_connection_info'),
     )
 
