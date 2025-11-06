@@ -1073,7 +1073,7 @@ class Db2JdySyncService:
 
                         # 成功后, 更新状态
                         self._update_task_status(config_session, task,
-                                                 status='running',  # 保持 running, 因为我们要继续启动 binlog
+                                                 status='running',  # 保持 running, 因为要继续启动 binlog
                                                  last_sync_time=datetime.now(TZ_UTC_8),
                                                  is_full_replace_first=False)
                         logger.info(f"[{thread_name}] Initial full sync complete. Proceeding to binlog...")

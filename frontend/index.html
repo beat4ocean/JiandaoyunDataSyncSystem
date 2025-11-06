@@ -1368,7 +1368,7 @@
 
             // 规则: FULL_REPLACE 模式需要指定 全量同步时间
             const validateFullReplaceTime = (rule, value, callback) => {
-                // 注意: 验证器是为 'full_replace_time' 注册的，但我们检查 'full_replace_time_temp'
+                // 注意: 验证器是为 'full_replace_time' 注册的，但检查 'full_replace_time_temp'
                 if (crud.currentItem.sync_mode === 'FULL_REPLACE' && !crud.currentItem.full_replace_time_temp) {
                     callback(new Error('请选择每日同步时间'));
                 } else {
@@ -2108,7 +2108,7 @@
                 if (!force) {
                     try {
                         // 调用 /api/logout (DELETE) 来吊销Token
-                        // auth.py 中没有 /logout 路由，所以我们跳过它
+                        // auth.py 中没有 /logout 路由，所以跳过它
                         // await apiClient.delete('/logout');
                     } catch (error) {
                         console.error("Logout failed, proceeding with client-side cleanup:", error);

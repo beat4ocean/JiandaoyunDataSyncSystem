@@ -503,7 +503,7 @@ class Jdy2DbSyncService:
                     log_sync_error(task_config=task_config, error=e,
                                    extra_info="自动填充 App/Entry ID 失败 (可能唯一约束冲突)")
                     logger.error(f"task_id:[{task_config.id}] Task {task_config.id} auto-fill App/Entry ID failed: {e}")
-                    # 如果填充失败 ，我们无法继续，因为映射依赖 App/Entry ID
+                    # 如果填充失败 ，无法继续，因为映射依赖 App/Entry ID
                     return
             else:
                 logger.error(

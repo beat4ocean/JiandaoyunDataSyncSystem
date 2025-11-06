@@ -69,7 +69,7 @@ def login():
                 "username": user.username,
                 "is_superuser": user.is_superuser,
                 "department_id": user.department_id,
-                # 如果 department_id 是外键，我们可以加载 department_name
+                # 如果 department_id 是外键，可以加载 department_name
                 "department_name": user.department.department_name if user.department else None
             }
 
@@ -168,7 +168,7 @@ def refresh():
         }
 
         # 只创建一个新的 Access Token
-        # 'identity' 已经是我们需要的字符串
+        # 'identity' 已经是需要的字符串
         new_access_token = create_access_token(
             identity=identity,
             additional_claims=additional_claims

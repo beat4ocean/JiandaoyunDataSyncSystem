@@ -175,7 +175,7 @@ def run_jdy2db_task_wrapper(task_id: int):
                 logger.info(f"[Scheduler] task_id:[{task_id}] jdy2db: was set to ONCE. Disabling task.")
                 task.is_active = False  # 禁用任务
                 config_session.commit()
-                # 我们还需要从调度器中移除它
+                # 还需要从调度器中移除它
                 remove_task_from_scheduler(task_id)
 
         except Exception as e:
@@ -630,7 +630,7 @@ def refresh_scheduler(app: Flask):
             # 1. 添加定时任务
             with ConfigSession() as config_session:
 
-                # 1. 删除失效任务，我们需要知道数据库中所有的 task_id，而不仅仅是 active=False 的
+                # 1. 删除失效任务，需要知道数据库中所有的 task_id，而不仅仅是 active=False 的
                 all_db_task_ids = {task.id for task in config_session.query(SyncTask.id).all()}
                 all_scheduler_task_ids = {
                     int(job.id.split('_')[-1]) for job in scheduler.get_jobs()
