@@ -17,7 +17,7 @@ from app.jdy2db_services import Jdy2DbSyncService
 from app.jdy_api import FormApi
 from app.models import (JdyKeyInfo, SyncTask, SyncErrLog, FormFieldMapping, Department, Database, ConfigSession, User)
 from app.scheduler import add_or_update_task_in_scheduler, remove_task_from_scheduler
-from app.utils import test_db_connection, log_sync_error, validate_signature
+from app.utils import log_sync_error, validate_signature, test_db_connection
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

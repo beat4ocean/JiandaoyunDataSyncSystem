@@ -30,7 +30,7 @@ class Department(ConfigBase):
     存储租户信息 (部门即租户)
     这是所有多租户模型的““““根””””
     """
-    __tablename__ = 'Department'
+    __tablename__ = 'department'
     id = Column(Integer, primary_key=True, autoincrement=True, comment="关联的租户部门外部ID")
     # 用于前端展示
     department_name = Column(String(100), nullable=False, unique=True, comment="关联的租户部门全称, e.g., '软件部门'")
@@ -63,7 +63,7 @@ class User(ConfigBase):
     password = Column(String(128), comment="密码")  # 存储密码哈希
 
     # 直接使用外键关联到 Department.id
-    department_id = Column(Integer, ForeignKey('Department.id'), nullable=False, comment="关联的租户ID")
+    department_id = Column(Integer, ForeignKey('department.id'), nullable=False, comment="关联的租户ID")
 
     is_superuser = Column(Boolean, default=False, comment="是否是超级用户")
     is_active = Column(Boolean, default=True, comment="是否激活")
@@ -111,7 +111,7 @@ class Database(ConfigBase):
     is_active = Column(Boolean, default=True, comment="是否激活")
 
     # 直接使用外键关联到 Department.id
-    department_id = Column(Integer, ForeignKey('Department.id'), nullable=False, comment="关联的租户ID")
+    department_id = Column(Integer, ForeignKey('department.id'), nullable=False, comment="关联的租户ID")
 
     created_at = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), comment="创建时间")
     updated_at = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), onupdate=lambda: datetime.now(TZ_UTC_8),
@@ -127,7 +127,7 @@ class Database(ConfigBase):
         # 确保同一个租户下的显示名称是唯一的
         UniqueConstraint('department_id', 'db_show_name', name='uq_dept_db_show_name'),
         # 确保连接信息是唯一的
-        UniqueConstraint('db_type', 'db_host', 'db_port', 'db_name', 'db_user', name='uq_db_connection_info'),
+        UniqueConstraint('department_id', 'db_type', 'db_host', 'db_port', 'db_name', 'db_user', name='uq_dept_db_connection_info'),
     )
 
 
@@ -141,7 +141,7 @@ class JdyKeyInfo(ConfigBase):
     id = Column(Integer, primary_key=True, autoincrement=True)
 
     # 直接使用外键，并添加 unique=True 实现 1:1 关系
-    department_id = Column(Integer, ForeignKey('Department.id'), nullable=False, unique=True, comment="关联的租户ID")
+    department_id = Column(Integer, ForeignKey('department.id'), nullable=False, unique=True, comment="关联的租户ID")
 
     api_key = Column(String(255), nullable=False, comment="该项目专属的 API Key")
     api_secret = Column(String(255), nullable=True, comment="该项目专属的 API Secret")
@@ -183,7 +183,7 @@ class SyncTask(ConfigBase):
     entry_id = Column(String(100), nullable=True, comment="简道云表单ID (jdy2db 模式下可由 webhook 自动填充)")
 
     # 直接使用外键关联到 Department.id
-    department_id = Column(Integer, ForeignKey('Department.id'), nullable=False, comment="关联的租户ID")
+    department_id = Column(Integer, ForeignKey('department.id'), nullable=False, comment="关联的租户ID")
 
     # --- db2jdy (数据库 -> 简道云) 专属配置 ---
     sync_mode = Column(String(50), nullable=True, default='INCREMENTAL',
@@ -297,7 +297,7 @@ class SyncErrLog(ConfigBase):
     table_name = Column(String(255), nullable=True)
 
     # 直接使用外键关联到 Department.id
-    department_id = Column(Integer, ForeignKey('Department.id'), nullable=False, comment="关联的租户ID")
+    department_id = Column(Integer, ForeignKey('department.id'), nullable=False, comment="关联的租户ID")
     department_name = Column(String(255), nullable=False, comment="关联的租户部门英文简称, e.g., 'dpt_a'")
 
     error_message = Column(Text, nullable=False)

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import json
 import logging
 import re
@@ -19,9 +20,10 @@ from sqlalchemy.exc import OperationalError, IntegrityError, NoSuchTableError
 from sqlalchemy.orm import Session, joinedload
 
 from app.config import Config
+from app.database import get_dynamic_engine, get_dynamic_session
 from app.jdy_api import FormApi, DataApi
 from app.models import ConfigSession, SyncTask, FormFieldMapping
-from app.utils import log_sync_error, json_serializer, TZ_UTC_8, retry, get_dynamic_engine, get_dynamic_session
+from app.utils import json_serializer, TZ_UTC_8, retry, log_sync_error
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

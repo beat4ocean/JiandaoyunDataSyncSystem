@@ -12,10 +12,10 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.sql.sqltypes import TypeEngine, Integer, Boolean, Time
 
 from app import Config
+from app.database import get_dynamic_engine, get_dynamic_metadata, get_dynamic_session
 from app.jdy_api import FormApi, DataApi
 from app.models import (SyncTask, FormFieldMapping, ConfigSession, Department)
-from app.utils import (retry, convert_to_pinyin, log_sync_error, TZ_UTC_8, get_dynamic_engine, get_dynamic_session,
-                       get_dynamic_metadata)
+from app.utils import (retry, convert_to_pinyin, log_sync_error, TZ_UTC_8)
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
