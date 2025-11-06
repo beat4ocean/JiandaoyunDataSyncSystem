@@ -107,7 +107,7 @@ class Database(ConfigBase):
     db_name = Column(String(50), nullable=False, comment="数据库名称")
     db_args = Column(String(255), nullable=True, comment="数据库连接参数(e.g. charset=utf8mb4)")
     db_user = Column(String(50), nullable=False, comment="数据库用户名")
-    db_password = Column(String(255), nullable=False, comment="数据库密码") # 增加长度
+    db_password = Column(String(255), nullable=False, comment="数据库密码")  # 增加长度
     is_active = Column(Boolean, default=True, comment="是否激活")
 
     # 直接使用外键关联到 Department.id
@@ -127,7 +127,8 @@ class Database(ConfigBase):
         # 确保同一个租户下的显示名称是唯一的
         UniqueConstraint('department_id', 'db_show_name', name='uq_dept_db_show_name'),
         # 确保连接信息是唯一的
-        UniqueConstraint('department_id', 'db_type', 'db_host', 'db_port', 'db_name', 'db_user', name='uq_dept_db_connection_info'),
+        UniqueConstraint('department_id', 'db_type', 'db_host', 'db_port', 'db_name', 'db_user',
+                         name='uq_dept_db_connection_info'),
     )
 
 
@@ -145,6 +146,8 @@ class JdyKeyInfo(ConfigBase):
 
     api_key = Column(String(255), nullable=False, comment="该项目专属的 API Key")
     api_secret = Column(String(255), nullable=True, comment="该项目专属的 API Secret")
+
+    description = Column(String(255), nullable=True, comment="该项目描述")
 
     created_at = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), comment="创建时间")
     updated_at = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), onupdate=lambda: datetime.now(TZ_UTC_8),

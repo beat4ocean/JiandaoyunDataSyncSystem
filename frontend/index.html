@@ -1056,6 +1056,10 @@
                 <template #default="scope"> {{ scope.row.api_secret ? scope.row.api_secret.substring(0, 10) : '' }}...
                 </template>
               </el-table-column>
+              <el-table-column label="API 描述">
+                <template #default="scope"> {{ scope.row.description ? scope.row.description : '' }}
+                </template>
+              </el-table-column>
               <el-table-column label="操作" width="300" fixed="right">
                 <template #default="scope">
                   <el-button size="small" @click="openDialog(scope.row)" :icon="ElementPlusIcons.Edit">编辑</el-button>
@@ -1081,6 +1085,10 @@
                   <el-input v-model="currentItem.api_secret"
                             placeholder="简道云 API Secret，用于接收简道云数据推送，可置空"></el-input>
                 </el-form-item>
+                <el-form-item label="API 描述" prop="description">
+                  <el-input v-model="currentItem.description"
+                            placeholder="简道云 API 描述"></el-input>
+                </el-form-item>
               </el-form>
               <template #footer>
                 <el-button @click="closeDialog">取消</el-button>
@@ -1091,13 +1099,14 @@
         `,
         props: ['isSuperuser'],
         setup(props) {
-            const defaultItem = {department_id: null, api_key: '', api_secret: ''};
+            const defaultItem = {department_id: null, api_key: '', api_secret: '', description: ''};
             const crud = useCrud('/jdy-keys', '密钥', defaultItem, 'id');
             const departments = ref([]);
             const keyRules = computed(() => ({
                 department_id: [{required: props.isSuperuser, message: '请选择部门', trigger: 'change'}],
                 api_key: [{required: true, message: '请输入 API Key', trigger: 'blur'}],
                 api_secret: [{required: false, message: '请输入 API Secret', trigger: 'blur'}],
+                description: [{required: false, message: '请添加 API描述', trigger: 'blur'}],
             }));
             const fetchDepartments = async () => {
                 if (props.isSuperuser) {

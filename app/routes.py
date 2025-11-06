@@ -336,7 +336,8 @@ def add_jdy_key():
         new_key = JdyKeyInfo(
             department_id=department_id,
             api_key=data.get('api_key'),
-            api_secret=data.get('api_secret')
+            api_secret=data.get('api_secret'),
+            description=data.get('description'),
         )
         session.add(new_key)
         session.commit()
@@ -373,6 +374,7 @@ def update_jdy_key(key_id):
 
         key_to_update.api_key = data.get('api_key', key_to_update.api_key)
         key_to_update.api_secret = data.get('api_secret', key_to_update.api_secret)
+        key_to_update.description = data.get('description', key_to_update.description)
 
         session.commit()
 
