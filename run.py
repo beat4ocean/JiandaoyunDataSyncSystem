@@ -1,4 +1,5 @@
 import atexit
+import logging
 import os
 import sys
 import traceback
@@ -11,6 +12,10 @@ from sqlalchemy.exc import OperationalError
 from waitress import serve
 
 from app.config import DB_CONNECT_ARGS, Config
+
+# 配置日志
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # 确保 app 目录在 sys.path 中
 sys.path.append(os.path.join(os.path.dirname(__file__), 'app'))
@@ -25,8 +30,8 @@ try:
     from app.scheduler import scheduler, start_scheduler, refresh_scheduler
     from app.utils import log_sync_error, TZ_UTC_8
 except ImportError as e:
-    print(f"启动失败：无法导入应用模块。请确保 app 目录和所有文件都存在。 {e}")
-    print(traceback.format_exc())
+    logger.info(f"启动失败：无法导入应用模块。请确保 app 目录和所有文件都存在。 {e}")
+    logger.info(traceback.format_exc())
     sys.exit(1)
 
 
@@ -37,7 +42,7 @@ def initialize_databases(app: Flask):
     2. 在 config 数据库中创建所有表。
     """
     with app.app_context():  # 进入Flask应用上下文
-        print("Initializing databases...")
+        logger.info("Initializing databases...")
 
         # 1. 创建一个"根"连接（不指定数据库名称），用于创建数据库
         try:
@@ -47,52 +52,52 @@ def initialize_databases(app: Flask):
 
             with admin_engine.connect() as connection:
                 # 检查并创建配置数据库
-                print(f"Checking/Creating config database: {Config.CONFIG_DB_NAME}")
+                logger.info(f"Checking/Creating config database: {Config.CONFIG_DB_NAME}")
                 connection.execute(text(
                     f"CREATE DATABASE IF NOT EXISTS `{Config.CONFIG_DB_NAME}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
                 ))
                 # # 检查并创建源数据库
-                # print(f"Checking/Creating source database: {SOURCE_DB_NAME}")
+                # logger.info(f"Checking/Creating source database: {SOURCE_DB_NAME}")
                 # connection.execute(text(
                 #     f"CREATE DATABASE IF NOT EXISTS `{SOURCE_DB_NAME}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
                 # ))
             admin_engine.dispose()
-            print("Config Database existence check complete.")
+            logger.info("Config Database existence check complete.")
 
         except OperationalError as e:
             if "Access denied" in str(e):
-                print(
+                logger.error(
                     f"CRITICAL: Failed to connect to MySQL server. Check credentials for user '{Config.CONFIG_DB_USER}'. Error: {e}")
             else:
-                print(f"CRITICAL: Failed to connect to MySQL server or create databases: {e}")
-            print("Please check MySQL connection settings in .env and user permissions (CREATE DATABASE).")
+                logger.error(f"CRITICAL: Failed to connect to MySQL server or create databases: {e}")
+            logger.warning("Please check MySQL connection settings in .env and user permissions (CREATE DATABASE).")
             raise
         except Exception as e:
-            print(f"CRITICAL: An unexpected error occurred while creating databases: {e}")
+            logger.error(f"CRITICAL: An unexpected error occurred while creating databases: {e}")
             raise
 
         # 2. 在 *配置* 数据库中创建所有表
         try:
             config_metadata.create_all(config_engine)
-            print("Config database tables checked/created.")
+            logger.info("Config database tables checked/created.")
         except Exception as e:
-            print(f"CRITICAL: Failed to create config database tables: {e}")
+            logger.error(f"CRITICAL: Failed to create config database tables: {e}")
             raise
 
         # # 3. 在 *源* 数据库中创建表
         # try:
         #     source_metadata.create_all(source_engine)
-        #     print("Source database tables checked/created (if any were defined).")
+        #     logger.info("Source database tables checked/created (if any were defined).")
         # except Exception as e:
-        #     print(f"WARNING: Failed to check/create source database tables: {e}")
+        #     logger.error(f"WARNING: Failed to check/create source database tables: {e}")
         #     pass
 
-        print("Database initialization complete.")
+        logger.info("Database initialization complete.")
 
 
 def create_first_admin():
     """创建第一个管理员和默认部门"""
-    print("Creating default department and admin user...")
+    logger.info("Creating default department and admin user...")
     session = ConfigSession()
     try:
         # 1. 检查/创建默认部门
@@ -104,9 +109,9 @@ def create_first_admin():
             )
             session.add(default_dept)
             session.commit()
-            print(f"Created default department (ID: {default_dept.id}).")
+            logger.info(f"Created default department (ID: {default_dept.id}).")
         else:
-            print("Default department already exists.")
+            logger.info("Default department already exists.")
 
         # 2. 检查/创建管理员
         admin_user = session.query(User).filter_by(is_superuser=True, is_active=True).first()
@@ -122,23 +127,23 @@ def create_first_admin():
             new_admin.set_password(admin_password)
             session.add(new_admin)
             session.commit()
-            # print(f"Created admin user '{admin_username}' with password '{admin_password}'.")
+            # logger.info(f"Created admin user '{admin_username}' with password '{admin_password}'.")
         # else:
-        #     print("Admin user already exists.")
+        #     logger.info("Admin user already exists.")
 
     except Exception as e:
         session.rollback()
-        print(f"Error creating admin: {e}")
+        logger.error(f"Error creating admin: {e}")
     finally:
         session.close()
 
 
 def shutdown_scheduler():
     """在应用退出时关闭调度器"""
-    print("Shutting down scheduler...")
+    logger.info("Shutting down scheduler...")
     if scheduler.running:
         scheduler.shutdown()
-    print("Scheduler shut down.")
+    logger.info("Scheduler shut down.")
 
 
 # --- 应用启动入口 ---
@@ -174,22 +179,22 @@ if __name__ == "__main__":
             next_run_time=datetime.now(TZ_UTC_8) + timedelta(seconds=15)
         )
 
-        print(f"Task refresher job added to main scheduler, runs every {Config.CHECK_INTERVAL_MINUTES} minutes.")
+        logger.info(f"Task refresher job added to main scheduler, runs every {Config.CHECK_INTERVAL_MINUTES} minutes.")
 
     except Exception as e:
-        print(f"启动调度器失败: {e}")
+        logger.error(f"Failed to add task refresher job to main scheduler: {e}")
         log_sync_error(error=e, extra_info="Failed to start APScheduler")
         sys.exit(1)
 
     # 6. 启动 Flask Web 服务器 (使用 Waitress)
-    print(f"Starting Flask web server with Waitress on http://0.0.0.0:{Config.PORT}...")
+    logger.info(f"Starting Flask web server with Waitress on http://0.0.0.0:{Config.PORT}...")
     try:
         # 使用 Config 中的端口
         serve(app, host='0.0.0.0', port=Config.PORT, threads=4)
     except (KeyboardInterrupt, SystemExit):
-        print("Flask server received shutdown signal.")
+        logger.warning("Flask server received shutdown signal.")
     finally:
         # 确保调度器在 Ctrl+C 时也能关闭
         if scheduler.running:
             scheduler.shutdown()
-        print("Application exiting.")
+        logger.warning("Application exiting.")
