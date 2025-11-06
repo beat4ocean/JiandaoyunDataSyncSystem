@@ -1505,7 +1505,7 @@
                   <el-tag type="success">{{ scope.row.db_show_name || 'N/A' }}</el-tag>
                 </template>
               </el-table-column>
-              <el-table-column prop="table_name" label="目标表名" sortable></el-table-column>
+              <el-table-column prop="table_name" label="目标表名 (自动)" sortable></el-table-column>
               <el-table-column prop="app_id" label="App ID (自动)" width="150"></el-table-column>
               <el-table-column prop="entry_id" label="Entry ID (自动)" width="150"></el-table-column>
               <el-table-column prop="daily_sync_type" label="全量同步" width="120">
@@ -1520,7 +1520,7 @@
                   </el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="操作" width="300" fixed="right">
+              <el-table-column label="操作" width="200" fixed="right">
                 <template #default="scope">
                   <el-button size="small" @click="openDialog(scope.row)" :icon="ElementPlusIcons.Edit">编辑</el-button>
                   <el-button size="small" type="danger" @click="deleteItem(scope.row.id)"
@@ -1536,14 +1536,14 @@
 
                 <input type="hidden" v-model="currentItem.sync_type"/>
 
-                <el-form-item label="Webhook URL (保存后生成，复制到简道云)" v-if="isEdit && currentItem.webhook_url">
+                <el-form-item label="Webhook URL (保存后生成)" v-if="isEdit && currentItem.webhook_url">
+                  <div class="form-item-note">将此 URL 粘贴到简道云对应表单的「数据推送」设置中。</div>
                   <el-input v-model="currentItem.webhook_url" readonly>
                     <template #append>
                       <el-button @click="copyWebhookUrl(currentItem.webhook_url)"
                                  :icon="ElementPlusIcons.DocumentCopy"></el-button>
                     </template>
                   </el-input>
-                  <div class="form-item-note">将此 URL 粘贴到简道云对应表单的「数据推送」设置中。</div>
                 </el-form-item>
 
                 <el-row :gutter="20">
@@ -1579,18 +1579,20 @@
                   </el-col>
                 </el-row>
 
-                <el-form-item label="简道云 App ID / Entry ID (选填)">
-                  <div class="form-item-note">通常无需填写。在首次收到 Webhook 数据时，系统将自动回填。</div>
-                  <el-row :gutter="20">
-                    <el-col :span="12">
+                <el-row :gutter="20">
+                  <el-col :span="12">
+                    <el-form-item label="简道云 App ID" prop="app_id">
+                      <div class="form-item-note">可不填，在首次收到 Webhook 数据时系统自动填充</div>
                       <el-input v-model="currentItem.app_id" placeholder="App ID (自动填充)"></el-input>
-                    </el-col>
-                    <el-col :span="12">
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="12">
+                    <el-form-item label="简道云 Entry ID" prop="entry_id">
+                      <div class="form-item-note">可不填，在首次收到 Webhook 数据时系统自动填充</div>
                       <el-input v-model="currentItem.entry_id" placeholder="Entry ID (自动填充)"></el-input>
-                    </el-col>
-                  </el-row>
-                </el-form-item>
-
+                    </el-form-item>
+                  </el-col>
+                </el-row>
 
                 <el-divider>表结构配置</el-divider>
 
@@ -1609,19 +1611,17 @@
 
                 <el-row :gutter="20">
                   <el-col :span="12">
-                    <el-form-item label="列名使用拼音">
+                    <el-form-item label="列名转换拼音">
                       <el-switch v-model="currentItem.label_to_pinyin"></el-switch>
-                      <div class="form-item-note">开启后，将使用字段的"标题"转为拼音作为列名 (e.g., "金额" ->
-                        "jin_e")。
-                      </div>
+                      <div class="form-item-note">开启后，将使用字段的"标题"转为拼音</div>
                       <div class="form-item-note">关闭后，将优先使用字段的"别名"</div>
                     </el-form-item>
                   </el-col>
                   <el-col :span="12">
                     <el-form-item label="JSON/数组 存为字符串">
                       <el-switch v-model="currentItem.json_as_string"></el-switch>
-                      <div class="form-item-note">开启后，子表单、附件、地址等字段将存为 JSON 字符串 (TEXT)。</div>
-                      <div class="form-item-note">关闭后，将尝试存为数据库的 JSON 类型 (若支持)。</div>
+                      <div class="form-item-note">开启后，JSON 将自动转换为 TEXT</div>
+                      <div class="form-item-note">关闭后，将尝试存为数据库的 JSON 类型 (若支持)</div>
                     </el-form-item>
                   </el-col>
                 </el-row>
@@ -1715,7 +1715,7 @@
                 task_name: [{required: true, message: '请输入任务名称', trigger: 'blur'}],
                 department_id: [{required: props.isSuperuser, message: '请选择所属部门', trigger: 'change'}],
                 database_id: [{required: true, message: '请选择目标数据库', trigger: 'change'}],
-                table_name: [{required: true, message: '请输入目标表名', trigger: 'blur'}],
+                table_name: [{required: false, message: '请输入目标表名', trigger: 'blur'}],
                 daily_sync_time: [{validator: validateDailyTime, trigger: 'change'}],
             }));
 
