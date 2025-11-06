@@ -13,7 +13,7 @@ from datetime import time as time_obj
 from decimal import Decimal
 from functools import wraps
 from typing import Dict, Any, Generator
-from urllib.parse import quote_plus, urlunparse
+from urllib.parse import quote_plus
 
 import requests
 from pypinyin import pinyin, Style
@@ -24,13 +24,10 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
 from app.config import DB_CONNECT_ARGS
-from app.models import (ConfigSession, Database)
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-from app.models import SyncTask
 
 TZ_UTC_8 = timezone(timedelta(hours=8))
 
@@ -361,14 +358,15 @@ def get_db_driver(db_type: str) -> str:
 
 # --- 获取动态引擎 ---
 @contextmanager
-def get_dynamic_session(task: SyncTask) -> Generator[Any, Any, None]:
+def get_dynamic_session(task: 'SyncTask') -> Generator[Any, Any, None]:
     """
     一个上下文管理器，用于根据任务动态获取源数据库会话。
     它会缓存引擎以提高性能。
     """
+    # 修复循环依赖问题
+    from app.models import ConfigSession, Database
+
     if not task.database:
-        # 在加载任务时应使用 joinedload('database')
-        # 如果没有，我们必须在 ConfigSession 中手动加载它
         with ConfigSession() as config_session:
             db_info = config_session.query(Database).get(task.database_id)
             if not db_info:
@@ -415,7 +413,7 @@ def get_dynamic_session(task: SyncTask) -> Generator[Any, Any, None]:
         session.close()
 
 
-def get_dynamic_engine(task: SyncTask):
+def get_dynamic_engine(task: 'SyncTask'):
     """获取动态引擎（主要用于 inspect）"""
     # 确保引擎在缓存中
     with get_dynamic_session(task):
