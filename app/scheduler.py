@@ -47,7 +47,7 @@ def run_db2jdy_task_wrapper(task_id: int):
             task = config_session.query(SyncTask).options(
                 joinedload(SyncTask.department).joinedload(Department.jdy_key_info),
                 joinedload(SyncTask.database)
-            ).filter(SyncTask.sync_type == 'db2jdy').get(task_id)
+            ).filter(SyncTask.sync_type == 'db2jdy', SyncTask.id == task_id).first()
 
             # 1. 检查任务是否有效
             if not task:
@@ -122,7 +122,7 @@ def run_jdy2db_task_wrapper(task_id: int):
             task = config_session.query(SyncTask).options(
                 joinedload(SyncTask.department).joinedload(Department.jdy_key_info),
                 joinedload(SyncTask.database)
-            ).filter(SyncTask.sync_type == 'jdy2db').get(task_id)
+            ).filter(SyncTask.sync_type == 'jdy2db', SyncTask.id == task_id).first()
 
             # 1. 检查任务是否有效
             if not task:
@@ -206,7 +206,7 @@ def run_binlog_listener_in_thread(task_id: int):
             task = session.query(SyncTask).options(
                 joinedload(SyncTask.department).joinedload(Department.jdy_key_info),  # 预加载 Key
                 joinedload(SyncTask.database)
-            ).filter(SyncTask.sync_type == 'db2jdy').get(task_id)
+            ).filter(SyncTask.sync_type == 'db2jdy', SyncTask.id == task_id)
 
             if not task:
                 logger.info(f"[BinlogListener-{task_id}] Task not found. Exiting thread.")
@@ -391,7 +391,7 @@ def remove_task_from_scheduler(task_id: int):
         logger.info(f"[{job_id}] Removed job from scheduler.")
     except JobLookupError:
         # 作业不存在，这没问题
-        logger.debug(f"[{job_id}] Job not found in scheduler, nothing to remove.") # 减少噪音
+        logger.debug(f"[{job_id}] Job not found in scheduler, nothing to remove.")  # 减少噪音
         pass
     except Exception as e:
         # 记录其他潜在错误
