@@ -239,10 +239,12 @@ class FieldMappingService:
         task_id = task_config.id  # (新增) 使用 task_id
 
         if not all([app_id, entry_id]):
-            logger.error(f"任务 {task_id} 缺少 App ID 或 Entry ID，无法同步字段映射。")
+            logger.error(
+                f"task_id:[{task_id}] Task {task_id} is missing App ID or Entry ID, cannot sync field mappings.")
             return
 
-        logger.info(f"接收 {app_id}/{entry_id} (Task {task_id}) 数据，正在同步字段映射...")
+        logger.info(
+            f"task_id:[{task_id}] Received data for {app_id}/{entry_id} (Task {task_id}), syncing field mappings...")
 
         try:
             # 1. 从 API 获取最新的“目标”字段列表
@@ -250,7 +252,8 @@ class FieldMappingService:
             api_widgets = resp.get('widgets', [])
 
             if not api_widgets:
-                logger.warning(f"警告: API 未返回 任务 {task_id} 的任何字段信息，跳过不予处理。")
+                logger.warning(
+                    f"task_id:[{task_id}] Warning: API returned no field information for Task {task_id}, skipping.")
                 # 根据需求，这里可以决定是否要删除所有现有映射
                 # config_session.query(FormFieldMapping).filter_by(app_id=app_id, entry_id=entry_id).delete()
                 # config_session.commit()
@@ -270,7 +273,7 @@ class FieldMappingService:
             for widget in api_widgets:
                 widget_name = widget.get('widgetName')
                 if not widget_name:
-                    logger.warning(f"API 返回的 widget 缺少 widgetName: {widget}")
+                    logger.warning(f"task_id:[{task_id}] Widget returned from API is missing widgetName: {widget}")
                     continue
                 api_widget_names.add(widget_name)
 
@@ -314,23 +317,25 @@ class FieldMappingService:
             # 6. 提交所有变更
             if mappings_to_add:
                 config_session.add_all(mappings_to_add)
-                logger.info(f"为 Task {task_id} 添加 {len(mappings_to_add)} 个新字段映射。")
+                logger.info(f"task_id:[{task_id}] Adding {len(mappings_to_add)} new field mappings for Task {task_id}.")
             if mappings_to_delete:
-                logger.info(f"为 Task {task_id} 检测到 {len(mappings_to_delete)} 个已删除字段，将从映射中移除。")
+                logger.info(
+                    f"task_id:[{task_id}] Detected {len(mappings_to_delete)} deleted fields for Task {task_id}, removing from mapping.")
                 for m in mappings_to_delete:
                     config_session.delete(m)
 
             # 只有在有实际变更时才 commit
             if config_session.new or config_session.dirty or config_session.deleted:
                 config_session.commit()
-                logger.info(f"字段映射同步完成 for Task {task_id}.")
+                logger.info(f"task_id:[{task_id}] Field mapping sync complete for Task {task_id}.")
             else:
-                logger.info(f"字段映射无需更新 for Task {task_id}.")
+                logger.info(f"task_id:[{task_id}] Field mappings are up-to-date for Task {task_id}.")
 
 
         except SQLAlchemyError as db_err:
             config_session.rollback()
-            logger.error(f"同步字段映射时发生数据库错误 for Task {task_id}: {db_err}", exc_info=True)
+            logger.error(f"task_id:[{task_id}] Database error during field mapping sync for Task {task_id}: {db_err}",
+                         exc_info=True)
             log_sync_error(
                 task_config=task_config,
                 error=db_err,
@@ -338,7 +343,8 @@ class FieldMappingService:
             )
         except Exception as e:
             config_session.rollback()
-            logger.error(f"拉取或更新字段映射失败 for Task {task_id}: {e}", exc_info=True)
+            logger.error(f"task_id:[{task_id}] Failed to fetch or update field mappings for Task {task_id}: {e}",
+                         exc_info=True)
             log_sync_error(
                 task_config=task_config,
                 error=e,
@@ -378,7 +384,7 @@ class Jdy2DbSyncService:
         form_name = data.get('name') or data.get('formName')
 
         if not data:
-            logger.warning("Webhook 负载中没有数据，已忽略。")
+            logger.warning("No data in webhook payload, ignored.")
             return
 
         # --- 3. 获取动态引擎和元数据 ---
@@ -386,7 +392,7 @@ class Jdy2DbSyncService:
             if not task_config.database:
                 task_config = config_session.query(SyncTask).options(joinedload(SyncTask.database)).get(task_config.id)
                 if not task_config.database:
-                    raise ValueError(f"任务 {task_config.id} 缺少关联的数据库配置。")
+                    raise ValueError(f"task_id:[{task_config.id}] Missing associated database configuration!")
 
             dynamic_engine = get_dynamic_engine(task_config)
             dynamic_metadata = get_dynamic_metadata(dynamic_engine)
@@ -403,7 +409,8 @@ class Jdy2DbSyncService:
                 payload=payload,
                 extra_info="无法初始化动态数据库引擎"
             )
-            logger.error(f"错误: 无法为任务 {task_config.id} 初始化动态数据库引擎: {e}")
+            logger.error(
+                f"task_id:[{task_config.id}] Error: Failed to initialize dynamic database engine for task {task_config.id}: {e}")
             return
 
         app_id = task_config.app_id
@@ -416,17 +423,18 @@ class Jdy2DbSyncService:
         # 优先级 1: table_param (URL参数)
         if table_param and table_param.strip():
             table_name = table_param.strip()
-            logger.info(f"使用 ?table= 参数指定的动态表名: {table_name}")
+            logger.info(f"task_id:[{task_config.id}] Using dynamic table name from ?table= parameter: {table_name}")
             # 检查是否需要更新配置库中的表名
             if task_config.table_name != table_name:
-                logger.info(f"任务 {task_config.id} 的 table_name 将从 '{task_config.table_name}' 更新为: {table_name}")
+                logger.info(
+                    f"task_id:[{task_config.id}] Task {task_config.id} table_name will be updated from '{task_config.table_name}' to: {table_name}")
                 task_config.table_name = table_name
                 update_task_config_flag = True
 
         # 优先级 2: task_config.table_name (数据库配置)
         elif task_config.table_name and task_config.table_name.strip():
             table_name = task_config.table_name.strip()
-            logger.info(f"使用动态任务配置指定的表名: {table_name}")
+            logger.info(f"task_id:[{task_config.id}] Using table name from dynamic task config: {table_name}")
 
         # 优先级 3: (表单名转换)
         else:
@@ -437,16 +445,16 @@ class Jdy2DbSyncService:
                     payload=payload,
                     extra_info="table_param 和 task_config.table_name 均为空，且无法从 payload 中提取 form_name。"
                 )
-                logger.error(f"错误: 无法确定 {app_id}/{entry_id} 的表名。")
+                logger.error(f"task_id:[{task_config.id}] Error: Cannot determine table name for {app_id}/{entry_id}.")
                 return
 
             # 使用表单转拼音
             table_name = convert_to_pinyin(form_name)
-            logger.info(f"使用表单转拼音表名: {table_name}")
+            logger.info(f"task_id:[{task_config.id}] Using table name from form name pinyin: {table_name}")
 
             # 如果配置中没有表名，则将新生成的拼音表名存入
             if task_config.table_name != table_name:
-                logger.info(f"任务 {task_config.id} 的 table_name 将设置为: {table_name}")
+                logger.info(f"task_id:[{task_config.id}] Task {task_config.id} table_name will be set to: {table_name}")
                 task_config.table_name = table_name
                 update_task_config_flag = True
 
@@ -454,7 +462,7 @@ class Jdy2DbSyncService:
         if update_task_config_flag:
             try:
                 config_session.commit()
-                logger.info(f"任务 {task_config.id} 的 table_name 已成功更新。")
+                logger.info(f"task_id:[{task_config.id}] Task {task_config.id} table_name updated successfully.")
             except SQLAlchemyError as e:  # 使用更具体的异常
                 config_session.rollback()
                 log_sync_error(
@@ -462,7 +470,8 @@ class Jdy2DbSyncService:
                     error=e,
                     extra_info=f"更新 table_name 失败: {table_name}"
                 )
-                logger.error(f"错误: 更新任务 {task_config.id} 的 table_name 失败: {e}")
+                logger.error(
+                    f"task_id:[{task_config.id}] Error: Failed to update table_name for task {task_config.id}: {e}")
                 # 即使更新失败，也继续处理当前 webhook，使用已确定的 table_name
 
         # --- 4. 自动保存 App ID 和 Entry ID ---
@@ -480,22 +489,25 @@ class Jdy2DbSyncService:
 
             if all([get_app_id, get_entry_id]):
                 try:
-                    logger.info(f"任务 {task_config.id} 缺少 App/Entry ID，正在从 Webhook 自动填充...")
+                    logger.info(
+                        f"task_id:[{task_config.id}] Task {task_config.id} missing App/Entry ID, auto-filling from Webhook...")
                     task_config.app_id = get_app_id
                     task_config.entry_id = get_entry_id
                     config_session.commit()
                     app_id = get_app_id
                     entry_id = get_entry_id
-                    logger.info(f"任务 {task_config.id} 已更新 App ID={app_id}, Entry ID={entry_id}")
+                    logger.info(
+                        f"task_id:[{task_config.id}] Task {task_config.id} updated with App ID={app_id}, Entry ID={entry_id}")
                 except SQLAlchemyError as e:
                     config_session.rollback()
                     log_sync_error(task_config=task_config, error=e,
                                    extra_info="自动填充 App/Entry ID 失败 (可能唯一约束冲突)")
-                    logger.error(f"任务 {task_config.id} 自动填充 App/Entry ID 失败: {e}")
+                    logger.error(f"task_id:[{task_config.id}] Task {task_config.id} auto-fill App/Entry ID failed: {e}")
                     # 如果填充失败 ，我们无法继续，因为映射依赖 App/Entry ID
                     return
             else:
-                logger.error(f"任务 {task_config.id} 缺少 App/Entry ID，且无法从 Webhook 负载中提取。")
+                logger.error(
+                    f"task_id:[{task_config.id}] Task {task_config.id} missing App/Entry ID and cannot be extracted from Webhook payload.")
                 return  # 无法继续
 
         # --- 检查是否需要启动后台全量同步 ---
@@ -504,26 +516,30 @@ class Jdy2DbSyncService:
 
             if table is None or task_config.is_full_replace_first:
                 logger.info(
-                    f"任务 {task_config.id}: 触发首次全量同步 (is_full_replace_first={task_config.is_full_replace_first}, table_exists={table is not None})")
+                    f"task_id:[{task_config.id}] Task {task_config.id}: Triggering initial full sync (is_full_replace_first={task_config.is_full_replace_first}, table_exists={table is not None})")
 
                 # 1. (同步) 确保表结构存在
                 if table is None:
                     try:
-                        logger.info(f"表 {table_name} 不存在，将根据 API Schema 创建...")
+                        logger.info(
+                            f"task_id:[{task_config.id}] Table {table_name} does not exist, creating from API Schema...")
                         # 调用 API 获取真实 schema，而不是传递 data 负载
                         form_widgets = api_client.get_form_widgets(app_id, entry_id)
                         # 组装为特定的 form_schema
                         form_schema_data = {'widgets': form_widgets, 'name': form_name}
                         table = self.get_or_create_table_from_schema(table_name, form_schema_data, task_config,
                                                                      dynamic_engine, dynamic_metadata)
-                        logger.info(f"表 {table_name} 已同步创建。")
+                        logger.info(f"task_id:[{task_config.id}] Table {table_name} created successfully.")
                     except Exception as schema_err:
-                        logger.error(f"任务 {task_config.id}: 同步创建表结构失败: {schema_err}", exc_info=True)
+                        logger.error(
+                            f"task_id:[{task_config.id}] Task {task_config.id}: Failed to create table structure synchronously: {schema_err}",
+                            exc_info=True)
                         log_sync_error(task_config, schema_err, payload, "首次同步-创建表结构失败")
                         return  # 创建表失败，无法继续
 
                 # 2. (异步) 启动后台全量同步
-                logger.info(f"[Task {task_config.id}]: 启动后台全量数据拉取...")
+                logger.info(
+                    f"task_id:[{task_config.id}] [Task {task_config.id}]: Starting background full data sync...")
                 thread = threading.Thread(
                     target=self._run_initial_full_sync,
                     args=(task_config.id,)  # 仅传递 task_id
@@ -533,14 +549,16 @@ class Jdy2DbSyncService:
 
                 # 3. (同步) 立即返回
                 # 全量同步已启动，将包含当前数据，故跳过当前 webhook 的单独处理。
-                logger.info(f"任务 {task_config.id}: 首次全量同步后台任务已启动，跳过当前 webhook (op={op}) 的单独处理。")
+                logger.info(
+                    f"task_id:[{task_config.id}] Task {task_config.id}: Initial full sync background task started, skipping current webhook (op={op}) processing.")
                 return
 
         # --- 3. 根据操作类型处理 ---
         try:
             # 3.1 form_update 单独处理
             if op == 'form_update':
-                logger.info(f"处理 form_update 事件 for {table_name} ({app_id}/{entry_id})")
+                logger.info(
+                    f"task_id:[{task_config.id}] Processing form_update event for {table_name} ({app_id}/{entry_id})")
                 # 立即同步映射表
                 self.mapping_service.create_or_update_form_fields_mapping(config_session, task_config, api_client,
                                                                           form_name)
@@ -558,26 +576,28 @@ class Jdy2DbSyncService:
 
             # 3.2 其他数据操作
             elif op in ('data_create', 'data_update', 'data_recover', 'data_remove'):
-                logger.info(f"处理 {op} 事件 for {table_name} ({app_id}/{entry_id})")
+                logger.info(f"task_id:[{task_config.id}] Processing {op} event for {table_name} ({app_id}/{entry_id})")
                 # 确保映射存在 (如果不存在则创建)
                 exists = config_session.query(FormFieldMapping).filter_by(
                     task_id=task_config.id
                 ).first()
                 if not exists:
-                    logger.info(f"映射不存在，为 {app_id}/{entry_id} (Task {task_config.id}) 创建...")
+                    logger.info(
+                        f"task_id:[{task_config.id}] Mapping does not exist, creating for {app_id}/{entry_id} (Task {task_config.id})...")
                     self.mapping_service.create_or_update_form_fields_mapping(config_session, task_config,
                                                                               api_client, form_name)
 
                 # 获取或创建表
                 table = self.get_table_if_exists(table_name, dynamic_engine)
                 if table is None and op != 'data_remove':  # 只有在需要写入数据时才创建表
-                    logger.info(f"表 {table_name} 不存在，根据数据创建...")
+                    logger.info(f"task_id:[{task_config.id}] Table {table_name} does not exist, creating from data...")
                     table = self.get_or_create_table_from_data(table_name, [data], task_config, dynamic_engine,
                                                                dynamic_metadata)
 
                 # 如果是 data_remove 且表不存在，则无需操作
                 if table is None and op == 'data_remove':
-                    logger.warning(f"警告: 收到删除操作，但表 '{table_name}' 不存在。跳过...")
+                    logger.warning(
+                        f"task_id:[{task_config.id}] Warning: Received data_remove operation, but table '{table_name}' does not exist. Skipping...")
                     return
 
                 # --- 动态会话 DML ---
@@ -596,41 +616,48 @@ class Jdy2DbSyncService:
                         target_session.commit()  # 提交 DML
 
                     except SQLAlchemyError as db_err:  # 捕获 DML 错误
-                        logger.error(f"处理 DML (op={op}) 时发生数据库错误: {db_err}", exc_info=True)
+                        logger.error(
+                            f"task_id:[{task_config.id}] Database error during DML processing (op={op}): {db_err}",
+                            exc_info=True)
                         try:
                             target_session.rollback()
                         except Exception as rb_err:
-                            logger.error(f"回滚 target_session 时出错: {rb_err}")
+                            logger.error(f"task_id:[{task_config.id}] Error during target_session rollback: {rb_err}")
                         # 在会话回滚后记录错误
                         log_sync_error(task_config=task_config, error=db_err, payload=payload,
                                        extra_info=f"Database error during DML (op={op}) processing")
                     except Exception as e:  # 捕获 DML 期间的其他错误
-                        logger.error(f"处理 DML (op={op}) 时发生意外错误: {e}", exc_info=True)
+                        logger.error(
+                            f"task_id:[{task_config.id}] Unexpected error during DML processing (op={op}): {e}",
+                            exc_info=True)
                         try:
                             target_session.rollback()
                         except Exception as rb_err:
-                            logger.error(f"回滚 target_session 时出错: {rb_err}")
+                            logger.error(f"task_id:[{task_config.id}] Error during target_session rollback: {rb_err}")
                         log_sync_error(task_config=task_config, error=e, payload=payload,
                                        extra_info=f"Unexpected error during DML (op={op}) processing")
 
             else:
-                logger.warning(f"接收到未处理的操作类型: {op}")
+                logger.warning(f"task_id:[{task_config.id}] Received unhandled operation type: {op}")
                 return  # 对于未处理的操作，直接返回
 
             # 仅当操作涉及 target_session 时才提交
             if op in ('data_create', 'data_update', 'data_recover', 'data_remove'):
-                logger.info(f"Webhook 数据处理成功: op={op}, table={table_name}")
+                logger.info(
+                    f"task_id:[{task_config.id}] Webhook data processed successfully: op={op}, table={table_name}")
             elif op == 'form_update':
-                logger.info(f"Webhook 表单结构更新处理成功: table={table_name}")
+                logger.info(
+                    f"task_id:[{task_config.id}] Webhook form structure update processed successfully: table={table_name}")
 
         except SQLAlchemyError as db_err:  # 捕获 DDL 或 映射 相关的错误
-            logger.error(f"处理 webhook (DDL/Mapping) 时发生数据库错误: {db_err}", exc_info=True)
+            logger.error(f"task_id:[{task_config.id}] Database error during webhook processing (DDL/Mapping): {db_err}",
+                         exc_info=True)
             # config_session 的回滚由 routes.py 处理
             log_sync_error(task_config=task_config, error=db_err, payload=payload,
                            extra_info="Database error during webhook DDL/Mapping processing")
 
         except Exception as e:  # 捕获其他所有意外错误
-            logger.error(f"处理 webhook 时发生意外错误: {e}", exc_info=True)
+            logger.error(f"task_id:[{task_config.id}] Unexpected error during webhook processing: {e}", exc_info=True)
             # config_session 的回滚由 routes.py 处理
             log_sync_error(task_config=task_config, error=e, payload=payload,
                            extra_info="Unexpected error during webhook processing")
@@ -643,7 +670,7 @@ class Jdy2DbSyncService:
         在后台线程中执行首次全量同步。
         此方法必须是完全独立的，并创建自己的数据库会话。
         """
-        logger.info(f"[Task {task_id} BG]: 后台首次全量同步线程启动...")
+        logger.info(f"task_id:[{task_id}] [Task {task_id} BG]: Background initial full sync thread started...")
 
         # 1. 创建此线程专用的 ConfigSession
         config_session = ConfigSession()
@@ -657,21 +684,23 @@ class Jdy2DbSyncService:
             ).get(task_id)
 
             if not task_config:
-                logger.error(f"[Task {task_id} BG]: 在后台线程中找不到任务，线程退出。")
+                logger.error(
+                    f"task_id:[{task_id}] [Task {task_id} BG]: Task not found in background thread, thread exiting.")
                 return
             if not task_config.is_active:
-                logger.error(f"[Task {task_id} BG]: 任务已禁用，线程退出。")
+                logger.error(f"task_id:[{task_id}] [Task {task_id} BG]: Task is disabled, thread exiting.")
                 return
             if task_config.sync_status != 'idle':
-                logger.error(f"[Task {task_id} BG]: 任务正在运行中，线程退出。")
+                logger.error(f"task_id:[{task_id}] [Task {task_id} BG]: Task is already running, thread exiting.")
                 return
             if not (task_config.app_id, task_config.entry_id):
-                logger.error(f"[Task {task_id} BG]: 缺少 app_id 或 entry_id，线程退出。")
+                logger.error(f"task_id:[{task_id}] [Task {task_id} BG]: Missing app_id or entry_id, thread exiting.")
                 return
 
             # 3. 实例化 DataApi
             if not task_config.department or not task_config.department.jdy_key_info:
-                logger.error(f"[Task {task_id} BG]: 任务缺少部门或密钥信息，线程退出。")
+                logger.error(
+                    f"task_id:[{task_id}] [Task {task_id} BG]: Task missing department or key info, thread exiting.")
                 return
 
             api_key = task_config.department.jdy_key_info.api_key
@@ -691,13 +720,16 @@ class Jdy2DbSyncService:
             if task_to_update:
                 task_to_update.is_full_replace_first = False
                 config_session.commit()
-                logger.info(f"[Task {task_id} BG]: 首次全量同步标志 (is_full_replace_first=False) 已成功更新。")
+                logger.info(
+                    f"task_id:[{task_id}] [Task {task_id} BG]: Initial full sync flag (is_full_replace_first=False) updated successfully.")
             else:
-                logger.warning(f"[Task {task_id} BG]: 无法在提交 'is_full_replace_first' 时再次找到任务。")
+                logger.warning(
+                    f"task_id:[{task_id}] [Task {task_id} BG]: Could not find task again when committing 'is_full_replace_first'.")
 
 
         except Exception as e:
-            logger.error(f"[Task {task_id} BG]: 后台全量同步线程失败: {e}", exc_info=True)
+            logger.error(f"task_id:[{task_id}] [Task {task_id} BG]: Background full sync thread failed: {e}",
+                         exc_info=True)
             if config_session:
                 config_session.rollback()
             # 记录错误 (task_config 可能是 None)
@@ -709,7 +741,7 @@ class Jdy2DbSyncService:
         finally:
             if config_session:
                 config_session.close()
-            logger.info(f"[Task {task_id} BG]: 后台线程退出。")
+            logger.info(f"task_id:[{task_id}] [Task {task_id} BG]: Background thread exiting.")
 
     # --- 数据库表结构 (DDL) ---
 
@@ -732,10 +764,11 @@ class Jdy2DbSyncService:
                 metadata = get_dynamic_metadata(engine)
                 table = Table(table_name, metadata, autoload_with=engine, extend_existing=True)
                 self.inspected_tables_cache[engine_url_key][table_name] = table
-                logger.info(f"从数据库 ({engine_url_key}) 加载表定义: {table_name}")
+                logger.info(f"Loading table definition from database ({engine_url_key}): {table_name}")
                 return table
         except Exception as e:
-            logger.error(f"检查或加载表 {table_name} 定义时出错 ({engine_url_key}): {e}", exc_info=True)
+            logger.error(f"Error checking or loading table definition for {table_name} ({engine_url_key}): {e}",
+                         exc_info=True)
             self.inspected_tables_cache[engine_url_key].pop(table_name, None)
         return None
 
@@ -749,7 +782,7 @@ class Jdy2DbSyncService:
         if table is not None:
             return table
 
-        logger.info(f"表 '{table_name}' 不存在，正在根据数据样本创建...")
+        logger.info(f"task_id:[{task_config.id}] Table '{table_name}' does not exist, creating from data samples...")
         try:
             column_defs, column_comments = self.get_column_schema(data_samples, task_config)
             columns = [Column(name, col_type, comment=column_comments.get(name)) for name, col_type in
@@ -773,23 +806,26 @@ class Jdy2DbSyncService:
 
             if not id_column_added:
                 final_columns.insert(0, Column('_id', String(50), unique=True, comment='唯一索引id'))
-                logger.warning(f"警告: 表 '{table_name}' 数据样本中没有找到 '_id' 字段，已自动添加为唯一索引。")
+                logger.warning(
+                    f"task_id:[{task_config.id}] Warning: '_id' field not found in data samples for table '{table_name}', auto-adding as unique key.")
 
             # 确保列名不重复 (理论上 get_column_definitions 应该处理了)
             final_column_names = {c.name for c in final_columns}
             if len(final_column_names) != len(final_columns):
-                logger.error(f"创建表 '{table_name}' 时检测到重复的列名，请检查映射逻辑。")
+                logger.error(
+                    f"task_id:[{task_config.id}] Duplicate column names detected when creating table '{table_name}', check mapping logic.")
                 # 可以选择抛出异常或尝试去重，这里选择记录错误并继续（可能导致建表失败）
 
             table = Table(table_name, metadata, *final_columns, comment=table_comment, mysql_charset='utf8mb4')
             metadata.create_all(engine)  # 这会创建表
-            logger.info(f"表 '{table_name}' 创建成功。")
+            logger.info(f"task_id:[{task_config.id}] Table '{table_name}' created successfully.")
 
             engine_url_key = str(engine.url)
             self.inspected_tables_cache[engine_url_key][table_name] = table  # 加入缓存
             return table
         except Exception as e:
-            logger.error(f"根据数据样本创建表 '{table_name}' 失败: {e}", exc_info=True)
+            logger.error(f"task_id:[{task_config.id}] Failed to create table '{table_name}' from data samples: {e}",
+                         exc_info=True)
             log_sync_error(task_config=task_config, error=e,
                            extra_info=f"Failed to create table '{table_name}' from data samples")
             raise  # 创建失败则向上抛出异常
@@ -824,7 +860,8 @@ class Jdy2DbSyncService:
         if table is not None:
             return table
 
-        logger.info(f"表 '{table_name}' 不存在，正在根据表单结构 (form_update) 创建...")
+        logger.info(
+            f"task_id:[{task_config.id}] Table '{table_name}' does not exist, creating from form structure (form_update)...")
         try:
             widgets = form_schema_data.get('widgets', [])
             columns = [Column('_id', String(50), unique=True, comment='唯一索引id')]  # 主键/唯一键
@@ -857,18 +894,19 @@ class Jdy2DbSyncService:
                     added_col_names.add(col_name)
                 elif col_name in added_col_names:
                     logger.warning(
-                        f"尝试为表 '{table_name}' 重复添加列 '{col_name}' (可能由 widget '{widget.get('widgetName')}' 产生)，已跳过。")
+                        f"task_id:[{task_config.id}] Attempted to add duplicate column '{col_name}' to table '{table_name}' (likely from widget '{widget.get('widgetName')}'), skipped.")
 
             table_comment = form_schema_data.get('name', table_name)
             table = Table(table_name, metadata, *columns, comment=table_comment, mysql_charset='utf8mb4')
             metadata.create_all(engine)
-            logger.info(f"表 '{table_name}' 创建成功。")
+            logger.info(f"task_id:[{task_config.id}] Table '{table_name}' created successfully.")
 
             engine_url_key = str(engine.url)
             self.inspected_tables_cache[engine_url_key][table_name] = table
             return table
         except Exception as e:
-            logger.error(f"根据 schema 创建表 '{table_name}' 失败: {e}", exc_info=True)
+            logger.error(f"task_id:[{task_config.id}] Failed to create table '{table_name}' from schema: {e}",
+                         exc_info=True)
             log_sync_error(task_config=task_config, error=e,
                            extra_info=f"Failed to create table '{table_name}' from schema")
             raise
@@ -888,7 +926,8 @@ class Jdy2DbSyncService:
                 ).all()
             }
         except SQLAlchemyError as e:
-            logger.error(f"查询字段映射失败 for Task {task_config.id}: {e}", exc_info=True)
+            logger.error(f"task_id:[{task_config.id}] Failed to query field mappings for Task {task_config.id}: {e}",
+                         exc_info=True)
             mappings = {}
         finally:
             config_session.close()
@@ -930,14 +969,16 @@ class Jdy2DbSyncService:
                     # # 如果映射不存在，则退化为旧逻辑
                     # db_col_name = re.sub(r'[^a-zA-Z0-9_]', '', key)
                     # sql_type_instance = get_sql_type(None, sample_value)
-                    logger.error(f"字段映射不存在 for {task_config.app_id}/{task_config.entry_id}: {key}")
+                    logger.error(
+                        f"task_id:[{task_config.id}] Field mapping not found for {task_config.app_id}/{task_config.entry_id}: {key}")
                     log_sync_error(task_config=task_config,
                                    error=Exception("Field mapping not found"),
                                    extra_info=f"字段映射不存在 for {task_config.app_id}/{task_config.entry_id}: {key}")
 
             if not db_col_name or db_col_name in processed_col_names:
                 if db_col_name in processed_col_names:
-                    logger.warning(f"推断列定义时检测到重复的目标列名 '{db_col_name}' (可能源自 key '{key}'), 已跳过。")
+                    logger.warning(
+                        f"task_id:[{task_config.id}] Detected duplicate target column name '{db_col_name}' when inferring column definitions (possibly from key '{key}'), skipped.")
                 continue  # 跳过无效或重复的列名
 
             # 类型兼容性/提升处理 (基于实例比较)
@@ -977,7 +1018,8 @@ class Jdy2DbSyncService:
             existing_columns_info = {c['name']: c for c in inspector.get_columns(table.name)}
             existing_columns = set(existing_columns_info.keys())
         except Exception as e:
-            logger.error(f"无法获取表 '{table.name}' 的列信息: {e}", exc_info=True)
+            logger.error(f"task_id:[{task_config.id}] Cannot get column information for table '{table.name}': {e}",
+                         exc_info=True)
             return table  # 无法获取结构信息，直接返回
 
         config_session = ConfigSession()
@@ -1042,7 +1084,8 @@ class Jdy2DbSyncService:
             cols_to_drop = cols_to_drop - set(all_new_columns.keys())
 
         except SQLAlchemyError as e:
-            logger.error(f"查询字段映射失败 for Task {task_config.id}: {e}", exc_info=True)
+            logger.error(f"task_id:[{task_config.id}] Failed to query field mappings for Task {task_config.id}: {e}",
+                         exc_info=True)
             # 映射查询失败，无法安全地添加列
             all_new_columns = {}
         finally:
@@ -1053,11 +1096,13 @@ class Jdy2DbSyncService:
             return table
 
         # 4. 执行数据库变更
-        logger.info(f"开始同步表 '{table.name}' 的结构...")
+        logger.info(f"task_id:[{task_config.id}] Starting to sync table structure for '{table.name}'...")
         if all_new_columns:
-            logger.info(f"在表 '{table.name}' 中检测到新字段，正在批量添加: {', '.join(all_new_columns.keys())}")
+            logger.info(
+                f"task_id:[{task_config.id}] Detected new fields in table '{table.name}', batch adding: {', '.join(all_new_columns.keys())}")
         if cols_to_drop:
-            logger.info(f"在表 '{table.name}' 中检测到多余字段，正在批量删除: {', '.join(cols_to_drop)}")
+            logger.info(
+                f"task_id:[{task_config.id}] Detected redundant fields in table '{table.name}', batch deleting: {', '.join(cols_to_drop)}")
 
         try:
             with engine.connect() as connection:
@@ -1071,7 +1116,8 @@ class Jdy2DbSyncService:
                     # 执行添加操作
                     for col_name, col_info in all_new_columns.items():
                         if not col_name or not col_name.strip():  # 再次检查
-                            logger.warning(f"警告: 再次检测到空的列名，在执行SQL前跳过。")
+                            logger.warning(
+                                f"task_id:[{task_config.id}] Warning: Empty column name detected again, skipping before executing SQL.")
                             continue
 
                         # 使用 get_sql_type 获取 SQLAlchemy 类型实例
@@ -1085,17 +1131,21 @@ class Jdy2DbSyncService:
                                     f"ALTER TABLE `{table.name}` ADD COLUMN `{col_name}` {type_string} COLLATE utf8mb4_general_ci COMMENT :comment"),
                                 {'comment': col_info['comment']}
                             )
-                            logger.info(f"成功为表 '{table.name}' 添加列 '{col_name}' 类型 '{type_string}'。")
+                            logger.info(
+                                f"task_id:[{task_config.id}] Successfully added column '{col_name}' type '{type_string}' to table '{table.name}'.")
                         except Exception as alter_err:
                             # 如果添加单列失败（例如，列已存在于并发操作中），记录错误并继续尝试添加其他列
-                            logger.error(f"为表 '{table.name}' 添加列 '{col_name}' 失败: {alter_err}")
+                            logger.error(
+                                f"task_id:[{task_config.id}] Failed to add column '{col_name}' to table '{table.name}': {alter_err}")
                             # 不回滚整个事务，允许其他列的添加继续
 
                     transaction.commit()  # 提交所有成功的 ALTER TABLE 操作
         except Exception as e:
             # 如果连接或事务启动失败
             # transaction.rollback() # (已在 with connection.begin() 中自动回滚)
-            logger.error(f"为表 '{table.name}' 添加列时发生连接或事务错误: {e}", exc_info=True)
+            logger.error(
+                f"task_id:[{task_config.id}] Connection or transaction error while adding columns to table '{table.name}': {e}",
+                exc_info=True)
             log_sync_error(task_config=task_config, error=e,
                            extra_info="Error during handle_table_schema_from_data (connection/transaction)")
             # 发生严重错误，可能无法继续，但还是尝试重新加载表定义
@@ -1110,10 +1160,11 @@ class Jdy2DbSyncService:
 
         new_table = self.get_table_if_exists(table.name, engine)
         if new_table:
-            logger.info(f"表 '{table.name}' 结构已更新并重新加载。")
+            logger.info(f"task_id:[{task_config.id}] Table '{table.name}' structure updated and reloaded.")
             return new_table
         else:
-            logger.error(f"添加列后无法重新加载表 '{table.name}' 的定义！")
+            logger.error(
+                f"task_id:[{task_config.id}] Failed to reload table definition for '{table.name}' after adding columns!")
             return table  # 返回旧表
 
     # 优化：比较 SQLAlchemy 类型实例
@@ -1143,15 +1194,17 @@ class Jdy2DbSyncService:
         task_id = task_config.id
 
         if not all([app_id, entry_id]):  # widgets 可以为空
-            logger.warning("form_update 事件缺少 app_id 或 entry_id，跳过结构处理。")
+            logger.warning(
+                f"task_id:[{task_id}] form_update event missing app_id or entry_id, skipping structure processing.")
             return table
 
-        logger.info(f"开始根据 form_update 同步表 '{table_name}' 的结构...")
+        logger.info(f"task_id:[{task_id}] Starting to sync table structure for '{table_name}' based on form_update...")
         try:
             inspector = inspect(engine)
             if not inspector.has_table(table_name):
                 # 如果表不存在，直接基于 schema 创建，无需同步
-                logger.info(f"表 '{table_name}' 不存在，将直接根据 schema 创建。")
+                logger.info(
+                    f"task_id:[{task_id}] Table '{table_name}' does not exist, will create directly from schema.")
                 return self.get_or_create_table_from_schema(table_name, data, task_config, engine, metadata)
 
             # 1. 获取数据库当前列信息 (包括类型)
@@ -1231,7 +1284,8 @@ class Jdy2DbSyncService:
                         cols_to_add.discard(new_col_name)
                     else:
                         # 理论上不应发生，因为 widget_to_db_col_map 来自 expected_db_columns
-                        logger.warning(f"重命名列 '{old_col_name}' 时找不到目标列 '{new_col_name}' 的 widget 信息。")
+                        logger.warning(
+                            f"task_id:[{task_id}] Widget info for target column '{new_col_name}' not found when renaming column '{old_col_name}'.")
 
                 elif new_col_name and old_col_name == new_col_name:
                     # 名称相同，检查类型是否需要修改
@@ -1245,7 +1299,8 @@ class Jdy2DbSyncService:
                                 processed_for_rename.add(old_col_name)  # 标记已处理
                         else:
                             # 理论上不应发生
-                            logger.warning(f"检查列 '{old_col_name}' 类型时找不到其现有信息。")
+                            logger.warning(
+                                f"task_id:[{task_id}] Existing info not found when checking column '{old_col_name}' type.")
 
                 # 如果 widget_name 不在 widget_to_db_col_map 中，说明该字段已被删除
                 elif widget_name not in widget_to_db_col_map:
@@ -1259,10 +1314,10 @@ class Jdy2DbSyncService:
 
             # 5. 执行 DDL 变更
             if not cols_to_add and not final_cols_to_drop and not cols_to_rename and not cols_to_modify:
-                logger.info(f"表 '{table_name}' 结构无需更新。")
+                logger.info(f"task_id:[{task_id}] Table '{table_name}' structure is up-to-date.")
                 return table
 
-            logger.info(f"开始同步表 '{table_name}' 的结构...")
+            logger.info(f"task_id:[{task_id}] Starting to sync table structure for '{table_name}'...")
             ddl_executed = False
 
             with engine.connect() as connection:
@@ -1270,7 +1325,8 @@ class Jdy2DbSyncService:
                     try:
                         # 执行删除列
                         if final_cols_to_drop:
-                            logger.info(f"将从表 '{table_name}' 删除列: {', '.join(final_cols_to_drop)}")
+                            logger.info(
+                                f"task_id:[{task_id}] Will drop columns from table '{table_name}': {', '.join(final_cols_to_drop)}")
                             for col_name in final_cols_to_drop:
                                 if col_name in existing_columns and col_name not in system_fields_defs:
                                     connection.execute(text(f"ALTER TABLE `{table_name}` DROP COLUMN `{col_name}`"))
@@ -1278,7 +1334,8 @@ class Jdy2DbSyncService:
 
                         # 执行添加列
                         if cols_to_add:
-                            logger.info(f"将向表 '{table_name}' 添加列: {', '.join(cols_to_add)}")
+                            logger.info(
+                                f"task_id:[{task_id}] Will add columns to table '{table_name}': {', '.join(cols_to_add)}")
                             for col_name in cols_to_add:
                                 info = expected_db_columns[col_name]
                                 sql_type_inst = info['sql_type']
@@ -1295,7 +1352,7 @@ class Jdy2DbSyncService:
                         # 执行重命名列
                         if cols_to_rename:
                             logger.info(
-                                f"将在表 '{table_name}' 重命名列: {', '.join([f'`{o}`->`{n}`' for o, n, _, _ in cols_to_rename])}")
+                                f"task_id:[{task_id}] Will rename columns in table '{table_name}': {', '.join([f'`{o}`->`{n}`' for o, n, _, _ in cols_to_rename])}")
                             for old_name, new_name, widget, sql_type_inst in cols_to_rename:
                                 # 注意: 重命名通常需要知道原列类型，这里简化处理，假设类型不变或在MODIFY步骤处理
                                 # MySQL 使用 CHANGE COLUMN 同时指定新旧名称和类型定义
@@ -1309,7 +1366,7 @@ class Jdy2DbSyncService:
                                     if new_name in [c['name'] for c in temp_inspector.get_columns(table_name) if
                                                     c['name'] != old_name]:
                                         logger.error(
-                                            f"无法重命名列 '{old_name}' 为 '{new_name}'，因为目标列名已存在。")
+                                            f"task_id:[{task_id}] Cannot rename column '{old_name}' to '{new_name}' because target column name already exists.")
                                         continue  # 跳过此重命名
 
                                     connection.execute(text(
@@ -1318,12 +1375,13 @@ class Jdy2DbSyncService:
                                     )
                                     ddl_executed = True
                                 else:
-                                    logger.warning(f"尝试重命名列 '{old_name}' 时未找到其原始信息，跳过。")
+                                    logger.warning(
+                                        f"task_id:[{task_id}] Original info not found when trying to rename column '{old_name}', skipping.")
 
                         # 执行修改列类型
                         if cols_to_modify:
                             logger.info(
-                                f"将在表 '{table_name}' 修改列类型: {', '.join([f'`{n}`' for n, _, _ in cols_to_modify])}")
+                                f"task_id:[{task_id}] Will modify column types in table '{table_name}': {', '.join([f'`{n}`' for n, _, _ in cols_to_modify])}")
                             for col_name, widget, new_sql_type_inst in cols_to_modify:
                                 type_string = new_sql_type_inst.compile(dialect=engine.dialect)
                                 comment = widget.get('label', '') if widget else col_name  # 保持 comment
@@ -1334,10 +1392,11 @@ class Jdy2DbSyncService:
                                 ddl_executed = True
 
                         transaction.commit()
-                        logger.info(f"表 '{table_name}' 结构同步完成。")
+                        logger.info(f"task_id:[{task_id}] Table '{table_name}' structure sync complete.")
 
                     except Exception as e:
-                        logger.error(f"同步表 '{table_name}' 结构时出错: {e}", exc_info=True)
+                        logger.error(f"task_id:[{task_id}] Error syncing table structure for '{table_name}': {e}",
+                                     exc_info=True)
                         transaction.rollback()
                         raise  # 向上抛出异常
 
@@ -1351,23 +1410,26 @@ class Jdy2DbSyncService:
 
                 new_table = self.get_table_if_exists(table_name, engine)
                 if new_table:
-                    logger.info(f"表 '{table_name}' 定义已刷新。")
+                    logger.info(f"task_id:[{task_id}] Table '{table_name}' definition refreshed.")
                     return new_table
                 else:
-                    logger.error(f"执行 DDL 后无法重新加载表 '{table_name}' 定义！")
+                    logger.error(
+                        f"task_id:[{task_id}] Failed to reload table definition for '{table_name}' after DDL execution!")
                     return table  # 返回旧表
 
             return table  # 如果没有执行 DDL，返回原表
 
         except SQLAlchemyError as db_err:
             config_session.rollback()  # 回滚映射会话（如果之前有更改）
-            logger.error(f"处理表单结构更新时发生数据库错误: {db_err}", exc_info=True)
+            logger.error(f"task_id:[{task_id}] Database error during form structure update processing: {db_err}",
+                         exc_info=True)
             log_sync_error(task_config=task_config, error=db_err, payload=data,
                            extra_info="Database error during handle_table_schema_from_form")
             return table  # 返回旧表
         except Exception as e:
             config_session.rollback()
-            logger.error(f"处理表单结构更新时发生意外错误: {e}", exc_info=True)
+            logger.error(f"task_id:[{task_id}] Unexpected error during form structure update processing: {e}",
+                         exc_info=True)
             log_sync_error(task_config=task_config, error=e, payload=data,
                            extra_info="Unexpected error during handle_table_schema_from_form")
             return table  # 返回旧表
@@ -1426,7 +1488,7 @@ class Jdy2DbSyncService:
                                 cleaned_data[db_col_name] = json.dumps(value, ensure_ascii=False)
                             except TypeError as e:
                                 logger.warning(
-                                    f"无法序列化字段 '{key}' (列: {db_col_name}) 的值 {value}: {e}，将存为字符串。")
+                                    f"task_id:[{task_id}] Cannot serialize value for field '{key}' (column: {db_col_name}): {e}, storing as string.")
                                 cleaned_data[db_col_name] = str(value)
                         else:
                             cleaned_data[db_col_name] = value  # 直接赋值
@@ -1444,7 +1506,7 @@ class Jdy2DbSyncService:
                             cleaned_data[db_col_name] = dt_utc.astimezone(TZ_UTC_8)  # 转换为本地时区
                         except (ValueError, TypeError):
                             logger.warning(
-                                f"无法将字符串 '{value}' 解析为字段 '{key}' (列: {db_col_name}) 的 DateTime，将保留原值。")
+                                f"task_id:[{task_id}] Cannot parse string '{value}' to DateTime for field '{key}' (column: {db_col_name}), retaining original value.")
                             cleaned_data[db_col_name] = value  # 解析失败则保留原字符串
 
                     # 处理布尔值 (如果数据库列不是 Boolean 类型)
@@ -1465,7 +1527,7 @@ class Jdy2DbSyncService:
                                     value)
                             except (ValueError, TypeError):
                                 logger.warning(
-                                    f"无法将值 '{value}' (类型 {type(value).__name__}) 转换为列 '{db_col_name}' 的数字类型，将存为 None 或引发错误。")
+                                    f"task_id:[{task_id}] Cannot convert value '{value}' (type {type(value).__name__}) to numeric type for column '{db_col_name}', will store as None or raise error.")
                                 cleaned_data[db_col_name] = None  # 或者可以选择跳过这个字段
                         else:
                             cleaned_data[db_col_name] = value  # 类型匹配或兼容，直接赋值
@@ -1476,7 +1538,8 @@ class Jdy2DbSyncService:
             return cleaned_data
 
         except SQLAlchemyError as e:
-            logger.error(f"清理数据时查询映射失败 for Task {task_id}: {e}", exc_info=True)
+            logger.error(f"task_id:[{task_id}] Failed to query mappings during data cleaning for Task {task_id}: {e}",
+                         exc_info=True)
             return {}
         finally:
             if config_session.is_active:  # 确保会话仍然活动
@@ -1487,13 +1550,14 @@ class Jdy2DbSyncService:
         """插入或更新单条数据 (使用 ON DUPLICATE KEY UPDATE 增强)"""
         cleaned_data = self.clean_data_for_db(table, data, task_config)
         if not cleaned_data:
-            logger.warning("警告：清理后的数据为空，没有可同步的内容。")
+            logger.warning(f"task_id:[{task_config.id}] Warning: Cleaned data is empty, nothing to sync.")
             return
 
         data_id = cleaned_data.get('_id')
         if not data_id:
-            logger.warning("警告：数据中缺少 '_id'，无法执行更新/插入操作。数据: %s",
-                           json.dumps(data, ensure_ascii=False, default=str))
+            logger.warning(
+                f"task_id:[{task_config.id}] Warning: Data missing '_id', cannot perform upsert operation. Data: %s",
+                json.dumps(data, ensure_ascii=False, default=str))
             return
 
         try:
@@ -1515,12 +1579,15 @@ class Jdy2DbSyncService:
             # commit 移到 handle_webhook_data 末尾
 
         except SQLAlchemyError as e:
-            logger.error(f"Upsert 数据 (ID: {data_id}) 到表 '{table.name}' 失败: {e}", exc_info=False)
-            logger.debug("失败的 cleaned_data: %s", cleaned_data)
+            logger.error(
+                f"task_id:[{task_config.id}] Failed to upsert data (ID: {data_id}) to table '{table.name}': {e}",
+                exc_info=False)
+            logger.debug(f"task_id:[{task_config.id}] Failed cleaned_data: %s", cleaned_data)
             # (rollback 和 log_sync_error 移到 handle_webhook_data 的 except 块中)
             raise  # 重新抛出，让 handle_webhook_data 捕获并回滚
         except Exception as e:
-            logger.error(f"Upsert 数据 (ID: {data_id}) 时发生意外错误: {e}", exc_info=True)
+            logger.error(f"task_id:[{task_config.id}] Unexpected error during upsert data (ID: {data_id}): {e}",
+                         exc_info=True)
             raise
 
     @retry()
@@ -1528,21 +1595,25 @@ class Jdy2DbSyncService:
         """根据 _id 删除数据"""
         data_id = data.get('_id')
         if not data_id:
-            logger.warning("警告：删除操作的数据中缺少 '_id'。数据: %s",
+            logger.warning(f"task_id:[{task_config.id}] Warning: Data for delete operation missing '_id'. Data: %s",
                            json.dumps(data, ensure_ascii=False, default=str))
             return
 
-        logger.info(f"准备从 '{table.name}' 删除数据 (ID: {data_id})...")
+        logger.info(f"task_id:[{task_config.id}] Preparing to delete data (ID: {data_id}) from '{table.name}'...")
         try:
             stmt = table.delete().where(table.c._id == data_id)
             result = session.execute(stmt)
             # (commit 移到 handle_webhook_data 的 with 块末尾)
             if result.rowcount == 0:
-                logger.warning(f"警告：尝试删除数据 (ID: {data_id})，但在数据库中未找到。")
+                logger.warning(
+                    f"task_id:[{task_config.id}] Warning: Attempted to delete data (ID: {data_id}), but not found in database.")
             else:
-                logger.info(f"成功从 '{table.name}' 删除数据 (ID: {data_id})。")
+                logger.info(
+                    f"task_id:[{task_config.id}] Successfully deleted data (ID: {data_id}) from '{table.name}'.")
         except SQLAlchemyError as e:
-            logger.error(f"从表 '{table.name}' 删除数据 (ID: {data_id}) 失败: {e}", exc_info=True)
+            logger.error(
+                f"task_id:[{task_config.id}] Failed to delete data (ID: {data_id}) from table '{table.name}': {e}",
+                exc_info=True)
             # (rollback 和 log_sync_error 移到 handle_webhook_data 的 except 块中)
             raise
 
@@ -1557,12 +1628,13 @@ class Jdy2DbSyncService:
 
         if not all([app_id, entry_id, table_name]):
             logger.error(
-                f"任务 {task_config.id} (租户: {task_config.department.department_name}) 缺少 App ID, Entry ID 或 Table Name，无法执行全量同步。")
+                f"task_id:[{task_config.id}] Task {task_config.id} (Tenant: {task_config.department.department_name}) missing App ID, Entry ID, or Table Name. Cannot perform full sync.")
             log_sync_error(task_config=task_config,
                            error=ValueError("Missing App ID/Entry ID/Table Name for full sync"))
             return
 
-        logger.info(f"开始执行全量同步任务: {table_name} (租户: {task_config.department.department_name})")
+        logger.info(
+            f"task_id:[{task_config.id}] Starting full sync task: {table_name} (Tenant: {task_config.department.department_name})")
 
         last_data_id = None
         total_records = 0
@@ -1576,31 +1648,33 @@ class Jdy2DbSyncService:
             dynamic_engine = get_dynamic_engine(task_config)
             dynamic_metadata = get_dynamic_metadata(dynamic_engine)
         except Exception as e:
-            logger.error(f"任务 {table_name}: 无法获取动态引擎: {e}", exc_info=True)
+            logger.error(f"task_id:[{task_config.id}] Task {table_name}: Failed to get dynamic engine: {e}",
+                         exc_info=True)
             log_sync_error(task_config=task_config, error=e, extra_info="Failed to get dynamic engine for full sync")
             config_session.close()
             return
 
         try:
             # --- 1. 准备目标表 ---
-            logger.info(f"任务 {table_name}: 准备目标表...")
+            logger.info(f"task_id:[{task_config.id}] Task {table_name}: Preparing target table...")
             table = self.get_table_if_exists(table_name, dynamic_engine)
 
             # 检查是否需要清空表 (仅当表存在时)
             if table is not None:
-                logger.info(f"任务 {table_name}: 正在清空表以进行全量同步...")
+                logger.info(f"task_id:[{task_config.id}] Task {table_name}: Truncating table for full sync...")
                 try:
                     with get_dynamic_session(task_config) as target_session:
                         target_session.execute(table.delete())
                         target_session.commit()
-                    logger.info(f"任务 {table_name}: 表已清空。")
+                    logger.info(f"task_id:[{task_config.id}] Task {table_name}: Table truncated.")
                 except SQLAlchemyError as clear_err:
-                    logger.error(f"清空表 {table_name} 失败: {clear_err}", exc_info=True)
+                    logger.error(f"task_id:[{task_config.id}] Failed to truncate table {table_name}: {clear_err}",
+                                 exc_info=True)
                     # (rollback 在 with 块中自动处理)
                     raise  # 清空失败则无法继续全量同步
 
             # --- 2. 循环拉取和写入数据 ---
-            logger.info(f"任务 {table_name}: 开始拉取数据...")
+            logger.info(f"task_id:[{task_config.id}] Task {table_name}: Starting data fetch...")
             first_batch = True
             while True:
                 try:
@@ -1613,20 +1687,24 @@ class Jdy2DbSyncService:
                     )
                     data_list = response_data.get('data', [])
                 except Exception as api_err:
-                    logger.error(f"任务 {table_name}: API 请求失败: {api_err}", exc_info=True)
+                    logger.error(f"task_id:[{task_config.id}] Task {table_name}: API request failed: {api_err}",
+                                 exc_info=True)
                     # 记录错误并中止本次同步
                     raise api_err  # 重新抛出，由外层 try-except 处理状态更新
 
                 if not data_list:
-                    logger.info(f"任务 {table_name}: 已拉取所有数据。总共处理 {total_records} 条记录。")
+                    logger.info(
+                        f"task_id:[{task_config.id}] Task {table_name}: All data fetched. Total records processed: {total_records}.")
                     break
 
-                logger.info(f"任务 {table_name}: 成功拉取 {len(data_list)} 条数据。")
+                logger.info(
+                    f"task_id:[{task_config.id}] Task {table_name}: Successfully fetched {len(data_list)} data records.")
                 total_records += len(data_list)
 
                 # 如果是第一批数据且表不存在，则创建表并更新表结构
                 if first_batch and table is None:
-                    logger.info(f"任务 {table_name}: 表不存在，根据第一批数据创建...")
+                    logger.info(
+                        f"task_id:[{task_config.id}] Task {table_name}: Table does not exist, creating from first batch...")
                     table = self.get_or_create_table_from_data(table_name, data_list, task_config, dynamic_engine,
                                                                dynamic_metadata)
                     table = self.handle_table_schema_from_data(table, data_list, task_config, dynamic_engine,
@@ -1634,13 +1712,14 @@ class Jdy2DbSyncService:
                     first_batch = False
                 elif first_batch and table is not None:
                     # 表已存在，但仍需根据第一批数据检查并更新结构
-                    logger.info(f"任务 {table_name}: 表已存在，根据第一批数据检查结构...")
+                    logger.info(
+                        f"task_id:[{task_config.id}] Task {table_name}: Table exists, checking structure against first batch...")
                     table = self.handle_table_schema_from_data(table, data_list, task_config, dynamic_engine,
                                                                dynamic_metadata)
                     first_batch = False
                 elif table is None:
                     # 理论上不应发生，因为表应在第一批数据时创建
-                    logger.error(f"任务 {table_name}: 严重错误 - 表对象丢失！")
+                    logger.error(f"task_id:[{task_config.id}] Task {table_name}: Critical error - Table object lost!")
                     raise Exception(f"Table object lost during historical sync for {table_name}")
 
                 # 批量处理数据写入
@@ -1652,7 +1731,7 @@ class Jdy2DbSyncService:
                     last_data_id = data_list[-1]['_id']
                 except SQLAlchemyError as batch_err:
                     logger.error(
-                        f"任务 {table_name}: 处理批次数据时发生数据库错误 (last_data_id={last_data_id}): {batch_err}",
+                        f"task_id:[{task_config.id}] Task {table_name}: Database error processing batch (last_data_id={last_data_id}): {batch_err}",
                         exc_info=True)
                     # (rollback 在 with 块中自动处理)
                     raise batch_err
@@ -1660,7 +1739,7 @@ class Jdy2DbSyncService:
                     # 如果 upsert_data 内部处理了错误并且没有重新抛出，这里不会捕获
                     # 如果 upsert_data 重新抛出了非 SQLAlchemyError，这里会捕获
                     logger.error(
-                        f"任务 {table_name}: 处理单条数据时发生意外错误 (last_data_id={last_data_id}): {item_err}",
+                        f"task_id:[{task_config.id}] Task {table_name}: Unexpected error processing item (last_data_id={last_data_id}): {item_err}",
                         exc_info=True)
                     target_session.rollback()
                     raise item_err
@@ -1672,14 +1751,14 @@ class Jdy2DbSyncService:
                 {"sync_status": 'idle', "last_sync_time": datetime.now(TZ_UTC_8)}
             )
             config_session.commit()
-            logger.info(f"任务 {table_name} 全量同步成功完成。")
+            logger.info(f"task_id:[{task_config.id}] Task {table_name} full sync completed successfully.")
 
         except Exception as e:
             # --- 4. 处理同步过程中的任何异常 ---
             try:
                 config_session.rollback()
             except Exception as rb_err:
-                logger.error(f"回滚 config_session 时出错: {rb_err}")
+                logger.error(f"task_id:[{task_config.id}] Error during config_session rollback: {rb_err}")
 
             # 更新任务状态为失败
             try:
@@ -1692,15 +1771,16 @@ class Jdy2DbSyncService:
                     {"sync_status": 'error', "last_sync_time": sync_start_time}  # 使用开始时间标记失败时间点
                 )
                 config_session.commit()
-                logger.info(f"任务 {table_name} 状态已更新为 error。")
+                logger.info(f"task_id:[{task_config.id}] Task {table_name} status updated to error.")
             except Exception as e_update:
-                logger.error(f"更新任务 {table_name} 失败状态时出错: {e_update}", exc_info=True)
+                logger.error(f"task_id:[{task_config.id}] Error updating task {table_name} failure status: {e_update}",
+                             exc_info=True)
                 try:
                     config_session.rollback()  # 回滚状态更新的尝试
                 except Exception:
                     pass
 
-            logger.error(f"任务 {table_name} 同步失败: {e}", exc_info=True)
+            logger.error(f"task_id:[{task_config.id}] Task {table_name} sync failed: {e}", exc_info=True)
             log_sync_error(
                 task_config=task_config,
                 error=e,

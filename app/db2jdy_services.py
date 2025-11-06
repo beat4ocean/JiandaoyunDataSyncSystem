@@ -92,7 +92,7 @@ class FieldMappingService:
             log_sync_error(
                 task_config=task,
                 error=ValueError(f"Task {task.id} missing department or API key."),
-                extra_info="Failed to update field mappings."
+                extra_info=f"task_id:[{task.id}] Failed to update field mappings."
             )
             return
         api_key = task.department.jdy_key_info.api_key
@@ -196,7 +196,7 @@ class Db2JdySyncService:
                 inspector = inspect(dynamic_engine)
                 if not inspector.has_table(task.table_name):
                     log_sync_error(task_config=task,
-                                   extra_info=f"Source table '{task.table_name}' not found in source DB.")
+                                   extra_info=f"task_id:[{task.id}] Source table '{task.table_name}' not found in source DB.")
                     return
 
                 # 2. 检查是否为物理表 (BASE TABLE)
@@ -232,15 +232,16 @@ class Db2JdySyncService:
                     except Exception as alter_e:
                         source_conn.rollback()
                         log_sync_error(task_config=task, error=alter_e,
-                                       extra_info=f"Failed to add `_id` column to '{task.table_name}'.")
+                                       extra_info=f"task_id:[{task.id}] Failed to add `_id` column to '{task.table_name}'.")
                 else:
                     print(f"task_id:[{task.id}] `_id` column already exists.")
 
         except NoSuchTableError:
             log_sync_error(task_config=task,
-                           extra_info=f"Source table '{task.table_name}' not found (NoSuchTableError).")
+                           extra_info=f"task_id:[{task.id}] Source table '{task.table_name}' not found (NoSuchTableError).")
         except Exception as e:
-            log_sync_error(task_config=task, error=e, extra_info=f"Error preparing source table '{task.table_name}'.")
+            log_sync_error(task_config=task, error=e,
+                           extra_info=f"task_id:[{task.id}] Error preparing source table '{task.table_name}'.")
 
     def _is_view(self, task: SyncTask) -> bool:
         """
@@ -364,7 +365,7 @@ class Db2JdySyncService:
             # 2. 构建复合查询
             for i, field_name in enumerate(pk_fields):
                 if field_name not in alias_map:
-                    raise ValueError(f"PK field '{field_name}' not in alias map.")
+                    raise ValueError(f"task_id:[{task.id}] PK field '{field_name}' not in alias map.")
 
                 jdy_pk_field = alias_map[field_name]
                 pk_value = pk_values[i]
@@ -527,7 +528,7 @@ class Db2JdySyncService:
         """
         # --- 检查任务类型 ---
         if task.sync_type != 'db2jdy':
-            logger.error(f"task_id:[{task.id}] _run_full_sync 失败：任务类型不是 'db2jdy'。")
+            logger.error(f"task_id:[{task.id}] _run_full_sync failed: Task type is not 'db2jdy'.")
             return
 
         mode = "FULL_REPLACE" if delete_first else "INITIAL_SYNC"
@@ -538,14 +539,14 @@ class Db2JdySyncService:
         total_source_rows = 0
 
         if not task.department or not task.department.jdy_key_info or not task.department.jdy_key_info.api_key:
-            raise ValueError(f"Task {task.id} missing department or API key for {mode}.")
+            raise ValueError(f"task_id:[{task.id}] Task {task.id} missing department or API key for {mode}.")
         api_key = task.department.jdy_key_info.api_key
 
         try:
             mapping_service = FieldMappingService()
             payload_map = mapping_service.get_payload_mapping(config_session, task.id)
             if not payload_map:
-                raise ValueError("Field mapping is empty.")
+                raise ValueError(f"task_id:[{task.id}] Field mapping is empty.")
 
             # 1. 实例化
             data_api_query = DataApi(api_key, Config.JDY_API_HOST, qps=30)
@@ -673,7 +674,7 @@ class Db2JdySyncService:
         """
         # --- 检查任务类型 ---
         if task.sync_type != 'db2jdy':
-            logger.error(f"task_id:[{task.id}] run_full_replace 失败：任务类型不是 'db2jdy'。")
+            logger.error(f"task_id:[{task.id}] run_full_replace failed: Task type is not 'db2jdy'.")
             self._update_task_status(config_session, task, status='error')
             return
 
@@ -705,7 +706,7 @@ class Db2JdySyncService:
         """
         # --- 检查任务类型 ---
         if task.sync_type != 'db2jdy':
-            logger.error(f"task_id:[{task.id}] run_incremental 失败：任务类型不是 'db2jdy'。")
+            logger.error(f"task_id:[{task.id}] run_incremental failed: Task type is not 'db2jdy'.")
             self._update_task_status(config_session, task, status='error')
             return
 
@@ -716,7 +717,7 @@ class Db2JdySyncService:
             log_sync_error(
                 task_config=task,
                 error=ValueError(f"Task {task.id} missing department or API key for INCREMENTAL."),
-                extra_info="INCREMENTAL failed."
+                extra_info=f"task_id:[{task.id}] INCREMENTAL failed."
             )
             self._update_task_status(config_session, task, status='error')
             return
@@ -746,7 +747,7 @@ class Db2JdySyncService:
 
             # 2. 正常增量逻辑
             if not task.incremental_field:
-                raise ValueError("Incremental field (e.g., last_modified) is not configured.")
+                raise ValueError(f"task_id:[{task.id}] Incremental field (e.g., last_modified) is not configured.")
 
             # # 2a. 动态获取 API Key
             # if not task.department:
@@ -757,7 +758,7 @@ class Db2JdySyncService:
             payload_map = mapping_service.get_payload_mapping(config_session, task.id)
             alias_map = mapping_service.get_alias_mapping(config_session, task.id)
             if not payload_map or not alias_map:
-                raise ValueError("Field mapping is empty.")
+                raise ValueError(f"task_id:[{task.id}] Field mapping is empty.")
 
             # 3. 实例化
             data_api_query = DataApi(api_key, Config.JDY_API_HOST, qps=30)
@@ -777,7 +778,7 @@ class Db2JdySyncService:
                 # 解析 incremental 字段（有可能是复杂字段）
                 raw_field = task.incremental_field.strip() if task.incremental_field else None
                 if not raw_field:
-                    raise ValueError("No incremental field specified.")
+                    raise ValueError(f"task_id:[{task.id}] No incremental field specified.")
 
                 raw_field = ','.join([item.strip() for item in raw_field.split(',') if item.strip()])
 
@@ -834,14 +835,14 @@ class Db2JdySyncService:
                     # 使用 field_for_probing 查找列信息
                     col_info = next((col for col in columns if col['name'] == field_for_probing), None)
                 except NoSuchTableError:
-                    raise ValueError(f"Incremental field's table '{task.table_name}' not found.")
+                    raise ValueError(f"task_id:[{task.id}] Incremental field's table '{task.table_name}' not found.")
 
                 # 如果找不到字段
                 if not col_info:
                     log_sync_error(task_config=task,
                                    extra_info=f"task_id:[{task.id}] Incremental field (ProbeField) '{field_for_probing}' not found in table '{task.table_name}'.")
                     raise ValueError(
-                        f"Incremental field (ProbeField) '{field_for_probing}' not found in table '{task.table_name}'.")
+                        f"task_id:[{task.id}] Incremental field (ProbeField) '{field_for_probing}' not found in table '{task.table_name}'.")
 
                 col_type_name = str(col_info['type']).upper()
 
@@ -1026,7 +1027,7 @@ class Db2JdySyncService:
             log_sync_error(
                 task_config=task,
                 error=ValueError(f"Task {task.id} missing department or API key for BINLOG."),
-                extra_info="BINLOG listener stopped."
+                extra_info=f"task_id:[{task.id}] BINLOG listener stopped."
             )
             # 状态将在 run_binlog_listener_in_thread 的 finally 块中被设置为 error
             return
@@ -1041,7 +1042,7 @@ class Db2JdySyncService:
                 if not task.database:
                     log_sync_error(task_config=task,
                                    error=ValueError(f"Task {task.id} missing database link."),
-                                   extra_info="BINLOG listener stopped.")
+                                   extra_info=f"task_id:[{task.id}] BINLOG listener stopped.")
                     return
 
         db_info = task.database
