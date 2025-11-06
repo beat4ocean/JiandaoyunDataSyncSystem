@@ -898,7 +898,7 @@
                   <el-col :span="12">
                     <el-form-item label="数据库类型" prop="db_type">
                       <el-select v-model="currentItem.db_type" placeholder="选择数据库类型">
-                         <el-option label="MySQL" value="MySQL"></el-option>
+                        <el-option label="MySQL" value="MySQL"></el-option>
                         <el-option label="PostgreSQL" value="PostgreSQL"></el-option>
                         <el-option label="SQL Server" value="SQL Server"></el-option>
                         <el-option label="Oracle" value="Oracle"></el-option>
@@ -1175,7 +1175,7 @@
                        @close="closeDialog" class="form-dialog">
               <el-form ref="formRef" :model="currentItem" :rules="taskRules" label-position="top" label-width="150px">
 
-                <input type="hidden" v-model="currentItem.sync_type" />
+                <input type="hidden" v-model="currentItem.sync_type"/>
 
                 <el-row :gutter="20">
                   <el-col :span="12">
@@ -1509,10 +1509,10 @@
               <el-table-column prop="app_id" label="App ID (自动)" width="150"></el-table-column>
               <el-table-column prop="entry_id" label="Entry ID (自动)" width="150"></el-table-column>
               <el-table-column prop="daily_sync_type" label="全量同步" width="120">
-                 <template #default="scope">{{ scope.row.daily_sync_type || 'N/A' }}</template>
+                <template #default="scope">{{ scope.row.daily_sync_type || 'N/A' }}</template>
               </el-table-column>
               <el-table-column prop="daily_sync_time" label="同步时间" width="100">
-                 <template #default="scope">{{ formatTime(scope.row.daily_sync_time) }}</template>
+                <template #default="scope">{{ formatTime(scope.row.daily_sync_time) }}</template>
               </el-table-column>
               <el-table-column prop="is_active" label="激活" width="70">
                 <template #default="scope">
@@ -1574,7 +1574,8 @@
                   </el-col>
                   <el-col :span="12">
                     <el-form-item label="目标数据库表名" prop="table_name">
-                      <el-input v-model="currentItem.table_name" placeholder="数据库中的表名 (若不存在将自动创建)"></el-input>
+                      <el-input v-model="currentItem.table_name"
+                                placeholder="数据库中的表名 (若不存在将自动创建)"></el-input>
                     </el-form-item>
                   </el-col>
                 </el-row>
@@ -1752,12 +1753,57 @@
                 }
             };
 
-            const copyWebhookUrl = (url) => {
-                 navigator.clipboard.writeText(url).then(() => {
-                    ElMessage.success('Webhook URL 已复制到剪贴板！');
-                 }, (err) => {
-                    ElMessage.error('复制失败: ' + err);
-                 });
+            // copyWebhookUrl
+            const copyWebhookUrl = async (urlToCopy) => {
+                if (!urlToCopy) {
+                    ElMessage.error('没有可复制的 URL');
+                    return;
+                }
+
+                try {
+                    // 方案 A: 尝试使用现代 Clipboard API
+                    // (仅在 HTTPS 或 localhost 下工作)
+                    if (navigator.clipboard && window.isSecureContext) {
+                        await navigator.clipboard.writeText(urlToCopy);
+                        ElMessage.success('Webhook URL 复制成功');
+                    } else {
+                        // 方案 B: 回退到传统的 execCommand (用于不安全的 HTTP)
+
+                        // 创建一个临时的 textarea 元素
+                        const textArea = document.createElement('textarea');
+                        textArea.value = urlToCopy;
+
+                        // 将元素隐藏在视口之外
+                        textArea.style.position = 'absolute';
+                        textArea.style.left = '-9999px';
+                        textArea.style.top = '0';
+
+                        document.body.appendChild(textArea);
+                        textArea.focus();
+                        textArea.select(); // 选中文本
+
+                        let success = false;
+                        try {
+                            // 执行复制命令
+                            success = document.execCommand('copy');
+                        } catch (err) {
+                            console.error('Fallback copy failed:', err);
+                        }
+
+                        // 移除临时元素
+                        document.body.removeChild(textArea);
+
+                        if (success) {
+                            ElMessage.success('Webhook URL 复制成功');
+                        } else {
+                            ElMessage.error('复制失败，您的浏览器可能不支持');
+                        }
+                    }
+                } catch (err) {
+                    // 捕获所有可能的异常
+                    console.error('复制操作失败:', err);
+                    ElMessage.error('复制失败，请手动复制');
+                }
             };
 
             watch(() => crud.dialogVisible.value, (newVal) => {
