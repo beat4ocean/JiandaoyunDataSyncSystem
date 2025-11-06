@@ -725,7 +725,7 @@ class Jdy2DbSyncService:
             # 再次查询最新的 task_config，以防在同步期间被修改
             try:
                 task_to_update = config_session.query(SyncTask).get(task_id)
-                if task_to_update and task_to_update.sync_status == 'idle':  # 确保是成功状态
+                if task_to_update:
                     task_to_update.is_full_replace_first = False
                     config_session.commit()
                     logger.info(
