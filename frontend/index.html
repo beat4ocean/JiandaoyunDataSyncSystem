@@ -468,6 +468,9 @@
                 // 清理只读的 webhook_url
                 delete dataToSend.webhook_url;
 
+                // 清理上次同步时间，防止前端提交此只读字段
+                delete dataToSend.last_sync_time;
+
                 const response = await apiClient[method](url, dataToSend);
 
                 if (isEdit.value) {
@@ -1137,7 +1140,7 @@
               <el-table-column prop="id" label="ID" width="60"></el-table-column>
               <el-table-column v-if="isSuperuser" prop="department_name" label="所属部门" width="180"
                                sortable></el-table-column>
-              <el-table-column prop="task_name" label="任务名称" sortable></el-table-column>
+              <el-table-column prop="task_name" label="任务名称" width="150" sortable></el-table-column>
               <el-table-column prop="db_show_name" label="源数据库" width="150" sortable>
                 <template #default="scope">
                   <el-tag>{{ scope.row.db_show_name || 'N/A' }}</el-tag>
@@ -1496,23 +1499,26 @@
               </div>
             </template>
             <el-table :data="items" v-loading="loading" style="width: 100%" row-key="id">
-              <el-table-column prop="id" label="ID" width="60"></el-table-column>
-              <el-table-column v-if="isSuperuser" prop="department_name" label="所属部门" width="180"
+              <el-table-column prop="id" label="ID" width="50"></el-table-column>
+              <el-table-column v-if="isSuperuser" prop="department_name" label="所属部门" width="150"
                                sortable></el-table-column>
-              <el-table-column prop="task_name" label="任务名称" sortable></el-table-column>
+              <el-table-column prop="task_name" label="任务名称" sortable width="150"></el-table-column>
               <el-table-column prop="db_show_name" label="目标数据库" width="150" sortable>
                 <template #default="scope">
                   <el-tag type="success">{{ scope.row.db_show_name || 'N/A' }}</el-tag>
                 </template>
               </el-table-column>
-              <el-table-column prop="table_name" label="目标表名 (自动)" sortable></el-table-column>
+              <el-table-column prop="table_name" label="目标表名 (自动)" width="150" sortable></el-table-column>
               <el-table-column prop="app_id" label="App ID (自动)" width="150"></el-table-column>
               <el-table-column prop="entry_id" label="Entry ID (自动)" width="150"></el-table-column>
-              <el-table-column prop="daily_sync_type" label="全量同步" width="120">
+              <el-table-column prop="daily_sync_type" label="全量拉取类型" width="120">
                 <template #default="scope">{{ scope.row.daily_sync_type || 'N/A' }}</template>
               </el-table-column>
-              <el-table-column prop="daily_sync_time" label="同步时间" width="100">
+              <el-table-column prop="daily_sync_time" label="定时拉取时间" width="120">
                 <template #default="scope">{{ formatTime(scope.row.daily_sync_time) }}</template>
+              </el-table-column>
+              <el-table-column prop="last_sync_time" label="上次同步时间" width="170">
+                <template #default="scope">{{ formatDateTime(scope.row.last_sync_time) }}</template>
               </el-table-column>
               <el-table-column prop="is_active" label="激活" width="70">
                 <template #default="scope">
@@ -1599,7 +1605,7 @@
 
                 <el-row :gutter="20">
                   <el-col :span="12">
-                    <el-form-item label="首次全量同步 (会覆盖目标数据)">
+                    <el-form-item label="首次全量拉取 (会覆盖目标数据)">
                       <el-switch v-model="currentItem.is_full_replace_first"></el-switch>
                     </el-form-item>
                   </el-col>
@@ -1627,18 +1633,18 @@
                   </el-col>
                 </el-row>
 
-                <el-divider>定时全量同步 (可选)</el-divider>
+                <el-divider>定时全量拉取 (可选)</el-divider>
                 <el-row :gutter="20">
                   <el-col :span="12">
-                    <el-form-item label="全量同步类型" prop="daily_sync_type">
-                      <el-select v-model="currentItem.daily_sync_type" placeholder="选择全量同步类型">
+                    <el-form-item label="全量拉取类型" prop="daily_sync_type">
+                      <el-select v-model="currentItem.daily_sync_type" placeholder="选择全量拉取类型">
                         <el-option label="ONCE (仅首次)" value="ONCE"></el-option>
                         <el-option label="DAILY (每日定时)" value="DAILY"></el-option>
                       </el-select>
                     </el-form-item>
                   </el-col>
                   <el-col :span="12" v-if="currentItem.daily_sync_type === 'DAILY'">
-                    <el-form-item label="每日同步时间" prop="daily_sync_time">
+                    <el-form-item label="每日拉取时间" prop="daily_sync_time">
                       <el-time-picker v-model="currentItem.daily_sync_time_temp" format="HH:mm"
                                       value-format="HH:mm:ss"
                                       placeholder="选择时间"></el-time-picker>
@@ -1753,6 +1759,8 @@
                 }
             };
 
+            const formatDateTime = (isoDateTime) => isoDateTime ? new Date(isoDateTime).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai'}) : '-';
+
             // copyWebhookUrl
             const copyWebhookUrl = async (urlToCopy) => {
                 if (!urlToCopy) {
@@ -1831,6 +1839,7 @@
                 filteredDatabases,
                 onDepartmentChange,
                 formatTime,
+                formatDateTime,
                 copyWebhookUrl,
                 ElementPlusIcons
             };
