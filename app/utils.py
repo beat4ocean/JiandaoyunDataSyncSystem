@@ -109,12 +109,12 @@ def retry(max_retries=3, delay=5, backoff=2, exceptions=(OperationalError, reque
                         break  # 跳出循环以记录并重新抛出
 
                     current_delay = _delay * (backoff ** attempt)
-                    print(
-                        f"函数 {func.__name__} 因 {type(e).__name__} 失败。将在 {current_delay:.2f} 秒后重试 ({max_retries - attempt - 1} 次剩余)...")
+                    logger.warning(
+                        f"Function {func.__name__} failed due to {type(e).__name__}. Retrying in {current_delay:.2f} seconds ({max_retries - attempt - 1} attempts remaining)...")
                     time_module.sleep(current_delay)
 
             # 所有重试次数已用完
-            print(f"函数 {func.__name__} 在 {max_retries} 次重试后失败。最后错误: {last_exception}")
+            logger.error(f"Function {func.__name__} failed after {max_retries} retries. Last error: {last_exception}")
             # 尝试从 kwargs 或 args 中获取 task_config
             task_config = kwargs.get('task_config')
             if not task_config and args:
@@ -150,9 +150,9 @@ def send_wecom_notification(wecom_url: str, content: str):
         headers = {'Content-Type': 'application/json'}
         response = requests.post(wecom_url, headers=headers, data=json.dumps(data), timeout=10)
         response.raise_for_status()
-        print("已成功发送错误日志到企业微信。")
+        logger.info("Successfully sent error log to WeCom.")
     except Exception as e:
-        print(f"发送企业微信通知失败: {e}")
+        logger.error(f"Failed to send WeCom notification: {e}")
 
 
 # --- 使用字符串类型提示 'SyncTask' ---
@@ -197,18 +197,18 @@ def log_sync_error(task_config: 'SyncTask' = None,
             # 只有在有应用上下文且 g 对象包含 config_session 时才使用它
             if g and hasattr(g, 'config_session') and g.config_session.is_active:
                 session = g.config_session
-                # print("log_sync_error: 使用来自 g 对象的现有会话。")
+                logger.debug("log_sync_error: Using existing session from g object.")
             else:
                 raise RuntimeError("No active session in g")  # 跳到 except 块
         except (RuntimeError, AttributeError):
             # 如果发生 RuntimeError (Working outside...) 或 g 不存在/没有 config_session
-            # print("log_sync_error: 不在请求上下文中或 g 中无会话，创建新会话。")
+            logger.debug("log_sync_error: Not in request context or no session in g, creating new session.")
             session = ConfigSession()
             session_created = True
 
         # 1. 准备日志数据
         error_message = f"{extra_info}\n{str(error)}" if extra_info and error else (
-            str(error) if error else extra_info or "未知错误")
+            str(error) if error else extra_info or "Unknown error")
         traceback_str = traceback.format_exc() if error and isinstance(error, Exception) else None  # 仅在有异常时记录堆栈
 
         def json_serializer_default(obj):
@@ -241,7 +241,7 @@ def log_sync_error(task_config: 'SyncTask' = None,
         )
         session.add(new_log)
         session.commit()
-        print(f"错误日志已成功写入数据库: (Task {task_id or 'N/A'})")
+        logger.info(f"Error log successfully written to database: (Task {task_id or 'N/A'})")
 
         # 3. 动态发送企微通知
         from app.models import SyncTask
@@ -268,26 +268,26 @@ def log_sync_error(task_config: 'SyncTask' = None,
             send_wecom_notification(task_config.wecom_robot_webhook_url, content)
 
     except Exception as db_err:
-        print(f"!!! 写入错误日志到数据库时发生严重错误: {db_err}")
+        logger.error(f"!!! Critical error occurred while writing error log to database: {db_err}")
         # 确保 error_message 已定义
         if 'error_message' not in locals():
-            error_message = str(error) if error else "未知原始错误"
-        print(f"原始错误信息: {error_message}")
+            error_message = str(error) if error else "Unknown original error"
+        logger.error(f"Original error message: {error_message}")
         # 如果连日志会话都有问题，尝试回滚并打印更详细的错误
         if session:
             try:
                 session.rollback()
             except Exception as rb_err:
-                print(f"!!! 回滚日志会话失败: {rb_err}")
+                logger.error(f"!!! Failed to rollback error log session: {rb_err}")
         # 打印数据库错误的堆栈信息
-        print("--- Database Error Traceback ---")
-        traceback.print_exc()
-        print("-------------------------------")
+        logger.error("--- Database Error Traceback ---")
+        logger.error(traceback.format_exc())
+        logger.error("-------------------------------")
 
     finally:
         # 仅当此函数自己创建了会话时才关闭它
         if session and session_created:
-            # print("log_sync_error: 关闭独立创建的会话。")
+            logger.debug("log_sync_error: Closing independently created session.")
             session.close()
 
 
@@ -480,10 +480,10 @@ def test_db_connection(db_info: Dict[str, Any]) -> (bool, str):
         error_msg = str(e).split('\n')[0]
         return False, f"连接失败: {error_msg}"
     except ImportError as e:
-        logging.error(f"数据库驱动未安装: {e}")
+        logger.error(f"Database driver not installed: {e}")
         return False, f"连接失败: 缺少数据库驱动 {e}。 (例如: 'mysql' 需要 'pymysql')"
     except Exception as e:
-        logging.error(f"数据库连接测试发生未知错误: {e}")
+        logger.error(f"Unknown error occurred during database connection test: {e}")
         return False, f"发生未知错误: {e}"
 
 
@@ -510,17 +510,17 @@ def validate_signature(nonce: str, payload_str: str, secret: str, timestamp: str
     """
     if not all([nonce, payload_str is not None, secret, timestamp, signature_from_header]):
         logger.warning(
-            f"[Webhook Auth] 签名验证失败: 缺少必要参数。Nonce: {nonce}, TS: {timestamp}, Secret: {bool(secret)}, Header: {signature_from_header}")
+            f"[Webhook Auth] Signature verification failed: Missing required parameters. Nonce: {nonce}, TS: {timestamp}, Secret: {bool(secret)}, Header: {signature_from_header}")
         return False
 
     try:
         calculated_signature = get_signature(nonce, payload_str, secret, timestamp)
 
         if calculated_signature == signature_from_header:
-            logger.info("[Webhook Auth] 签名验证成功。")
+            logger.info("[Webhook Auth] Signature verification successful.")
             return True
         else:
-            logger.warning(f"[Webhook Auth] 签名验证失败: 签名不匹配。")
+            logger.warning(f"[Webhook Auth] Signature verification failed: Signature mismatch.")
             logger.debug(f"Nonce: {nonce}, TS: {timestamp}")
             logger.debug(f"Payload (first 100): {payload_str[:100]}...")
             logger.debug(f"Expected: {signature_from_header}")
@@ -528,5 +528,5 @@ def validate_signature(nonce: str, payload_str: str, secret: str, timestamp: str
             return False
 
     except Exception as e:
-        logger.error(f"[Webhook Auth] 计算签名时发生错误: {e}", exc_info=True)
+        logger.error(f"[Webhook Auth] Error occurred while calculating signature: {e}", exc_info=True)
         return False

@@ -2,6 +2,8 @@
 """
 简道云 API 客户端 (v5)
 """
+import logging
+
 import requests
 import json
 import time
@@ -10,6 +12,10 @@ from datetime import datetime, timedelta
 from requests import RequestException, HTTPError
 
 from app.utils import TZ_UTC_8
+
+# 配置日志
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
 class ApiClient:
@@ -46,7 +52,7 @@ class ApiClient:
             elapsed = now - last_call_time
             wait_time = self.min_interval - elapsed
             if wait_time.total_seconds() > 0:
-                # print(f"Throttling API call to {endpoint} for {wait_time.total_seconds():.3f} seconds")
+                logger.debug(f"Throttling API call to {endpoint} for {wait_time.total_seconds():.3f} seconds")
                 time.sleep(wait_time.total_seconds())
 
         ApiClient._rate_limit_records[endpoint] = datetime.now(TZ_UTC_8)  # 更新时间戳
@@ -67,7 +73,7 @@ class ApiClient:
         for attempt in range(self.retry_count + 1):
             try:
                 self._throttle(endpoint)
-                # print(f"Sending request to {url} with payload: {json.dumps(payload_dict, ensure_ascii=False)}") # Debugging line
+                logger.debug(f"Sending request to {url} with payload: {json.dumps(payload_dict, ensure_ascii=False)}") # Debugging line
                 res = requests.post(url=url, json=payload_dict, headers=headers,
                                     timeout=30)  # Increase timeout, use json parameter
 
@@ -75,12 +81,12 @@ class ApiClient:
                 if res.status_code >= 400:
                     try:
                         error_info = res.json()
-                        print(f"API 错误: Code={error_info.get('code')}, Msg={error_info.get('msg')}")
+                        logger.error(f"API 错误: Code={error_info.get('code')}, Msg={error_info.get('msg')}")
                         # 打印请求体以帮助诊断 400 Bad Request
-                        print(f"请求失败的 Payload: {json.dumps(payload_dict, ensure_ascii=False, indent=2)}")
+                        logger.error(f"请求失败的 Payload: {json.dumps(payload_dict, ensure_ascii=False, indent=2)}")
                     except json.JSONDecodeError:
-                        print(f"API 请求失败，状态码: {res.status_code}, 响应内容非JSON: {res.text}")
-                        print(f"请求失败的 Payload: {json.dumps(payload_dict, ensure_ascii=False, indent=2)}")
+                        logger.error(f"API 请求失败，状态码: {res.status_code}, 响应内容非JSON: {res.text}")
+                        logger.error(f"请求失败的 Payload: {json.dumps(payload_dict, ensure_ascii=False, indent=2)}")
                     res.raise_for_status()  # 引发 HTTPError
                 # --- 结束增强 ---
 
@@ -96,35 +102,35 @@ class ApiClient:
                 except json.JSONDecodeError:
                     # 如果响应体为空或者不是JSON，但是状态码表示成功
                     if res.ok:
-                        print(f"警告：API 请求成功 (状态码 {res.status_code}) 但响应体为空或非JSON。")
+                        logger.error(f"警告：API 请求成功 (状态码 {res.status_code}) 但响应体为空或非JSON。")
                         return {"status": "success", "_raw_status_code": res.status_code, "_raw_response": res.text}
                     else:
                         # 理论上 raise_for_status 应该已经处理了非OK状态码
                         # 但为了健壮性，这里也处理一下
-                        print(f"错误：API 请求失败 (状态码 {res.status_code}) 且响应体非JSON: {res.text}")
+                        logger.error(f"错误：API 请求失败 (状态码 {res.status_code}) 且响应体非JSON: {res.text}")
                         # 重新抛出，让上层知道出错了
                         res.raise_for_status()
 
 
             except (RequestException, HTTPError) as e:
                 last_exception = e
-                print(f"API 请求到 '{endpoint}' 失败 (尝试 {attempt + 1}/{self.retry_count + 1}): {e}")
+                logger.error(f"API 请求到 '{endpoint}' 失败 (尝试 {attempt + 1}/{self.retry_count + 1}): {e}")
                 if attempt < self.retry_count:
                     current_delay = self.retry_delay * (2 ** attempt)  # Exponential backoff
-                    print(f"将在 {current_delay} 秒后重试...")
+                    logger.warning(f"将在 {current_delay} 秒后重试...")
                     time.sleep(current_delay)
                 else:  # All retries failed
-                    print(f"对 '{endpoint}' 的所有重试均失败。最后错误: {e}")
+                    logger.error(f"对 '{endpoint}' 的所有重试均失败。最后错误: {e}")
                     # 尝试打印详细错误 (如果可用)
                     if hasattr(e, 'response') and e.response is not None:
                         try:
-                            print(f"失败响应详情: {e.response.text}")
+                            logger.error(f"失败响应详情: {e.response.text}")
                         except Exception:
                             pass  # Ignore if response text cannot be read
                     raise last_exception  # Re-raise the last exception after all retries fail
 
         # This part should ideally not be reached if retries are configured > 0
-        print(f"警告: _send_request 意外退出重试循环 for {endpoint}")
+        logger.error(f"警告: _send_request 意外退出重试循环 for {endpoint}")
         if last_exception:
             raise last_exception
         else:
@@ -179,14 +185,14 @@ class DataApi(ApiClient):
 
     def get_single_data(self, app_id, entry_id, data_id):
         """查询单条数据 (V5, QPS: 30)"""
-        if self.qps > 30: print("警告: QPS可能设置错误，查询单条数据应为 30")
+        if self.qps > 30: logger.warning("警告: QPS可能设置错误，查询单条数据应为 30")
         endpoint = "api/v5/app/entry/data/get"
         data = {"app_id": app_id, "entry_id": entry_id, "data_id": data_id}
         return self._send_request(endpoint, data)
 
     def query_list_data(self, app_id, entry_id, limit=100, data_id=None, fields=None, filter=None):
         """查询多条数据 (V5, QPS: 30)"""
-        if self.qps > 30: print("警告: QPS可能设置错误，查询多条数据应为 30")
+        if self.qps > 30: logger.warning("警告: QPS可能设置错误，查询多条数据应为 30")
         endpoint = "api/v5/app/entry/data/list"
         data = {
             "app_id": app_id,
@@ -203,14 +209,14 @@ class DataApi(ApiClient):
         if filter:
             # Filter should be a dictionary
             if not isinstance(filter, dict):
-                print("警告: query_list_data 中的 filter 参数必须是字典。")
+                logger.warning("警告: query_list_data 中的 filter 参数必须是字典。")
             else:
                 data['filter'] = filter
         return self._send_request(endpoint, data)
 
     def create_single_data(self, app_id, entry_id, data_payload, **kwargs):
         """新建单条数据 (V5, QPS: 20)"""
-        if self.qps > 20: print("警告: QPS可能设置错误，新建单条数据应为 20")
+        if self.qps > 20: logger.warning("警告: QPS可能设置错误，新建单条数据应为 20")
         endpoint = "api/v5/app/entry/data/create"
         data = {"app_id": app_id, "entry_id": entry_id, "data": data_payload, **kwargs}
         return self._send_request(endpoint, data)
@@ -220,7 +226,7 @@ class DataApi(ApiClient):
         新建多条数据 (V5, QPS: 10)
         自动按100条/批次分割。
         """
-        if self.qps > 10: print("警告: QPS可能设置错误，新建多条数据应为 10")
+        if self.qps > 10: logger.warning("警告: QPS可能设置错误，新建多条数据应为 10")
         endpoint = "api/v5/app/entry/data/batch_create"
 
         results = []
@@ -229,7 +235,7 @@ class DataApi(ApiClient):
             chunk = data_list[i:i + self.BATCH_LIMIT]
             data = {"app_id": app_id, "entry_id": entry_id, "data_list": chunk, **kwargs}
 
-            print(f"INFO: [CreateBatch] 正在发送批次 {i // self.BATCH_LIMIT + 1}，包含 {len(chunk)} 条数据...")
+            logger.info(f"[CreateBatch] 正在发送批次 {i // self.BATCH_LIMIT + 1}，包含 {len(chunk)} 条数据...")
             result = self._send_request(endpoint, data)
             results.append(result)
 
@@ -237,7 +243,7 @@ class DataApi(ApiClient):
 
     def update_single_data(self, app_id, entry_id, data_id, data_payload, **kwargs):
         """修改单条数据 (V5, QPS: 20)"""
-        if self.qps > 20: print("警告: QPS可能设置错误，修改单条数据应为 20")
+        if self.qps > 20: logger.warning("警告: QPS可能设置错误，修改单条数据应为 20")
         endpoint = "api/v5/app/entry/data/update"
         data = {"app_id": app_id, "entry_id": entry_id, "data_id": data_id, "data": data_payload, **kwargs}
         return self._send_request(endpoint, data)
@@ -247,7 +253,7 @@ class DataApi(ApiClient):
         修改多条数据 (V5, QPS: 10)
         自动按100条/批次分割。
         """
-        if self.qps > 10: print("警告: QPS可能设置错误，修改多条数据应为 10")
+        if self.qps > 10: logger.warning("警告: QPS可能设置错误，修改多条数据应为 10")
         endpoint = "api/v5/app/entry/data/batch_update"
 
         # 确保 data_ids 是列表
@@ -260,7 +266,7 @@ class DataApi(ApiClient):
             chunk = data_ids[i:i + self.BATCH_LIMIT]
             data = {"app_id": app_id, "entry_id": entry_id, "data_ids": chunk, "data": data_payload, **kwargs}
 
-            print(f"INFO: [UpdateBatch] 正在更新批次 {i // self.BATCH_LIMIT + 1}，包含 {len(chunk)} 条数据...")
+            logger.info(f"[UpdateBatch] 正在更新批次 {i // self.BATCH_LIMIT + 1}，包含 {len(chunk)} 条数据...")
             result = self._send_request(endpoint, data)
             results.append(result)
 
@@ -268,7 +274,7 @@ class DataApi(ApiClient):
 
     def delete_single_data(self, app_id, entry_id, data_id, **kwargs):
         """删除单条数据 (V5, QPS: 20)"""
-        if self.qps > 20: print("警告: QPS可能设置错误，删除单条数据应为 20")
+        if self.qps > 20: logger.warning("警告: QPS可能设置错误，删除单条数据应为 20")
         endpoint = "api/v5/app/entry/data/delete"
         data = {"app_id": app_id, "entry_id": entry_id, "data_id": data_id, **kwargs}
         return self._send_request(endpoint, data)
@@ -278,7 +284,7 @@ class DataApi(ApiClient):
         删除多条数据 (V5, QPS: 10)
         自动按100条/批次分割。
         """
-        if self.qps > 10: print("警告: QPS可能设置错误，删除多条数据应为 10")
+        if self.qps > 10: logger.warning("警告: QPS可能设置错误，删除多条数据应为 10")
         endpoint = "api/v5/app/entry/data/batch_delete"
 
         # 确保 data_ids 是列表
@@ -291,7 +297,7 @@ class DataApi(ApiClient):
             chunk = data_ids[i:i + self.BATCH_LIMIT]
             data = {"app_id": app_id, "entry_id": entry_id, "data_ids": chunk}
 
-            print(f"INFO: [DeleteBatch] 正在删除批次 {i // self.BATCH_LIMIT + 1}，包含 {len(chunk)} 条数据...")
+            logger.info(f"[DeleteBatch] 正在删除批次 {i // self.BATCH_LIMIT + 1}，包含 {len(chunk)} 条数据...")
             result = self._send_request(endpoint, data)
             results.append(result)
 

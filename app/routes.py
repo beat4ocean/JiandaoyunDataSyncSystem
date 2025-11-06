@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import json
+import logging
 import traceback
 from datetime import time, datetime, date
 from functools import wraps
@@ -18,7 +19,11 @@ from app.models import (JdyKeyInfo, SyncTask, SyncErrLog, FormFieldMapping, Depa
 from app.scheduler import add_or_update_task_in_scheduler, remove_task_from_scheduler
 from app.utils import test_db_connection, log_sync_error, validate_signature
 
-api_bp = Blueprint('api', __name__, url_prefix='/api')
+# 配置日志
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+api_bp = Blueprint.error('api', __name__, url_prefix='/api')
 
 
 # 辅助函数：将 SQLAlchemy 对象（包括关联对象）转换为字典
@@ -112,7 +117,7 @@ def get_databases():
         return jsonify(result)
 
     except Exception as e:
-        print(f"Error getting Databases: {e}\n{traceback.format_exc()}")
+        logger.error(f"Error getting Databases: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Failed to retrieve Databases"}), 500
 
 
@@ -168,7 +173,7 @@ def add_database():
         return jsonify({"error": f"数据库完整性错误: {e}"}), 409
     except Exception as e:
         session.rollback()
-        print(f"Error adding Database: {e}\n{traceback.format_exc()}")
+        logger.error(f"Error adding Database: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Failed to add Database"}), 500
 
 
@@ -223,7 +228,7 @@ def update_database(db_id):
         return jsonify({"error": "显示名称或连接信息已存在"}), 409
     except Exception as e:
         session.rollback()
-        print(f"Error updating Database {db_id}: {e}\n{traceback.format_exc()}")
+        logger.error(f"Error updating Database {db_id}: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Failed to update Database"}), 500
 
 
@@ -253,7 +258,7 @@ def delete_database(db_id):
         return jsonify({"error": "无法删除：此数据库配置可能正被一个或多个同步任务使用。"}), 409
     except Exception as e:
         session.rollback()
-        print(f"Error deleting Database {db_id}: {e}\n{traceback.format_exc()}")
+        logger.error(f"Error deleting Database {db_id}: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Failed to delete Database"}), 500
 
 
@@ -310,7 +315,7 @@ def get_jdy_keys():
         result = [row_to_dict(key, include_relations={'department': ['department_name']}) for key in keys]
         return jsonify(result)
     except Exception as e:
-        print(f"Error getting JdyKeyInfo: {e}\n{traceback.format_exc()}")
+        logger.error(f"Error getting JdyKeyInfo: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Failed to retrieve JdyKeyInfo"}), 500
 
 
@@ -344,7 +349,7 @@ def add_jdy_key():
         return jsonify({"error": "一个部门只能绑定一个密钥 (department_id 必须唯一)"}), 409
     except Exception as e:
         session.rollback()
-        print(f"Error adding JdyKeyInfo: {e}\n{traceback.format_exc()}")
+        logger.error(f"Error adding JdyKeyInfo: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Failed to add JdyKeyInfo"}), 500
 
 
@@ -378,7 +383,7 @@ def update_jdy_key(key_id):
         return jsonify({"error": "Department ID 冲突"}), 409
     except Exception as e:
         session.rollback()
-        print(f"Error updating JdyKeyInfo: {e}\n{traceback.format_exc()}")
+        logger.error(f"Error updating JdyKeyInfo: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Failed to update JdyKeyInfo"}), 500
 
 
@@ -404,7 +409,7 @@ def delete_jdy_key(key_id):
         return jsonify({"error": "无法删除：此密钥可能正被一个或多个同步任务的部门使用。"}), 409
     except Exception as e:
         session.rollback()
-        print(f"Error deleting JdyKeyInfo: {e}\n{traceback.format_exc()}")
+        logger.error(f"Error deleting JdyKeyInfo: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Failed to delete JdyKeyInfo"}), 500
 
 
@@ -454,7 +459,7 @@ def get_sync_tasks():
 
         return jsonify(result)
     except Exception as e:
-        print(f"Error getting SyncTasks: {e}\n{traceback.format_exc()}")
+        logger.error(f"Error getting SyncTasks: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Failed to retrieve Sync Tasks"}), 500
 
 
@@ -577,7 +582,7 @@ def add_sync_task():
         return jsonify({"error": f"数据库完整性错误: {e}"}), 409
     except Exception as e:
         session.rollback()
-        print(f"Error adding SyncTask: {e}\n{traceback.format_exc()}")
+        logger.error(f"Error adding SyncTask: {e}\n{traceback.format_exc()}")
         return jsonify({"error": f"Failed to add SyncTask: {e}"}), 500
 
 
@@ -702,7 +707,7 @@ def update_sync_task(task_id):
         return jsonify({"error": f"数据库完整性错误: {e}"}), 409
     except Exception as e:
         session.rollback()
-        print(f"Error updating SyncTask {task_id}: {e}\n{traceback.format_exc()}")
+        logger.error(f"task_id:[{task_id}] Error updating SyncTask: {e}\n{traceback.format_exc()}")
         return jsonify({"error": f"Failed to update SyncTask: {e}"}), 500
 
 
@@ -731,7 +736,7 @@ def delete_sync_task(task_id):
         return jsonify({"message": "SyncTask deleted successfully"})
     except Exception as e:
         session.rollback()
-        print(f"Error deleting SyncTask {task_id}: {e}\n{traceback.format_exc()}")
+        logger.error(f"task_id:[{task_id}] Error deleting SyncTask: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Failed to delete SyncTask"}), 500
 
 
@@ -767,7 +772,7 @@ def get_sync_logs():
         ).all()
         return jsonify([row_to_dict(log) for log in logs])
     except Exception as e:
-        print(f"Error getting SyncErrLogs: {e}\n{traceback.format_exc()}")
+        logger.error(f"Error getting SyncErrLogs: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Failed to retrieve Sync Error Logs"}), 500
 
 
@@ -794,7 +799,7 @@ def get_field_mappings():
         mappings = session.scalars(query).all()
         return jsonify([row_to_dict(m) for m in mappings])
     except Exception as e:
-        print(f"Error getting FormFieldMappings: {e}\n{traceback.format_exc()}")
+        logger.error(f"Error getting FormFieldMappings: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Failed to retrieve Field Mappings"}), 500
 
 
@@ -818,23 +823,23 @@ def handle_jdy_webhook():
     signature_from_header = request.headers.get('X-JDY-Signature')
 
     if not all([dpt_name, db_id_str, table_name]):
-        print(f"[Webhook] 400: URL 参数不完整 (dpt, db_id, table)")
+        logger.error(f"[Webhook] 400: URL 参数不完整 (dpt, db_id, table)")
         return jsonify({"error": "Webhook URL GONE: URL (dpt, db_id, table)"}), 410  # 410 GONE 表示配置已失效
 
     try:
         db_id = int(db_id_str)
     except ValueError:
-        print(f"[Webhook] 400: db_id 必须是整数")
+        logger.error(f"[Webhook] 400: db_id 必须是整数")
         return jsonify({"error": "Webhook URL GONE: db_id must be an integer"}), 410
 
     # --- 2. [鉴权] 获取 Webhook 原始负载 ---
     try:
         raw_payload_str = request.get_data(as_text=True)
         if not raw_payload_str:
-            print(f"[Webhook] 400: 负载为空。")
+            logger.error(f"[Webhook] 400: 负载为空。")
             return jsonify({"error": "Empty payload"}), 400
     except Exception as e:
-        print(f"[Webhook] 400: 无法读取请求体: {e}")
+        logger.error(f"[Webhook] 400: 无法读取请求体: {e}")
         return jsonify({"error": "Failed to read request body"}), 400
 
     # 使用独立的 ConfigSession 处理请求
@@ -849,14 +854,14 @@ def handle_jdy_webhook():
             .where(Department.department_name == dpt_name)
         )
         if not key_info:
-            print(f"[Webhook] 404: 找不到部门 '{dpt_name}' 对应的 JdyKeyInfo")
+            logger.error(f"[Webhook] 404: 找不到部门 '{dpt_name}' 对应的 JdyKeyInfo")
             return jsonify({"error": "Webhook GONE: Department key not configured"}), 410
 
         # --- 4. [鉴权] 验证签名 ---
         # 仅在配置了 api_secret 时才执行验证
         if key_info.api_secret:
             if not all([nonce, timestamp, signature_from_header]):
-                print(f"[Webhook Auth] 400: 拒绝请求。已配置Secret，但请求缺少签名参数 (nonce/timestamp/header)。")
+                logger.error(f"[Webhook Auth] 400: 拒绝请求。已配置Secret，但请求缺少签名参数 (nonce/timestamp/header)。")
                 return jsonify({"error": "Missing signature parameters"}), 400
 
             is_valid = validate_signature(
@@ -868,7 +873,7 @@ def handle_jdy_webhook():
             )
 
             if not is_valid:
-                print(f"[Webhook Auth] 403: 签名无效 (Dept: {dpt_name})。")
+                logger.error(f"[Webhook Auth] 403: 签名无效 (Dept: {dpt_name})。")
                 # 记录日志 (但不使用 task_config)
                 log_sync_error(
                     task_config=None,
@@ -884,11 +889,11 @@ def handle_jdy_webhook():
         try:
             payload = json.loads(raw_payload_str)
         except json.JSONDecodeError:
-            print(f"[Webhook] 400: 负载不是有效的 JSON。")
+            logger.error(f"[Webhook] 400: 负载不是有效的 JSON。")
             return jsonify({"error": "Invalid JSON payload"}), 400
 
         if not payload or not payload.get('data') or not payload.get('op'):
-            print(f"[Webhook] 400: 负载无效 (op/data)")
+            logger.error(f"[Webhook] 400: 负载无效 (op/data)")
             return jsonify({"error": "Invalid payload structure"}), 400
 
         op = payload.get('op')
@@ -914,7 +919,7 @@ def handle_jdy_webhook():
         )
 
         if not task_config:
-            print(f"[Webhook] 404: 找不到激活的 jdy2db 任务 (Dept: {dpt_name}, DB_ID: {db_id}, Table: {table_name})")
+            logger.error(f"[Webhook] 404: 找不到激活的 jdy2db 任务 (Dept: {dpt_name}, DB_ID: {db_id}, Table: {table_name})")
             log_sync_error(
                 task_config=None,  # 没有 task 对象
                 error=Exception("Webhook 404"),
@@ -948,7 +953,7 @@ def handle_jdy_webhook():
         app_id_log = locals().get('payload', {}).get('appId', 'N/A')
         entry_id_log = locals().get('payload', {}).get('entryId', 'N/A')
 
-        print(f"[Webhook] 500: (App: {app_id_log}, Entry: {entry_id_log}) 处理失败: {e}\n{traceback.format_exc()}")
+        logger.error(f"[Webhook] 500: (App: {app_id_log}, Entry: {entry_id_log}) 处理失败: {e}\n{traceback.format_exc()}")
         # 尝试记录错误
         log_sync_error(
             task_config=task_config,  # task_config 可能为 None，但 log_sync_error 已处理
@@ -977,7 +982,7 @@ def get_departments():
         departments = session.scalars(query).all()
         return jsonify([row_to_dict(dept) for dept in departments])
     except Exception as e:
-        print(f"Error getting Departments: {e}\n{traceback.format_exc()}")
+        logger.error(f"Error getting Departments: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Failed to retrieve Departments"}), 500
 
 
@@ -1079,7 +1084,7 @@ def get_users():
         return jsonify(result)
 
     except Exception as e:
-        print(f"Error getting Users: {e}\n{traceback.format_exc()}")
+        logger.error(f"Error getting Users: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Failed to retrieve Users"}), 500
 
 
@@ -1214,5 +1219,5 @@ def reset_user_password(user_id):
 
     except Exception as e:
         session.rollback()
-        print(f"Error resetting password for user {user_id}: {e}\n{traceback.format_exc()}")
+        logger.error(f"Error resetting password for user {user_id}: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Failed to reset password"}), 500

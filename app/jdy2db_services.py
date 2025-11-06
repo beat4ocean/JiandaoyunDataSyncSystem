@@ -240,11 +240,11 @@ class FieldMappingService:
 
         if not all([app_id, entry_id]):
             logger.error(
-                f"task_id:[{task_id}] Task {task_id} is missing App ID or Entry ID, cannot sync field mappings.")
+                f"task_id:[{task_id}] is missing App ID or Entry ID, cannot sync field mappings.")
             return
 
         logger.info(
-            f"task_id:[{task_id}] Received data for {app_id}/{entry_id} (Task {task_id}), syncing field mappings...")
+            f"task_id:[{task_id}] Received data for {app_id}/{entry_id}, syncing field mappings...")
 
         try:
             # 1. 从 API 获取最新的“目标”字段列表
@@ -253,7 +253,7 @@ class FieldMappingService:
 
             if not api_widgets:
                 logger.warning(
-                    f"task_id:[{task_id}] Warning: API returned no field information for Task {task_id}, skipping.")
+                    f"task_id:[{task_id}] Warning: API returned no field information, skipping.")
                 # 根据需求，这里可以决定是否要删除所有现有映射
                 # config_session.query(FormFieldMapping).filter_by(app_id=app_id, entry_id=entry_id).delete()
                 # config_session.commit()
@@ -317,38 +317,38 @@ class FieldMappingService:
             # 6. 提交所有变更
             if mappings_to_add:
                 config_session.add_all(mappings_to_add)
-                logger.info(f"task_id:[{task_id}] Adding {len(mappings_to_add)} new field mappings for Task {task_id}.")
+                logger.info(f"task_id:[{task_id}] Adding {len(mappings_to_add)} new field mappings.")
             if mappings_to_delete:
                 logger.info(
-                    f"task_id:[{task_id}] Detected {len(mappings_to_delete)} deleted fields for Task {task_id}, removing from mapping.")
+                    f"task_id:[{task_id}] Detected {len(mappings_to_delete)} deleted fields, removing from mapping.")
                 for m in mappings_to_delete:
                     config_session.delete(m)
 
             # 只有在有实际变更时才 commit
             if config_session.new or config_session.dirty or config_session.deleted:
                 config_session.commit()
-                logger.info(f"task_id:[{task_id}] Field mapping sync complete for Task {task_id}.")
+                logger.info(f"task_id:[{task_id}] Field mapping sync complete.")
             else:
-                logger.info(f"task_id:[{task_id}] Field mappings are up-to-date for Task {task_id}.")
+                logger.info(f"task_id:[{task_id}] Field mappings are up-to-date.")
 
 
         except SQLAlchemyError as db_err:
             config_session.rollback()
-            logger.error(f"task_id:[{task_id}] Database error during field mapping sync for Task {task_id}: {db_err}",
+            logger.error(f"task_id:[{task_id}] Database error during field mapping sync: {db_err}",
                          exc_info=True)
             log_sync_error(
                 task_config=task_config,
                 error=db_err,
-                extra_info=f"Database error during form fields mapping sync for Task {task_id}"
+                extra_info=f"Database error during form fields mapping sync"
             )
         except Exception as e:
             config_session.rollback()
-            logger.error(f"task_id:[{task_id}] Failed to fetch or update field mappings for Task {task_id}: {e}",
+            logger.error(f"task_id:[{task_id}] Failed to fetch or update field mappings: {e}",
                          exc_info=True)
             log_sync_error(
                 task_config=task_config,
                 error=e,
-                extra_info=f"Failed to create or update form fields mapping for Task {task_id}"
+                extra_info=f"task_id:[{task_id}]Failed to create or update form fields mapping. "
             )
 
 
@@ -670,7 +670,7 @@ class Jdy2DbSyncService:
         在后台线程中执行首次全量同步。
         此方法必须是完全独立的，并创建自己的数据库会话。
         """
-        logger.info(f"task_id:[{task_id}] [Task {task_id} BG]: Background initial full sync thread started...")
+        logger.info(f"task_id:[{task_id}]: Background initial full sync thread started...")
 
         # 1. 创建此线程专用的 ConfigSession
         config_session = ConfigSession()
@@ -685,22 +685,22 @@ class Jdy2DbSyncService:
 
             if not task_config:
                 logger.error(
-                    f"task_id:[{task_id}] [Task {task_id} BG]: Task not found in background thread, thread exiting.")
+                    f"task_id:[{task_id}]: Task not found in background thread, thread exiting.")
                 return
             if not task_config.is_active:
-                logger.error(f"task_id:[{task_id}] [Task {task_id} BG]: Task is disabled, thread exiting.")
+                logger.error(f"task_id:[{task_id}]: Task is disabled, thread exiting.")
                 return
             if task_config.sync_status != 'idle':
-                logger.error(f"task_id:[{task_id}] [Task {task_id} BG]: Task is already running, thread exiting.")
+                logger.error(f"task_id:[{task_id}]: Task is already running, thread exiting.")
                 return
             if not (task_config.app_id, task_config.entry_id):
-                logger.error(f"task_id:[{task_id}] [Task {task_id} BG]: Missing app_id or entry_id, thread exiting.")
+                logger.error(f"task_id:[{task_id}]: Missing app_id or entry_id, thread exiting.")
                 return
 
             # 3. 实例化 DataApi
             if not task_config.department or not task_config.department.jdy_key_info:
                 logger.error(
-                    f"task_id:[{task_id}] [Task {task_id} BG]: Task missing department or key info, thread exiting.")
+                    f"task_id:[{task_id}]: Task missing department or key info, thread exiting.")
                 return
 
             api_key = task_config.department.jdy_key_info.api_key
@@ -716,19 +716,29 @@ class Jdy2DbSyncService:
 
             # 5. [关键] 标记首次全量已完成
             # 再次查询最新的 task_config，以防在同步期间被修改
-            task_to_update = config_session.query(SyncTask).get(task_id)
-            if task_to_update:
-                task_to_update.is_full_replace_first = False
-                config_session.commit()
-                logger.info(
-                    f"task_id:[{task_id}] [Task {task_id} BG]: Initial full sync flag (is_full_replace_first=False) updated successfully.")
-            else:
-                logger.warning(
-                    f"task_id:[{task_id}] [Task {task_id} BG]: Could not find task again when committing 'is_full_replace_first'.")
+            try:
+                task_to_update = config_session.query(SyncTask).get(task_id)
+                if task_to_update:
+                    task_to_update.is_full_replace_first = False
+                    config_session.commit()
+                    logger.info(
+                        f"task_id:[{task_id}]: Initial full sync flag (is_full_replace_first=False) updated successfully.")
+            except SQLAlchemyError as e:
+                logger.error(
+                    f"task_id:[{task_id}]: Error during commit of 'is_full_replace_first' flag: {e}",
+                    exc_info=True)
+                log_sync_error(task_config=task_config, error=e,
+                               extra_info="Error during commit of 'is_full_replace_first' flag.")
+            except Exception as e:
+                logger.error(
+                    f"task_id:[{task_id}]: Unexpected error during commit of 'is_full_replace_first' flag: {e}",
+                    exc_info=True)
+                log_sync_error(task_config=task_config, error=e,
+                               extra_info="Unexpected error during commit of 'is_full_replace_first' flag.")
 
 
         except Exception as e:
-            logger.error(f"task_id:[{task_id}] [Task {task_id} BG]: Background full sync thread failed: {e}",
+            logger.error(f"task_id:[{task_id}]: Background full sync thread failed: {e}",
                          exc_info=True)
             if config_session:
                 config_session.rollback()
@@ -736,12 +746,12 @@ class Jdy2DbSyncService:
             log_sync_error(
                 task_config=task_config,  # 传递可能已加载的 task_config
                 error=e,
-                extra_info=f"后台首次全量同步失败 (Task {task_id})"
+                extra_info=f"后台首次全量同步失败 (task_id:[{task_id}])"
             )
         finally:
             if config_session:
                 config_session.close()
-            logger.info(f"task_id:[{task_id}] [Task {task_id} BG]: Background thread exiting.")
+            logger.info(f"task_id:[{task_id}]: Background thread exiting.")
 
     # --- 数据库表结构 (DDL) ---
 
@@ -1538,7 +1548,7 @@ class Jdy2DbSyncService:
             return cleaned_data
 
         except SQLAlchemyError as e:
-            logger.error(f"task_id:[{task_id}] Failed to query mappings during data cleaning for Task {task_id}: {e}",
+            logger.error(f"task_id:[{task_id}] Failed to query mappings during data cleaning: {e}",
                          exc_info=True)
             return {}
         finally:
@@ -1575,14 +1585,13 @@ class Jdy2DbSyncService:
                 on_duplicate_stmt = stmt.on_duplicate_key_update(_id=stmt.inserted._id)  # 无意义的更新，但能触发逻辑
 
             session.execute(on_duplicate_stmt)
-            # logger.info(f"成功 Upsert 数据 (ID: {data_id}) 到表 '{table.name}'。")
+            logger.debug(f"成功 Upsert 数据 (ID: {data_id}) 到表 '{table.name}'。")
             # commit 移到 handle_webhook_data 末尾
 
         except SQLAlchemyError as e:
             logger.error(
                 f"task_id:[{task_config.id}] Failed to upsert data (ID: {data_id}) to table '{table.name}': {e}",
                 exc_info=False)
-            logger.debug(f"task_id:[{task_config.id}] Failed cleaned_data: %s", cleaned_data)
             # (rollback 和 log_sync_error 移到 handle_webhook_data 的 except 块中)
             raise  # 重新抛出，让 handle_webhook_data 捕获并回滚
         except Exception as e:
