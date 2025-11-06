@@ -77,8 +77,7 @@ class FieldMappingService:
         final_name = None
 
         # 1. 优先使用别名 (如果已设置且非默认)
-        if widget_alias and isinstance(widget_alias, str) and \
-                not (widget_alias.startswith('_widget_') and widget_alias[8:].isdigit()):
+        if widget_alias and isinstance(widget_alias, str) and not widget_alias.startswith('_widget_'):
             # 别名通常是用户自定义的，可能包含非法字符，需要清理
             final_name = widget_alias
             # logger.debug(f"使用别名: {widget_alias} -> {final_name}")
@@ -108,7 +107,7 @@ class FieldMappingService:
 
         # 添加一个最终的非空检查
         if not final_name:
-            logger.warning(f"警告：无法为 widget {widget} 生成有效的列名.")
+            logger.warning(f"Unable to generate valid column names for widget {widget}.")
             final_name = None
 
         return final_name
