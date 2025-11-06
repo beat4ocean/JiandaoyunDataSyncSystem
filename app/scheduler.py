@@ -356,7 +356,8 @@ def update_all_field_mappings_job():
             tasks_to_update = config_session.query(SyncTask).options(
                 joinedload(SyncTask.department).joinedload(Department.jdy_key_info)
             ).filter(
-                SyncTask.is_active == True
+                SyncTask.is_active == True,
+                SyncTask.sync_type == 'db2jdy'
             ).all()
 
             if not tasks_to_update:
