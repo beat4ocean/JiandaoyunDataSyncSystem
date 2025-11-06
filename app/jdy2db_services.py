@@ -707,7 +707,7 @@ class Jdy2DbSyncService:
             api_key = task_config.department.jdy_key_info.api_key
             data_api_client = DataApi(
                 api_key=api_key,
-                host=Config.JDY_API_HOST,
+                host=Config.JDY_API_BASE_URL,
                 qps=30
             )
 

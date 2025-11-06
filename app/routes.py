@@ -550,7 +550,7 @@ def add_sync_task():
             # 格式: http://<host>/api/jdy/webhook?dpt=<dept_name>&db_id=<db_id>&table=<table_name>
             # 我们使用 db_id (数字) 而不是 db_show_name (可能变化)
             # 我们使用 dpt (部门简称)
-            host_url = Config.JDY_API_HOST or request.host_url
+            host_url = Config.WEB_HOOK_BASE_URL or request.host_url
             if host_url.endswith('/'):
                 host_url = host_url.rstrip('/')
             query_params = f"dpt={quote(department.department_name)}&db_id={database_id}&table={quote(table_name)}"
@@ -675,7 +675,7 @@ def update_sync_task(task_id):
             task_to_update.label_to_pinyin = data.get('label_to_pinyin', task_to_update.label_to_pinyin)
 
             # 3.2 - 重新生成 Webhook URL
-            host_url = Config.JDY_API_HOST or request.host_url
+            host_url = Config.WEB_HOOK_BASE_URL or request.host_url
             if host_url.endswith('/'):
                 host_url = host_url.rstrip('/')
             query_params = f"dpt={quote(department.department_name)}&db_id={database_id}&table={quote(table_name)}"
@@ -935,7 +935,7 @@ def handle_jdy_webhook():
         # --- 7. 实例化 API 客户端 (用于自动创建映射) ---
         api_client = FormApi(
             api_key=key_info.api_key,
-            host=Config.JDY_API_HOST
+            host=Config.JDY_API_BASE_URL
         )
 
         # --- 8. 调用核心服务处理数据 ---

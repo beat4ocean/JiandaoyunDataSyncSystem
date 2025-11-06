@@ -101,7 +101,7 @@ class FieldMappingService:
 
         try:
             # 1. 实例化
-            form_api = FormApi(api_key=api_key, host=Config.JDY_API_HOST, qps=30)
+            form_api = FormApi(api_key=api_key, host=Config.JDY_API_BASE_URL, qps=30)
 
             # 2. 调用
             response = form_api.get_form_widgets(task.app_id, task.entry_id)
@@ -551,9 +551,9 @@ class Db2JdySyncService:
                 raise ValueError(f"task_id:[{task.id}] Field mapping is empty.")
 
             # 1. 实例化
-            data_api_query = DataApi(api_key, Config.JDY_API_HOST, qps=30)
-            data_api_delete = DataApi(api_key, Config.JDY_API_HOST, qps=10)
-            data_api_create = DataApi(api_key, Config.JDY_API_HOST, qps=10)
+            data_api_query = DataApi(api_key, Config.JDY_API_BASE_URL, qps=30)
+            data_api_delete = DataApi(api_key, Config.JDY_API_BASE_URL, qps=10)
+            data_api_create = DataApi(api_key, Config.JDY_API_BASE_URL, qps=10)
 
             # 2. 仅在 delete_first=True 时删除
             if delete_first:
@@ -763,10 +763,10 @@ class Db2JdySyncService:
                 raise ValueError(f"task_id:[{task.id}] Field mapping is empty.")
 
             # 3. 实例化
-            data_api_query = DataApi(api_key, Config.JDY_API_HOST, qps=30)
-            data_api_delete = DataApi(api_key, Config.JDY_API_HOST, qps=10)  # 用于去重
-            data_api_create = DataApi(api_key, Config.JDY_API_HOST, qps=20)  # Single create
-            data_api_update = DataApi(api_key, Config.JDY_API_HOST, qps=20)  # Single update
+            data_api_query = DataApi(api_key, Config.JDY_API_BASE_URL, qps=30)
+            data_api_delete = DataApi(api_key, Config.JDY_API_BASE_URL, qps=10)  # 用于去重
+            data_api_create = DataApi(api_key, Config.JDY_API_BASE_URL, qps=20)  # Single create
+            data_api_update = DataApi(api_key, Config.JDY_API_BASE_URL, qps=20)  # Single update
 
             # 4. 确定时间戳
             last_sync_time = task.last_sync_time or datetime(1970, 1, 1, tzinfo=TZ_UTC_8)
@@ -1057,10 +1057,10 @@ class Db2JdySyncService:
             "passwd": db_info.db_password  # (注意) quote_plus 是用于 URL的, 这里用原始密码
         }
 
-        data_api_query = DataApi(api_key, Config.JDY_API_HOST, qps=30)
-        data_api_delete = DataApi(api_key, Config.JDY_API_HOST, qps=10)  # 用于去重和删除
-        data_api_create = DataApi(api_key, Config.JDY_API_HOST, qps=20)
-        data_api_update = DataApi(api_key, Config.JDY_API_HOST, qps=20)
+        data_api_query = DataApi(api_key, Config.JDY_API_BASE_URL, qps=30)
+        data_api_delete = DataApi(api_key, Config.JDY_API_BASE_URL, qps=10)  # 用于去重和删除
+        data_api_create = DataApi(api_key, Config.JDY_API_BASE_URL, qps=20)
+        data_api_update = DataApi(api_key, Config.JDY_API_BASE_URL, qps=20)
 
         stream = None
         try:

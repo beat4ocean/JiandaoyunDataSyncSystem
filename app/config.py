@@ -68,7 +68,9 @@ class Config:
     # }
 
     # --- 简道云 API 配置 ---
-    JDY_API_HOST = os.getenv('JDY_API_HOST', 'https://api.jiandaoyun.com')
+    JDY_API_BASE_URL = os.getenv('JDY_API_BASE_URL', 'https://api.jiandaoyun.com')
+
+    WEB_HOOK_BASE_URL = os.getenv('WEB_HOOK_BASE_URL')
 
     # --- 调度器配置 ---
     CHECK_INTERVAL_MINUTES = int(os.getenv('CHECK_INTERVAL_MINUTES', 1))
@@ -87,7 +89,9 @@ DB_CONNECT_ARGS = Config.DB_CONNECT_ARGS
 
 PORT = Config.PORT
 
-JDY_API_HOST = Config.JDY_API_HOST
+JDY_API_BASE_URL = Config.JDY_API_BASE_URL
+
+WEB_HOOK_BASE_URL = Config.WEB_HOOK_BASE_URL
 
 # JDY_API_HOST = Config.JDY_API_HOST
 # BINLOG_MYSQL_SETTINGS = Config.BINLOG_MYSQL_SETTINGS

@@ -162,7 +162,7 @@ def run_jdy2db_task_wrapper(task_id: int):
             # 实例化 DataApi (用于数据查询)
             api_client = DataApi(
                 api_key=task.department.jdy_key_info.api_key,
-                host=Config.JDY_API_HOST,
+                host=Config.JDY_API_BASE_URL,
                 qps=30
             )
 
