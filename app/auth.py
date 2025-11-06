@@ -9,6 +9,10 @@ from flask_jwt_extended import (
 
 from app.models import User
 
+# 配置日志
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 # 创建认证蓝图
 auth_bp = Blueprint('auth_bp', __name__)
 
@@ -90,7 +94,7 @@ def login():
             return jsonify({"msg": "Bad username or password"}), 401
 
     except Exception as e:
-        logging.error(f"Login error: {e}")
+        logger.error(f"Login error: {e}")
         return jsonify({"msg": "Internal server error"}), 500
     finally:
         # 移除 session.close()，由 teardown_request 统一处理
@@ -133,7 +137,7 @@ def login():
 #
 #     except Exception as e:
 #         session.rollback()
-#         logging.error(f"Change password error: {e}")
+#         logger.error(f"Change password error: {e}")
 #         return jsonify({"msg": "Internal server error"}), 500
 #     finally:
 #         pass  # 移除 session.close()
@@ -172,7 +176,7 @@ def refresh():
 
         return jsonify(access_token=new_access_token), 200
     except Exception as e:
-        logging.error(f"Refresh error: {e}")
+        logger.error(f"Refresh error: {e}")
         return jsonify({"msg": "Internal server error"}), 500
     finally:
         pass  # 移除 session.close()

@@ -1,3 +1,4 @@
+import logging
 import re
 import time
 import os
@@ -14,6 +15,10 @@ from app.models import ConfigSession, Department, User
 
 # --- 将 Scoped Session 移至顶层，以修复回调函数中的引用错误 ---
 config_session_scoped = scoped_session(ConfigSession)
+
+# 配置日志
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
 def create_app():
@@ -97,7 +102,7 @@ def create_app():
     # @app.cli.command("create-admin")
     # def create_admin():
     #     """创建第一个管理员和默认部门"""
-    #     print("Creating default department and admin user...")
+    #     logger.info("Creating default department and admin user...")
     #     session = ConfigSession()
     #     try:
     #         # 1. 检查/创建默认部门
@@ -109,9 +114,9 @@ def create_app():
     #             )
     #             session.add(default_dept)
     #             session.commit()
-    #             print(f"Created default department (ID: {default_dept.id}).")
+    #             logger.info(f"Created default department (ID: {default_dept.id}).")
     #         else:
-    #             print("Default department already exists.")
+    #             logger.info("Default department already exists.")
     #
     #         # 2. 检查/创建管理员
     #         admin_user = session.query(User).filter_by(is_superuser=True, is_active=True).first()
@@ -127,13 +132,13 @@ def create_app():
     #             new_admin.set_password(admin_password)
     #             session.add(new_admin)
     #             session.commit()
-    #             # print(f"Created admin user '{admin_username}' with password '{admin_password}'.")
+    #             # logger.info(f"Created admin user '{admin_username}' with password '{admin_password}'.")
     #         # else:
-    #         #     print("Admin user already exists.")
+    #         #     logger.info("Admin user already exists.")
     #
     #     except Exception as e:
     #         session.rollback()
-    #         print(f"Error creating admin: {e}")
+    #         logger.error(f"Error creating admin: {e}")
     #     finally:
     #         session.close()
 
@@ -166,14 +171,14 @@ def create_app():
 
             except OperationalError as e:
                 last_exception = e
-                print(f"Warning: Config DB connection failed on attempt {attempt + 1}/3. Retrying in 2s...")
+                logger.warning(f"Config DB connection failed on attempt {attempt + 1}/3. Retrying in 2s...")
                 # 发生连接错误时, 显式回滚/移除会话
                 config_session_scoped.remove()
                 # source_session_scoped.remove()
                 time.sleep(2)  # 简单延迟
 
         # type如果所有重试都失败
-        print(f"CRITICAL: Failed to create Config DB session after 3 attempts: {last_exception}")
+        logger.error(f"CRITICAL: Failed to create Config DB session after 3 attempts: {last_exception}")
         abort(503, "Database connection failed.")  # 返回 JSON 错误
 
     @app.errorhandler(503)
@@ -210,5 +215,5 @@ def create_app():
             # 其他所有路径都返回 index.html
             return send_from_directory(app.static_folder, 'index.html')
 
-    print(f"Flask App created with JWT (Bearer), CORS (Port: {Config.PORT}), and static frontend serving.")
+    logger.info(f"Flask App created with JWT (Bearer), CORS (Port: {Config.PORT}), and static frontend serving.")
     return app

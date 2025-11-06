@@ -381,7 +381,7 @@ def get_dynamic_session(task: 'SyncTask') -> Generator[Any, Any, None]:
 
     # 检查缓存
     if db_id not in dynamic_engine_cache:
-        print(f"task_id:[{task.id}] Creating new dynamic engine for source DB: {db_info.db_show_name} (ID: {db_id})")
+        logger.error(f"task_id:[{task.id}] Creating new dynamic engine for source DB: {db_info.db_show_name} (ID: {db_id})")
 
         # --- 根据 db_type 构建 URL ---
         driver = get_db_driver(db_info.db_type)
@@ -473,7 +473,7 @@ def test_db_connection(db_info: Dict[str, Any]) -> (bool, str):
         return True, "数据库连接成功！"
 
     except (OperationalError, DBAPIError) as e:
-        logging.warning(f"数据库连接测试失败: {e}")
+        logger.warning(f"数据库连接测试失败: {e}")
         # 返回一个更友好的错误信息
         error_msg = str(e).split('\n')[0]
         return False, f"连接失败: {error_msg}"

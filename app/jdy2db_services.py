@@ -53,7 +53,7 @@ class FieldMappingService:
     #     #     entry_id_from_payload = payload.get('entryId')
     #     #     entry_id = entry_id_from_data or entry_id_from_payload
     #     #     form_name = f"unknown_form_{entry_id}" if entry_id else "unknown_form"
-    #     #     print(f"警告: 无法从 payload 中确定表单名称，使用默认值: {form_name}")
+    #     #     logger.warning(f"Unable to determine form name from payload; using default value: {form_name}")
     #
     #     form_pinyin_name = convert_to_pinyin(form_name)
     #     # 返回原始名称和转换后的名称
@@ -81,22 +81,22 @@ class FieldMappingService:
                 not (widget_alias.startswith('_widget_') and widget_alias[8:].isdigit()):
             # 别名通常是用户自定义的，可能包含非法字符，需要清理
             final_name = widget_alias
-            # print(f"使用别名: {widget_alias} -> {final_name}")
+            # logger.debug(f"使用别名: {widget_alias} -> {final_name}")
 
         # 2. 其次使用 label
         if not final_name and label and isinstance(label, str):
             if use_label_pinyin:
                 final_name = convert_to_pinyin(label)
-                # print(f"使用标签 (拼音): {label} -> {final_name}")
+                # logger.debug(f"使用标签 (拼音): {label} -> {final_name}")
             else:
                 final_name = label
-                # print(f"使用标签 (原文清理): {label} -> {final_name}")
+                # logger.debug(f"使用标签 (原文清理): {label} -> {final_name}")
 
         # 3. 最后备用 widgetName (字段 ID)
         if not final_name and widget_name and isinstance(widget_name, str):
             # widgetName 通常是 _widget_xxx
             final_name = widget_name
-            # print(f"使用 Widget Name: {widget_name} -> {final_name}")
+            # logger.debug(f"使用 Widget Name: {widget_name} -> {final_name}")
 
         # 4. 清理 final_name 中的非法字符
         if final_name:
@@ -108,7 +108,7 @@ class FieldMappingService:
 
         # 添加一个最终的非空检查
         if not final_name:
-            print(f"警告：无法为 widget {widget} 生成有效的列名.")
+            logger.warning(f"警告：无法为 widget {widget} 生成有效的列名.")
             final_name = None
 
         return final_name
@@ -146,44 +146,45 @@ class FieldMappingService:
         # 1. 优先根据简道云的字段类型进行映射
         if type and type in JDY_TYPE_TO_SQLALCHEMY_CLASS:
             sql_type_class = JDY_TYPE_TO_SQLALCHEMY_CLASS[type]
-            # print(f"JDY Type '{jdy_type}' mapped to {sql_type_class.__name__}")
+            # logger.debug(f"JDY Type '{jdy_type}' mapped to {sql_type_class.__name__}")
 
         # 2. 如果类型映射成功，但需要根据值调整 (例如 String vs Text)
         if sql_type_class:
             if sql_type_class in (Text, String) and isinstance(data_value, str):
                 if len(data_value) > 65535:
-                    # print(f"Value length > 65535, promoting to LONGTEXT")
+                    # logger.debug(f"Value length > 65535, promoting to LONGTEXT")
                     return LONGTEXT()
                 elif len(data_value) > 1024:
-                    # print(f"Value length > 1024, promoting to TEXT")
+                    # logger.debug(f"Value length > 1024, promoting to TEXT")
                     return Text()
                 else:
-                    # print(f"Value fits in String(1024)")
+                    # logger.debug(f"Value fits in String(1024)")
                     # For serial_number, radiogroup, combo, allow longer String if needed, e.g., String(255)
                     # Adjust based on expected max length for these types
                     return String(1024)
 
             elif sql_type_class is Float and isinstance(data_value, int):
                 # Allow integers to be stored in Float columns
-                # print("Integer value for Float type, allowed.")
+                # logger.debug("Integer value for Float type, allowed.")
                 return Float()
 
             elif sql_type_class is BigInteger and isinstance(data_value, (int, str)):
                 # Allow potential string representation of big integers
                 try:
                     int(data_value)  # Check if convertible
-                    # print("String/Int value for BigInteger type, allowed.")
+                    # logger.debug("String/Int value for BigInteger type, allowed.")
                     return BigInteger()
                 except (ValueError, TypeError):
-                    print(f"警告：值 '{data_value}' 无法转换为 BigInteger，将使用 Text。")
+                    logger.warning(
+                        f"Value '{data_value}' cannot be converted to BigInteger; Text will be used instead.")
                     return Text()  # Fallback if value cannot be converted
             # If type is mapped and doesn't need value adjustment, return instance
-            # print(f"Returning instance: {sql_type_class.__name__}()")
+            # logger.debug(f"Returning instance: {sql_type_class.__name__}()")
 
             return sql_type_class()  # 修正：返回实例
 
         # 3. 如果没有提供简道云类型或类型未知，则回退到基于值的推断
-        # print(f"No JDY type or unknown type '{jdy_type}', inferring from value type: {type(data_value).__name__}")
+        # logger.debug(f"No JDY type or unknown type '{jdy_type}', inferring from value type: {type(data_value).__name__}")
         if isinstance(data_value, bool):
             return Boolean()
         if isinstance(data_value, int):
@@ -220,7 +221,7 @@ class FieldMappingService:
             return String(1024)  # Default string length
 
         # Default fallback for unknown types
-        # print("Unknown value type, falling back to Text()")
+        # logger.info("Unknown value type, falling back to Text()")
         return Text()
 
     @retry()
@@ -253,7 +254,7 @@ class FieldMappingService:
 
             if not api_widgets:
                 logger.warning(
-                    f"task_id:[{task_id}] Warning: API returned no field information, skipping.")
+                    f"task_id:[{task_id}] API returned no field information, skipping.")
                 # 根据需求，这里可以决定是否要删除所有现有映射
                 # config_session.query(FormFieldMapping).filter_by(app_id=app_id, entry_id=entry_id).delete()
                 # config_session.commit()
@@ -597,7 +598,7 @@ class Jdy2DbSyncService:
                 # 如果是 data_remove 且表不存在，则无需操作
                 if table is None and op == 'data_remove':
                     logger.warning(
-                        f"task_id:[{task_config.id}] Warning: Received data_remove operation, but table '{table_name}' does not exist. Skipping...")
+                        f"task_id:[{task_config.id}] Received data_remove operation, but table '{table_name}' does not exist. Skipping...")
                     return
 
                 # --- 动态会话 DML ---
@@ -817,7 +818,7 @@ class Jdy2DbSyncService:
             if not id_column_added:
                 final_columns.insert(0, Column('_id', String(50), unique=True, comment='唯一索引id'))
                 logger.warning(
-                    f"task_id:[{task_config.id}] Warning: '_id' field not found in data samples for table '{table_name}', auto-adding as unique key.")
+                    f"task_id:[{task_config.id}] '_id' field not found in data samples for table '{table_name}', auto-adding as unique key.")
 
             # 确保列名不重复 (理论上 get_column_definitions 应该处理了)
             final_column_names = {c.name for c in final_columns}
@@ -1127,7 +1128,7 @@ class Jdy2DbSyncService:
                     for col_name, col_info in all_new_columns.items():
                         if not col_name or not col_name.strip():  # 再次检查
                             logger.warning(
-                                f"task_id:[{task_config.id}] Warning: Empty column name detected again, skipping before executing SQL.")
+                                f"task_id:[{task_config.id}] Empty column name detected again, skipping before executing SQL.")
                             continue
 
                         # 使用 get_sql_type 获取 SQLAlchemy 类型实例
@@ -1560,13 +1561,13 @@ class Jdy2DbSyncService:
         """插入或更新单条数据 (使用 ON DUPLICATE KEY UPDATE 增强)"""
         cleaned_data = self.clean_data_for_db(table, data, task_config)
         if not cleaned_data:
-            logger.warning(f"task_id:[{task_config.id}] Warning: Cleaned data is empty, nothing to sync.")
+            logger.warning(f"task_id:[{task_config.id}] Cleaned data is empty, nothing to sync.")
             return
 
         data_id = cleaned_data.get('_id')
         if not data_id:
             logger.warning(
-                f"task_id:[{task_config.id}] Warning: Data missing '_id', cannot perform upsert operation. Data: %s",
+                f"task_id:[{task_config.id}] Data missing '_id', cannot perform upsert operation. Data: %s",
                 json.dumps(data, ensure_ascii=False, default=str))
             return
 
@@ -1605,7 +1606,7 @@ class Jdy2DbSyncService:
         """根据 _id 删除数据"""
         data_id = data.get('_id')
         if not data_id:
-            logger.warning(f"task_id:[{task_config.id}] Warning: Data for delete operation missing '_id'. Data: %s",
+            logger.warning(f"task_id:[{task_config.id}] Data for delete operation missing '_id'. Data: %s",
                            json.dumps(data, ensure_ascii=False, default=str))
             return
 
@@ -1616,7 +1617,7 @@ class Jdy2DbSyncService:
             # (commit 移到 handle_webhook_data 的 with 块末尾)
             if result.rowcount == 0:
                 logger.warning(
-                    f"task_id:[{task_config.id}] Warning: Attempted to delete data (_id: {data_id}), but not found in database.")
+                    f"task_id:[{task_config.id}] Attempted to delete data (_id: {data_id}), but not found in database.")
             else:
                 logger.debug(
                     f"task_id:[{task_config.id}] Successfully deleted data (_id: {data_id}) from '{table.name}'.")

@@ -1,7 +1,12 @@
+import logging
 import os
 from urllib.parse import quote_plus
 
 from dotenv import load_dotenv
+
+# 配置日志
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # 加载 .env 文件
 basedir = os.path.abspath(os.path.dirname(__file__))
@@ -9,7 +14,7 @@ env_path = os.path.join(basedir, '..', '.env')
 if os.path.exists(env_path):
     load_dotenv(env_path)
 else:
-    print(f"Warning: .env file not found at {env_path}")
+    logger.warning(f".env file not found at {env_path}")
 
 
 class Config:

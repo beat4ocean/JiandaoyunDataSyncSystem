@@ -114,7 +114,7 @@ class FieldMappingService:
                 try:
                     data_modify_time = datetime.fromisoformat(data_modify_time_str.replace('Z', '+00:00'))
                 except ValueError:
-                    logger.info(f"task_id:[{task.id}] Warning: Could not parse dataModifyTime '{data_modify_time_str}'.")
+                    logger.warning(f"task_id:[{task.id}] Could not parse dataModifyTime '{data_modify_time_str}'.")
 
             if not widgets:
                 logger.info(f"task_id:[{task.id}] No widgets found for form.")
