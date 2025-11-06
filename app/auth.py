@@ -29,7 +29,7 @@ auth_bp = Blueprint('auth_bp', __name__)
 #     def wrapper(*args, **kwargs):
 #         claims = get_jwt()
 #         if not claims.get('is_superuser', False):
-#             return jsonify({"msg": "Admins only!"}), 403
+#             return jsonify({"msg": "仅限管理员访问！"}), 403
 #         return fn(*args, **kwargs)
 #
 #     return wrapper
@@ -47,7 +47,7 @@ def login():
     password = data.get('password')
 
     if not username or not password:
-        return jsonify({"msg": "Missing username or password"}), 400
+        return jsonify({"msg": "缺少用户名或密码"}), 400
 
     # --- 不在此处创建会话 ---
     # session = ConfigSession()
@@ -59,7 +59,7 @@ def login():
 
         if user and user.check_password(password):
             if not user.is_active:
-                return jsonify({"msg": "User account is disabled"}), 401
+                return jsonify({"msg": "用户账户已被禁用"}), 401
 
             # JWT 的 identity 必须是字符串
             identity = str(user.id)
@@ -91,11 +91,11 @@ def login():
                 department_name=additional_claims["department_name"]
             ), 200
         else:
-            return jsonify({"msg": "Bad username or password"}), 401
+            return jsonify({"msg": "用户名或密码错误"}), 401
 
     except Exception as e:
         logger.error(f"Login error: {e}")
-        return jsonify({"msg": "Internal server error"}), 500
+        return jsonify({"msg": "服务器内部错误"}), 500
     finally:
         # 移除 session.close()，由 teardown_request 统一处理
         pass
@@ -112,33 +112,33 @@ def login():
 #     new_password = data.get('new_password')
 #
 #     if not old_password or not new_password:
-#         return jsonify({"msg": "Missing old or new password"}), 400
+#         return jsonify({"msg": "缺少旧密码或新密码"}), 400
 #
 #     # 从 JWT 的 identity 中获取 user_id (这将是一个字符串)
 #     user_id = get_jwt_identity()
 #     if not user_id:
-#         return jsonify({"msg": "Invalid token identity"}), 401
+#         return jsonify({"msg": "令牌身份无效"}), 401
 #
 #     session = g.config_session  # 使用 g.config_session
 #     try:
 #         # session.get() 可以处理字符串 '1'
 #         user = session.query(User).get(user_id)
 #         if not user:
-#             return jsonify({"msg": "User not found"}), 404
+#             return jsonify({"msg": "用户不存在"}), 404
 #
 #         # 检查是否是超管在修改自己的密码 (超管也应通过此路由修改自己的密码)
 #         # 检查旧密码
 #         if user.check_password(old_password):
 #             user.set_password(new_password)
 #             session.commit()
-#             return jsonify({"msg": "Password updated successfully"}), 200
+#             return jsonify({"msg": "密码更新成功"}), 200
 #         else:
-#             return jsonify({"msg": "Invalid old password"}), 401
+#             return jsonify({"msg": "旧密码错误"}), 401
 #
 #     except Exception as e:
 #         session.rollback()
 #         logger.error(f"Change password error: {e}")
-#         return jsonify({"msg": "Internal server error"}), 500
+#         return jsonify({"msg": "服务器内部错误"}), 500
 #     finally:
 #         pass  # 移除 session.close()
 
@@ -157,7 +157,7 @@ def refresh():
         # 重新获取用户信息来填充 Access Token 的 claims
         user = session.query(User).get(identity)
         if not user or not user.is_active:
-            return jsonify({"msg": "User not found or inactive"}), 401
+            return jsonify({"msg": "用户不存在或已被禁用"}), 401
 
         additional_claims = {
             "user_id": user.id,
@@ -177,7 +177,7 @@ def refresh():
         return jsonify(access_token=new_access_token), 200
     except Exception as e:
         logger.error(f"Refresh error: {e}")
-        return jsonify({"msg": "Internal server error"}), 500
+        return jsonify({"msg": "服务器内部错误"}), 500
     finally:
         pass  # 移除 session.close()
 

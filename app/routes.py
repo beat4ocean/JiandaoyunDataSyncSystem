@@ -77,7 +77,7 @@ def superuser_required(fn):
     @wraps(fn)  # 保持函数元信息
     def wrapper(*args, **kwargs):
         if not current_user or not current_user.is_superuser:
-            return jsonify({"error": "Permission denied: Superuser required"}), 403
+            return jsonify({"error": "权限不足：需要超级管理员权限"}), 403
         return fn(*args, **kwargs)
 
     return wrapper
@@ -118,7 +118,7 @@ def get_databases():
 
     except Exception as e:
         logger.error(f"Error getting Databases: {e}\n{traceback.format_exc()}")
-        return jsonify({"error": "Failed to retrieve Databases"}), 500
+        return jsonify({"error": "获取数据库配置失败"}), 500
 
 
 @api_bp.route('/databases', methods=['POST'])
@@ -174,7 +174,7 @@ def add_database():
     except Exception as e:
         session.rollback()
         logger.error(f"Error adding Database: {e}\n{traceback.format_exc()}")
-        return jsonify({"error": "Failed to add Database"}), 500
+        return jsonify({"error": "添加数据库配置失败"}), 500
 
 
 @api_bp.route('/databases/<int:db_id>', methods=['PUT'])
@@ -194,7 +194,7 @@ def update_database(db_id):
 
         db_to_update = session.scalar(query)
         if not db_to_update:
-            return jsonify({"error": "Database not found or permission denied"}), 404
+            return jsonify({"error": "数据库不存在或权限不足"}), 404
 
         # 2. 租户ID处理
         if current_user.is_superuser:
@@ -229,7 +229,7 @@ def update_database(db_id):
     except Exception as e:
         session.rollback()
         logger.error(f"Error updating Database {db_id}: {e}\n{traceback.format_exc()}")
-        return jsonify({"error": "Failed to update Database"}), 500
+        return jsonify({"error": "更新数据库配置失败"}), 500
 
 
 @api_bp.route('/databases/<int:db_id>', methods=['DELETE'])
@@ -245,12 +245,12 @@ def delete_database(db_id):
 
         db_to_delete = session.scalar(query)
         if not db_to_delete:
-            return jsonify({"error": "Database not found or permission denied"}), 404
+            return jsonify({"error": "数据库不存在或权限不足"}), 404
 
         # 2. 执行删除
         session.delete(db_to_delete)
         session.commit()
-        return jsonify({"message": "Database deleted successfully"})
+        return jsonify({"message": "数据库配置删除成功"})
 
     except IntegrityError:
         session.rollback()
@@ -259,7 +259,7 @@ def delete_database(db_id):
     except Exception as e:
         session.rollback()
         logger.error(f"Error deleting Database {db_id}: {e}\n{traceback.format_exc()}")
-        return jsonify({"error": "Failed to delete Database"}), 500
+        return jsonify({"error": "删除数据库配置失败"}), 500
 
 
 @api_bp.route('/databases/test', methods=['POST'])
@@ -316,7 +316,7 @@ def get_jdy_keys():
         return jsonify(result)
     except Exception as e:
         logger.error(f"Error getting JdyKeyInfo: {e}\n{traceback.format_exc()}")
-        return jsonify({"error": "Failed to retrieve JdyKeyInfo"}), 500
+        return jsonify({"error": "获取密钥列表失败"}), 500
 
 
 @api_bp.route('/jdy-keys', methods=['POST'])
@@ -350,7 +350,7 @@ def add_jdy_key():
     except Exception as e:
         session.rollback()
         logger.error(f"Error adding JdyKeyInfo: {e}\n{traceback.format_exc()}")
-        return jsonify({"error": "Failed to add JdyKeyInfo"}), 500
+        return jsonify({"error": "添加密钥失败"}), 500
 
 
 @api_bp.route('/jdy-keys/<int:key_id>', methods=['PUT'])
@@ -366,7 +366,7 @@ def update_jdy_key(key_id):
 
         key_to_update = session.scalar(query)
         if not key_to_update:
-            return jsonify({"error": "JdyKeyInfo not found or permission denied"}), 404
+            return jsonify({"error": "密钥不存在或权限不足"}), 404
 
         if current_user.is_superuser:
             key_to_update.department_id = data.get('department_id', key_to_update.department_id)
@@ -380,11 +380,11 @@ def update_jdy_key(key_id):
         return jsonify(row_to_dict(key_to_update, include_relations={'department': ['department_name']}))
     except IntegrityError:
         session.rollback()
-        return jsonify({"error": "Department ID 冲突"}), 409
+        return jsonify({"error": "部门ID冲突"}), 409
     except Exception as e:
         session.rollback()
         logger.error(f"Error updating JdyKeyInfo: {e}\n{traceback.format_exc()}")
-        return jsonify({"error": "Failed to update JdyKeyInfo"}), 500
+        return jsonify({"error": "更新密钥失败"}), 500
 
 
 @api_bp.route('/jdy-keys/<int:key_id>', methods=['DELETE'])
@@ -399,18 +399,18 @@ def delete_jdy_key(key_id):
 
         key_to_delete = session.scalar(query)
         if not key_to_delete:
-            return jsonify({"error": "JdyKeyInfo not found or permission denied"}), 404
+            return jsonify({"error": "密钥不存在或权限不足"}), 404
 
         session.delete(key_to_delete)
         session.commit()
-        return jsonify({"message": "JdyKeyInfo deleted successfully"})
+        return jsonify({"message": "密钥删除成功"})
     except IntegrityError:
         session.rollback()
         return jsonify({"error": "无法删除：此密钥可能正被一个或多个同步任务的部门使用。"}), 409
     except Exception as e:
         session.rollback()
         logger.error(f"Error deleting JdyKeyInfo: {e}\n{traceback.format_exc()}")
-        return jsonify({"error": "Failed to delete JdyKeyInfo"}), 500
+        return jsonify({"error": "删除密钥失败"}), 500
 
 
 # --- 3. 任务管理 (SyncTask) (重构) ---
@@ -460,7 +460,7 @@ def get_sync_tasks():
         return jsonify(result)
     except Exception as e:
         logger.error(f"Error getting SyncTasks: {e}\n{traceback.format_exc()}")
-        return jsonify({"error": "Failed to retrieve Sync Tasks"}), 500
+        return jsonify({"error": "获取同步任务列表失败"}), 500
 
 
 @api_bp.route('/sync-tasks', methods=['POST'])
@@ -480,7 +480,7 @@ def add_sync_task():
                 return jsonify({"error": "超级管理员必须指定 department_id"}), 400
             department = session.get(Department, department_id)
             if not department:
-                return jsonify({"error": "指定的 Department not found"}), 404
+                return jsonify({"error": "指定的部门不存在"}), 404
         else:
             department_id = current_user.department_id
             department = current_user.department  # 已从 current_user 加载
@@ -495,7 +495,7 @@ def add_sync_task():
             db_query = db_query.where(Database.department_id == department_id)
         source_db = session.scalar(db_query)
         if not source_db:
-            return jsonify({"error": "Database not found or permission denied"}), 400
+            return jsonify({"error": "数据库不存在或权限不足"}), 400
 
         # --- 3. 解析通用字段 ---
         sync_type = data.get('sync_type')
@@ -583,7 +583,7 @@ def add_sync_task():
     except Exception as e:
         session.rollback()
         logger.error(f"Error adding SyncTask: {e}\n{traceback.format_exc()}")
-        return jsonify({"error": f"Failed to add SyncTask: {e}"}), 500
+        return jsonify({"error": f"添加同步任务失败: {e}"}), 500
 
 
 @api_bp.route('/sync-tasks/<int:task_id>', methods=['PUT'])
@@ -603,7 +603,7 @@ def update_sync_task(task_id):
 
         task_to_update = session.scalar(query)
         if not task_to_update:
-            return jsonify({"error": "SyncTask not found or permission denied"}), 404
+            return jsonify({"error": "同步任务不存在或权限不足"}), 404
 
         # --- 2. 确定租户 ID 和对象 ---
         department_id = task_to_update.department_id
@@ -612,7 +612,7 @@ def update_sync_task(task_id):
 
         department = session.get(Department, department_id)
         if not department:
-            return jsonify({"error": "Department not found"}), 404
+            return jsonify({"error": "部门不存在"}), 404
 
         task_to_update.department_id = department_id
 
@@ -624,7 +624,7 @@ def update_sync_task(task_id):
             db_query = db_query.where(Database.department_id == department_id)
         source_db = session.scalar(db_query)
         if not source_db:
-            return jsonify({"error": "Database not found or permission denied for this department"}), 400
+            return jsonify({"error": "数据库不存在或该部门权限不足"}), 400
 
         # (不允许修改 sync_type)
         sync_type = task_to_update.sync_type
@@ -708,7 +708,7 @@ def update_sync_task(task_id):
     except Exception as e:
         session.rollback()
         logger.error(f"task_id:[{task_id}] Error updating SyncTask: {e}\n{traceback.format_exc()}")
-        return jsonify({"error": f"Failed to update SyncTask: {e}"}), 500
+        return jsonify({"error": f"更新同步任务失败: {e}"}), 500
 
 
 @api_bp.route('/sync-tasks/<int:task_id>', methods=['DELETE'])
@@ -724,7 +724,7 @@ def delete_sync_task(task_id):
 
         task_to_delete = session.scalar(query)
         if not task_to_delete:
-            return jsonify({"error": "SyncTask not found or permission denied"}), 404
+            return jsonify({"error": "同步任务不存在或权限不足"}), 404
 
         # 2. 通知调度器 (在删除数据库记录之前)
         remove_task_from_scheduler(task_id)
@@ -733,11 +733,11 @@ def delete_sync_task(task_id):
         session.delete(task_to_delete)
         session.commit()
 
-        return jsonify({"message": "SyncTask deleted successfully"})
+        return jsonify({"message": "同步任务删除成功"})
     except Exception as e:
         session.rollback()
         logger.error(f"task_id:[{task_id}] Error deleting SyncTask: {e}\n{traceback.format_exc()}")
-        return jsonify({"error": "Failed to delete SyncTask"}), 500
+        return jsonify({"error": "删除同步任务失败"}), 500
 
 
 # --- 4. 日志管理 (SyncErrLog) ---
@@ -745,7 +745,7 @@ def delete_sync_task(task_id):
 @api_bp.route('/sync-logs', methods=['GET'])
 @jwt_required()
 def get_sync_logs():
-    """获取错误日志 (已支持 sync_type)"""
+    """获取错误日志"""
     session = g.config_session
     try:
         limit = request.args.get('limit', 100, type=int)
@@ -773,7 +773,7 @@ def get_sync_logs():
         return jsonify([row_to_dict(log) for log in logs])
     except Exception as e:
         logger.error(f"Error getting SyncErrLogs: {e}\n{traceback.format_exc()}")
-        return jsonify({"error": "Failed to retrieve Sync Error Logs"}), 500
+        return jsonify({"error": "获取同步错误日志失败"}), 500
 
 
 # --- 5. 字段映射 (FormFieldMapping) ---
@@ -786,7 +786,7 @@ def get_field_mappings():
     try:
         task_id = request.args.get('task_id')
         if not task_id:
-            return jsonify({"error": "task_id is required"}), 400
+            return jsonify({"error": "task_id 为必填项"}), 400
 
         query = select(FormFieldMapping).where(FormFieldMapping.task_id == task_id)
 
@@ -794,13 +794,13 @@ def get_field_mappings():
         if not current_user.is_superuser:
             task_owner_id = session.scalar(select(SyncTask.department_id).where(SyncTask.id == task_id))
             if task_owner_id != current_user.department_id:
-                return jsonify({"error": "Permission denied for this task"}), 403
+                return jsonify({"error": "无权访问此任务"}), 403
 
         mappings = session.scalars(query).all()
         return jsonify([row_to_dict(m) for m in mappings])
     except Exception as e:
         logger.error(f"Error getting FormFieldMappings: {e}\n{traceback.format_exc()}")
-        return jsonify({"error": "Failed to retrieve Field Mappings"}), 500
+        return jsonify({"error": "获取字段映射失败"}), 500
 
 
 # --- 6. 简道云 Webhook 接收端点 ---
@@ -824,23 +824,23 @@ def handle_jdy_webhook():
 
     if not all([dpt_name, db_id_str, table_name]):
         logger.error(f"[Webhook] 400: URL 参数不完整 (dpt, db_id, table)")
-        return jsonify({"error": "Webhook URL GONE: URL (dpt, db_id, table)"}), 410  # 410 GONE 表示配置已失效
+        return jsonify({"error": "Webhook URL 已失效: URL (dpt, db_id, table)"}), 410  # 410 GONE 表示配置已失效
 
     try:
         db_id = int(db_id_str)
     except ValueError:
         logger.error(f"[Webhook] 400: db_id 必须是整数")
-        return jsonify({"error": "Webhook URL GONE: db_id must be an integer"}), 410
+        return jsonify({"error": "Webhook URL 已失效: db_id 必须是整数"}), 410
 
     # --- 2. [鉴权] 获取 Webhook 原始负载 ---
     try:
         raw_payload_str = request.get_data(as_text=True)
         if not raw_payload_str:
             logger.error(f"[Webhook] 400: 负载为空。")
-            return jsonify({"error": "Empty payload"}), 400
+            return jsonify({"error": "负载为空"}), 400
     except Exception as e:
         logger.error(f"[Webhook] 400: 无法读取请求体: {e}")
-        return jsonify({"error": "Failed to read request body"}), 400
+        return jsonify({"error": "读取请求体失败"}), 400
 
     # 使用独立的 ConfigSession 处理请求
     session = ConfigSession()
@@ -855,14 +855,14 @@ def handle_jdy_webhook():
         )
         if not key_info:
             logger.error(f"[Webhook] 404: 找不到部门 '{dpt_name}' 对应的 JdyKeyInfo")
-            return jsonify({"error": "Webhook GONE: Department key not configured"}), 410
+            return jsonify({"error": "Webhook 已失效: 部门密钥未配置"}), 410
 
         # --- 4. [鉴权] 验证签名 ---
         # 仅在配置了 api_secret 时才执行验证
         if key_info.api_secret:
             if not all([nonce, timestamp, signature_from_header]):
                 logger.error(f"[Webhook Auth] 400: 拒绝请求。已配置Secret，但请求缺少签名参数 (nonce/timestamp/header)。")
-                return jsonify({"error": "Missing signature parameters"}), 400
+                return jsonify({"error": "缺少签名参数"}), 400
 
             is_valid = validate_signature(
                 nonce=nonce,
@@ -877,11 +877,11 @@ def handle_jdy_webhook():
                 # 记录日志 (但不使用 task_config)
                 log_sync_error(
                     task_config=None,
-                    error=Exception("Invalid Signature"),
+                    error=Exception("无效签名"),
                     payload={"raw_payload": raw_payload_str[:500]},  # 避免 payload 过大
                     extra_info=f"Webhook 签名验证失败 (Dept: {dpt_name}, DB: {db_id}, Table: {table_name})"
                 )
-                return jsonify({"error": "Invalid signature"}), 403
+                return jsonify({"error": "签名无效"}), 403
 
         # (鉴权通过或未配置Secret)
 
@@ -890,11 +890,11 @@ def handle_jdy_webhook():
             payload = json.loads(raw_payload_str)
         except json.JSONDecodeError:
             logger.error(f"[Webhook] 400: 负载不是有效的 JSON。")
-            return jsonify({"error": "Invalid JSON payload"}), 400
+            return jsonify({"error": "无效的 JSON 负载"}), 400
 
         if not payload or not payload.get('data') or not payload.get('op'):
             logger.error(f"[Webhook] 400: 负载无效 (op/data)")
-            return jsonify({"error": "Invalid payload structure"}), 400
+            return jsonify({"error": "负载结构无效"}), 400
 
         op = payload.get('op')
         data = payload.get('data')
@@ -919,14 +919,15 @@ def handle_jdy_webhook():
         )
 
         if not task_config:
-            logger.error(f"[Webhook] 404: 找不到激活的 jdy2db 任务 (Dept: {dpt_name}, DB_ID: {db_id}, Table: {table_name})")
+            logger.error(
+                f"[Webhook] 404: 找不到激活的 jdy2db 任务 (Dept: {dpt_name}, DB_ID: {db_id}, Table: {table_name})")
             log_sync_error(
                 task_config=None,  # 没有 task 对象
                 error=Exception("Webhook 404"),
                 payload=payload,
                 extra_info=f"找不到激活的 jdy2db 任务 (Dept: {dpt_name}, DB_ID: {db_id}, Table: {table_name})"
             )
-            return jsonify({"error": "Webhook GONE: No active matching task found"}), 410
+            return jsonify({"error": "Webhook 已失效: 未找到匹配的激活任务"}), 410
 
         # --- 7. 实例化 API 客户端 (用于自动创建映射) ---
         api_client = FormApi(
@@ -945,7 +946,7 @@ def handle_jdy_webhook():
         )
 
         # 根据开发指南，返回 2xx 状态码
-        return jsonify({"code": 0, "msg": "success"}), 200
+        return jsonify({"code": 0, "msg": "成功"}), 200
 
     except Exception as e:
         session.rollback()
@@ -953,7 +954,8 @@ def handle_jdy_webhook():
         app_id_log = locals().get('payload', {}).get('appId', 'N/A')
         entry_id_log = locals().get('payload', {}).get('entryId', 'N/A')
 
-        logger.error(f"[Webhook] 500: (App: {app_id_log}, Entry: {entry_id_log}) 处理失败: {e}\n{traceback.format_exc()}")
+        logger.error(
+            f"[Webhook] 500: (App: {app_id_log}, Entry: {entry_id_log}) 处理失败: {e}\n{traceback.format_exc()}")
         # 尝试记录错误
         log_sync_error(
             task_config=task_config,  # task_config 可能为 None，但 log_sync_error 已处理
@@ -962,10 +964,10 @@ def handle_jdy_webhook():
             extra_info="Webhook 处理器发生意外错误"
         )
         # 即使发生错误，也可能需要返回 2xx 以避免简道云重试
-        return jsonify({"error": "Internal server error"}), 500
+        return jsonify({"error": "服务器内部错误"}), 500
         # # 根据开发指南，"直接响应成功，不要响应为失败"
         # # 即使发生错误，也返回 2xx 状态码
-        # return jsonify({"code": 0, "msg": "success (internal error logged)"}), 200
+        # return jsonify({"code": 0, "msg": "成功 (内部错误已记录)"}), 200
     finally:
         session.close()
 
@@ -983,7 +985,7 @@ def get_departments():
         return jsonify([row_to_dict(dept) for dept in departments])
     except Exception as e:
         logger.error(f"Error getting Departments: {e}\n{traceback.format_exc()}")
-        return jsonify({"error": "Failed to retrieve Departments"}), 500
+        return jsonify({"error": "获取部门列表失败"}), 500
 
 
 @api_bp.route('/departments', methods=['POST'])
@@ -993,7 +995,7 @@ def add_department():
     data = request.get_json()
     session = g.config_session
     if not data or not data.get('department_name'):
-        return jsonify({"error": "department_name is required"}), 400
+        return jsonify({"error": "department_name 为必填项"}), 400
 
     try:
         new_dept = Department(
@@ -1005,10 +1007,10 @@ def add_department():
         return jsonify(row_to_dict(new_dept)), 201
     except IntegrityError:
         session.rollback()
-        return jsonify({"error": "Department name (department_name) already exists"}), 409
+        return jsonify({"error": "部门名称已存在"}), 409
     except Exception as e:
         session.rollback()
-        return jsonify({"error": f"Failed to add Department: {e}"}), 500
+        return jsonify({"error": f"添加部门失败: {e}"}), 500
 
 
 @api_bp.route('/departments/<int:dept_id>', methods=['PUT'])
@@ -1020,7 +1022,7 @@ def update_department(dept_id):
     try:
         dept = session.get(Department, dept_id)
         if not dept:
-            return jsonify({"error": "Department not found"}), 404
+            return jsonify({"error": "部门不存在"}), 404
 
         dept.department_name = data.get('department_name', dept.department_name)
         dept.is_active = data.get('is_active', dept.is_active)
@@ -1029,10 +1031,10 @@ def update_department(dept_id):
         return jsonify(row_to_dict(dept))
     except IntegrityError:
         session.rollback()
-        return jsonify({"error": "Department name already exists"}), 409
+        return jsonify({"error": "部门名称已存在"}), 409
     except Exception as e:
         session.rollback()
-        return jsonify({"error": f"Failed to update Department: {e}"}), 500
+        return jsonify({"error": f"更新部门失败: {e}"}), 500
 
 
 @api_bp.route('/departments/<int:dept_id>', methods=['DELETE'])
@@ -1043,22 +1045,22 @@ def delete_department(dept_id):
     try:
         dept = session.get(Department, dept_id)
         if not dept:
-            return jsonify({"error": "Department not found"}), 404
+            return jsonify({"error": "部门不存在"}), 404
 
         # 检查是否有用户关联
         user_count = session.query(User).filter(User.department_id == dept_id).count()
         if user_count > 0:
-            return jsonify({"error": "Cannot delete department: Users are still associated with it"}), 409
+            return jsonify({"error": "无法删除部门：仍有用户与此部门关联"}), 409
 
         session.delete(dept)
         session.commit()
-        return jsonify({"message": "Department deleted successfully"})
+        return jsonify({"message": "部门删除成功"})
     except IntegrityError:
         session.rollback()
-        return jsonify({"error": "Cannot delete: Department is in use (e.g., by tasks or keys)"}), 409
+        return jsonify({"error": "无法删除：部门正在使用中（例如，被任务或密钥使用）"}), 409
     except Exception as e:
         session.rollback()
-        return jsonify({"error": f"Failed to delete Department: {e}"}), 500
+        return jsonify({"error": f"删除部门失败: {e}"}), 500
 
 
 # --- 8. 用户管理 (User) ---
@@ -1085,7 +1087,7 @@ def get_users():
 
     except Exception as e:
         logger.error(f"Error getting Users: {e}\n{traceback.format_exc()}")
-        return jsonify({"error": "Failed to retrieve Users"}), 500
+        return jsonify({"error": "获取用户列表失败"}), 500
 
 
 @api_bp.route('/users', methods=['POST'])
@@ -1096,13 +1098,13 @@ def add_user():
     session = g.config_session
 
     if not data or not data.get('username') or not data.get('password') or not data.get('department_id'):
-        return jsonify({"error": "username, password, and department_id are required"}), 400
+        return jsonify({"error": "用户名、密码和 部门ID 为必填项"}), 400
 
     try:
         # 检查部门是否存在
         dept = session.get(Department, data.get('department_id'))
         if not dept:
-            return jsonify({"error": "Specified department_id not found"}), 404
+            return jsonify({"error": "指定的 部门ID 不存在"}), 404
 
         new_user = User(
             username=data.get('username'),
@@ -1120,10 +1122,10 @@ def add_user():
 
     except IntegrityError:
         session.rollback()
-        return jsonify({"error": "Username already exists"}), 409
+        return jsonify({"error": "用户名已存在"}), 409
     except Exception as e:
         session.rollback()
-        return jsonify({"error": f"Failed to add User: {e}"}), 500
+        return jsonify({"error": f"添加用户失败: {e}"}), 500
 
 
 @api_bp.route('/users/<int:user_id>', methods=['PUT'])
@@ -1135,13 +1137,13 @@ def update_user(user_id):
     try:
         user_to_update = session.get(User, user_id)
         if not user_to_update:
-            return jsonify({"error": "User not found"}), 404
+            return jsonify({"error": "用户不存在"}), 404
 
         # 检查部门
         if 'department_id' in data:
             dept = session.get(Department, data['department_id'])
             if not dept:
-                return jsonify({"error": "Specified department_id not found"}), 404
+                return jsonify({"error": "指定的 department_id 不存在"}), 404
             user_to_update.department_id = data['department_id']
 
         user_to_update.username = data.get('username', user_to_update.username)
@@ -1155,10 +1157,10 @@ def update_user(user_id):
 
     except IntegrityError:
         session.rollback()
-        return jsonify({"error": "Username already exists"}), 409
+        return jsonify({"error": "用户名已存在"}), 409
     except Exception as e:
         session.rollback()
-        return jsonify({"error": f"Failed to update User: {e}"}), 500
+        return jsonify({"error": f"更新用户失败: {e}"}), 500
 
 
 @api_bp.route('/users/<int:user_id>', methods=['DELETE'])
@@ -1168,19 +1170,19 @@ def delete_user(user_id):
     session = g.config_session
 
     if user_id == current_user.id:
-        return jsonify({"error": "Cannot delete yourself"}), 400
+        return jsonify({"error": "不能删除自己"}), 400
 
     try:
         user_to_delete = session.get(User, user_id)
         if not user_to_delete:
-            return jsonify({"error": "User not found"}), 404
+            return jsonify({"error": "用户不存在"}), 404
 
         session.delete(user_to_delete)
         session.commit()
-        return jsonify({"message": "User deleted successfully"})
+        return jsonify({"message": "用户删除成功"})
     except Exception as e:
         session.rollback()
-        return jsonify({"error": f"Failed to delete User: {e}"}), 500
+        return jsonify({"error": f"删除用户失败: {e}"}), 500
 
 
 # --- 9. 重置密码路由 ---
@@ -1194,30 +1196,30 @@ def reset_user_password(user_id):
 
     # 允许超级管理员, 或用户自己操作 (user_id 匹配 current_user.id)
     if not current_user.is_superuser and user_id != current_user.id:
-        return jsonify({"error": "Permission denied: Can only reset your own password."}), 403
+        return jsonify({"error": "权限不足：只能重置自己的密码。"}), 403
 
     data = request.get_json()
     new_password = data.get('new_password')
 
     if not new_password:
-        return jsonify({"error": "new_password is required"}), 400
+        return jsonify({"error": "new_password 为必填项"}), 400
 
     session = g.config_session
     try:
         user_to_update = session.get(User, user_id)
         if not user_to_update:
-            return jsonify({"error": "User not found"}), 404
+            return jsonify({"error": "用户不存在"}), 404
 
         # 额外的权限检查
         if not current_user.is_superuser and user_to_update.id != current_user.id:
-            return jsonify({"error": "Permission denied."}), 403
+            return jsonify({"error": "权限不足。"}), 403
 
         user_to_update.set_password(new_password)
         session.commit()
 
-        return jsonify({"message": f"Password for user {user_to_update.username} has been reset successfully"})
+        return jsonify({"message": f"用户 {user_to_update.username} 的密码已重置成功"})
 
     except Exception as e:
         session.rollback()
         logger.error(f"Error resetting password for user {user_id}: {e}\n{traceback.format_exc()}")
-        return jsonify({"error": "Failed to reset password"}), 500
+        return jsonify({"error": "重置密码失败"}), 500
