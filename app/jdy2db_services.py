@@ -527,8 +527,8 @@ class Jdy2DbSyncService:
                         # 调用 API 获取真实 schema，而不是传递 data 负载
                         form_widgets = api_client.get_form_widgets(app_id, entry_id)
                         # 组装为特定的 form_schema
-                        form_schema_data = {'widgets': form_widgets, 'name': form_name}
-                        table = self.get_or_create_table_from_schema(table_name, form_schema_data, task_config,
+                        form_schema = {'name': form_name, 'widgets': form_widgets.get('widgets', [])}
+                        table = self.get_or_create_table_from_schema(table_name, form_schema, task_config,
                                                                      dynamic_engine, dynamic_metadata)
                         logger.info(f"task_id:[{task_config.id}] Table {table_name} created successfully.")
                     except Exception as schema_err:
