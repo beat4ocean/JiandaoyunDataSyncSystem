@@ -19,7 +19,7 @@ else:
 
 class Config:
     # --- 服务端口 ---
-    PORT = int(os.getenv('PORT', '5000'))
+    SERVER_PORT = int(os.getenv('SERVER_PORT', '5000'))
 
     # --- 数据库连接 (从 .env 读取) ---
 
@@ -87,7 +87,7 @@ CONFIG_DB_URL = Config.CONFIG_DB_URL
 
 DB_CONNECT_ARGS = Config.DB_CONNECT_ARGS
 
-PORT = Config.PORT
+SERVER_PORT = Config.SERVER_PORT
 
 JDY_API_BASE_URL = Config.JDY_API_BASE_URL
 

@@ -81,10 +81,10 @@ def create_app():
     # --- CORS 配置 ---
     CORS(app, supports_credentials=True, origins=[
         "http://localhost:5173", "http://127.0.0.1:5173",  # 常见的 Vite/Vue 开发端口
-        f"http://localhost:{Config.PORT}", f"http://127.0.0.1:{Config.PORT}",  # 后端服务端口
+        f"http://localhost:{Config.SERVER_PORT}", f"http://127.0.0.1:{Config.SERVER_PORT}",  # 后端服务端口
 
         # 保留服务器配置
-        f"http://0.0.0.0:{Config.PORT}",
+        f"http://0.0.0.0:{Config.SERVER_PORT}",
         "http://0.0.0.0:5173",  # 保留 vite
 
         # 密码允许所有 10.x.x.x 网段的 IP (http 或 https)
@@ -215,5 +215,5 @@ def create_app():
             # 其他所有路径都返回 index.html
             return send_from_directory(app.static_folder, 'index.html')
 
-    logger.info(f"Flask App created with JWT (Bearer), CORS (Port: {Config.PORT}), and static frontend serving.")
+    logger.info(f"Flask App created with JWT (Bearer), CORS (Port: {Config.SERVER_PORT}), and static frontend serving.")
     return app
