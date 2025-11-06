@@ -54,7 +54,7 @@ def get_dynamic_session(task: SyncTask) -> Generator[Any, Any, None]:
 
     # 检查缓存
     if db_id not in dynamic_engine_cache:
-        logger.error(
+        logger.info(
             f"task_id:[{task.id}] Creating new dynamic engine for source DB: {db_info.db_show_name} (ID: {db_id})")
 
         # --- 根据 db_type 构建 URL ---
