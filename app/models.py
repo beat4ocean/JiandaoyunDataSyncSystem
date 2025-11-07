@@ -193,15 +193,15 @@ class SyncTask(ConfigBase):
 
     # --- db2jdy (数据库 -> 简道云) 专属配置 ---
     sync_mode = Column(String(50), nullable=True, default='INCREMENTAL',
-                       comment="同步模式 (FULL_REPLACE, INCREMENTAL, BINLOG)")
+                       comment="同步模式 (FULL_SYNC, INCREMENTAL, BINLOG)")
     # 增量同步依赖的时间字段
     incremental_field = Column(String(100), comment="增量同步依赖的时间字段 (仅 INCREMENTAL 模式)")
     # 增量同步间隔 (分钟)
     incremental_interval = Column(Integer, comment="增量同步间隔 (分钟) (仅 INCREMENTAL 模式)")
     # 全量同步定时时间
-    full_replace_time = Column(Time, nullable=True, comment="全量同步时间 (仅 FULL_REPLACE 模式)")
+    full_replace_time = Column(Time, nullable=True, comment="全量同步时间 (仅 FULL_SYNC 模式)")
     # 源数据 SQL 过滤器
-    source_filter_sql = Column(Text, nullable=True, comment="源数据库过滤 SQL (用于 INCREMENTAL 和 FULL_REPLACE模式)")
+    source_filter_sql = Column(Text, nullable=True, comment="源数据库过滤 SQL (用于 INCREMENTAL 和 FULL_SYNC模式)")
 
     last_binlog_file = Column(String(255), comment="上次同步的 binlog 文件 (用于 BINLOG)")
     last_binlog_pos = Column(Integer, comment="上次同步的 binlog 位置 (用于 BINLOG)")
@@ -210,10 +210,10 @@ class SyncTask(ConfigBase):
     # 状态和日志
     sync_status = Column(String(20), default='idle', comment="任务状态 (idle, running, error, disabled)")
     # 上次同步时间
-    last_sync_time = Column(DateTime, comment="上次同步时间 (用于 INCREMENTAL 和 FULL_REPLACE模式)")
-    # 是否首次同步执行全量覆盖同步
+    last_sync_time = Column(DateTime, comment="上次同步时间 (用于 INCREMENTAL 和 FULL_SYNC模式)")
+    # 是否首次同步执行全量同步
     is_full_replace_first = Column(Boolean, default=True,
-                                   comment="是否首次同步执行全量覆盖同步 (用于 INCREMENTAL, BINLOG, jdy2db)")
+                                   comment="是否首次同步执行全量同步 (用于 INCREMENTAL, BINLOG, jdy2db)")
     is_active = Column(Boolean, default=True, comment="任务是否启用")
     send_error_log_to_wecom = Column(Boolean, default=False, nullable=False, comment="是否发送错误日志到企微")
     wecom_robot_webhook_url = Column(String(500), nullable=True, comment="企业微信机器人 Webhook URL")

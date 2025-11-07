@@ -31,7 +31,7 @@ scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
 running_binlog_listeners = set()
 
 
-# 用于 FULL_REPLACE 和 INCREMENTAL 模式的包装器
+# 用于 FULL_SYNC 和 INCREMENTAL 模式的包装器
 def run_db2jdy_task_wrapper(task_id: int):
     """
     APScheduler 作业包装器: 运行单个 (db2jdy) 任务。
@@ -86,7 +86,7 @@ def run_db2jdy_task_wrapper(task_id: int):
             # sync_service._prepare_table(task)
 
             # 4. 执行任务
-            if task.sync_mode == 'FULL_REPLACE':
+            if task.sync_mode == 'FULL_SYNC':
                 sync_service.run_full_replace(config_session, task)
 
             elif task.sync_mode == 'INCREMENTAL':
@@ -443,16 +443,16 @@ def add_or_update_task_in_scheduler(task: SyncTask):
     if task.sync_type == 'db2jdy':
         job_func = run_db2jdy_task_wrapper  # db2jdy 的包装器
 
-        if task.sync_mode == 'FULL_REPLACE':
+        if task.sync_mode == 'FULL_SYNC':
             if task.full_replace_time:
-                mode_str = "FULL_REPLACE"
+                mode_str = "FULL_SYNC"
                 new_trigger = CronTrigger(
                     hour=task.full_replace_time.hour,
                     minute=task.full_replace_time.minute,
                     timezone="Asia/Shanghai"  # 确保时区一致
                 )
             else:
-                logger.warning(f"Task {task.id} (db2jdy - FULL_REPLACE) is active but has no time. Removing.")
+                logger.warning(f"Task {task.id} (db2jdy - FULL_SYNC) is active but has no time. Removing.")
                 if existing_job:
                     remove_task_from_scheduler(task.id)
                 return
@@ -587,7 +587,7 @@ def add_or_update_task_in_scheduler(task: SyncTask):
         if task.sync_type == 'db2jdy':
             if task.sync_mode == 'INCREMENTAL':
                 logger.info(f"Scheduling new {job_id} ({mode_str}) every {task.incremental_interval} minutes.")
-            elif task.sync_mode == 'FULL_REPLACE':
+            elif task.sync_mode == 'FULL_SYNC':
                 minute_str = str(task.full_replace_time.minute).zfill(2)
                 logger.info(f"Scheduling new {job_id} ({mode_str}) at {task.full_replace_time.hour}:{minute_str}.")
 
