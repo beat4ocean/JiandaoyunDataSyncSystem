@@ -336,7 +336,7 @@ def add_jdy_key():
         new_key = JdyKeyInfo(
             department_id=department_id,
             api_key=data.get('api_key'),
-            api_secret=data.get('api_secret'),
+            # api_secret=data.get('api_secret'),
             description=data.get('description'),
         )
         session.add(new_key)
@@ -373,7 +373,7 @@ def update_jdy_key(key_id):
             key_to_update.department_id = data.get('department_id', key_to_update.department_id)
 
         key_to_update.api_key = data.get('api_key', key_to_update.api_key)
-        key_to_update.api_secret = data.get('api_secret', key_to_update.api_secret)
+        # key_to_update.api_secret = data.get('api_secret', key_to_update.api_secret)
         key_to_update.description = data.get('description', key_to_update.description)
 
         session.commit()
@@ -545,6 +545,7 @@ def add_sync_task():
             new_task.daily_sync_type = data.get('daily_sync_type', 'ONCE')
             new_task.json_as_string = data.get('json_as_string', False)
             new_task.label_to_pinyin = data.get('label_to_pinyin', False)
+            new_task.api_secret = data.get('api_secret')
 
             # 3.2 - 动态生成 Webhook URL
             # 格式: http://<host>/api/jdy/webhook?dpt=<dept_name>&db_id=<db_id>&table=<table_name>
@@ -553,7 +554,7 @@ def add_sync_task():
             host_url = Config.WEB_HOOK_BASE_URL or request.host_url
             if host_url.endswith('/'):
                 host_url = host_url.rstrip('/')
-            query_params = f"dpt={quote(department.department_name)}&db_id={database_id}&table={quote(table_name)}"
+            query_params = f"dpt={quote(department.department_name)}&db_id={database_id}&task_id={new_task.id}&table={quote(table_name)}"
             new_task.webhook_url = f"{host_url}/api/jdy/webhook?{query_params}"
 
         # --- 6. 通用通知字段 ---
@@ -666,6 +667,10 @@ def update_sync_task(task_id):
             if data.get('entry_id') is not None:
                 task_to_update.entry_id = data.get('entry_id')
 
+            # 更新 api_secret
+            if 'api_secret' in data:
+                task_to_update.api_secret = data.get('api_secret')
+
             # 修正 _parse_time_string 对 null 的处理
             daily_sync_time_val = data.get('daily_sync_time', task_to_update.daily_sync_time)
             task_to_update.daily_sync_time = _parse_time_string(daily_sync_time_val) if daily_sync_time_val else None
@@ -678,7 +683,7 @@ def update_sync_task(task_id):
             host_url = Config.WEB_HOOK_BASE_URL or request.host_url
             if host_url.endswith('/'):
                 host_url = host_url.rstrip('/')
-            query_params = f"dpt={quote(department.department_name)}&db_id={database_id}&table={quote(table_name)}"
+            query_params = f"dpt={quote(department.department_name)}&db_id={database_id}&task_id={task_id}&table={quote(table_name)}"
             task_to_update.webhook_url = f"{host_url}/api/jdy/webhook?{query_params}"
 
         # --- 6. 通用通知字段 ---
@@ -812,13 +817,15 @@ def get_field_mappings():
 def handle_jdy_webhook():
     """
     接收简道云数据推送 (jdy2db)。
-    URL 格式: /api/jdy/webhook?dpt=<dept_name>&db_id=<db_id>&table=<table_name>&nonce=...&timestamp=...
+    URL 格式: /api/jdy/webhook?dpt=<dept_name>&db_id=<db_id>&task_id=<task_id>&table=<table_name>&nonce=...&timestamp=...
     """
 
     # --- 1. 解析 URL 参数 ---
+    task_id_str = request.args.get('task_id')
     dpt_name = request.args.get('dpt')
     db_id_str = request.args.get('db_id')
     table_name = request.args.get('table')
+
     # 来自 ?table= 的 "" 正确匹配数据库中的 NULL
     if table_name and table_name.strip() == "":
         table_name = None
@@ -832,15 +839,16 @@ def handle_jdy_webhook():
     # if not all([dpt_name, db_id_str, table_name]):
     #     logger.error(f"[Webhook] 400: URL 参数不完整 (dpt, db_id, table)")
     #     return jsonify({"error": "Webhook URL 已失效: URL (dpt, db_id, table)"}), 410  # 410 GONE 表示配置已失效
-    if not all([dpt_name, db_id_str]):
-        logger.error(f"[Webhook] 400: Incomplete URL parameters (dpt, db_id)")
-        return jsonify({"error": "Webhook URL 已失效: URL (dpt, db_id)"}), 410  # 410 GONE 表示配置已失效
+    if not all([dpt_name, db_id_str, task_id_str]):
+        logger.error(f"[Webhook] 400: Incomplete URL parameters (dpt, db_id, task_id)")
+        return jsonify({"error": "Webhook URL 已失效: URL (dpt, db_id, task_id)"}), 410  # 410 GONE 表示配置已失效
 
     try:
+        task_id = int(task_id_str)
         db_id = int(db_id_str)
     except ValueError:
-        logger.error(f"[Webhook] 400: db_id must be an integer")
-        return jsonify({"error": "Webhook URL 已失效: db_id 必须是整数"}), 410
+        logger.error(f"[Webhook] 400: task_id or db_id must be an integer")
+        return jsonify({"error": "Webhook URL 已失效: task_id 或 db_id 必须是整数"}), 410
 
     # --- 2. [鉴权] 获取 Webhook 原始负载 ---
     try:
@@ -857,73 +865,14 @@ def handle_jdy_webhook():
     task_config = None  # 初始化 task_config
 
     try:
-        # --- 3. 查找租户和密钥 (JdyKeyInfo) ---
-        key_info = session.scalar(
-            select(JdyKeyInfo)
-            .join(Department)
-            .where(Department.department_name == dpt_name)
-        )
-        if not key_info:
-            logger.error(f"[Webhook] 404: No JdyKeyInfo found for department '{dpt_name}'")
-            return jsonify({"error": "Webhook 已失效: 部门密钥未配置"}), 410
-
-        # --- 4. [鉴权] 验证签名 ---
-        # 仅在配置了 api_secret 时才执行验证
-        if key_info.api_secret:
-            if not all([nonce, timestamp, signature_from_header]):
-                logger.error(f"[Webhook Auth] 400: Request rejected. Secret is configured but request lacks signature parameters (nonce/timestamp/header).")
-                return jsonify({"error": "缺少签名参数"}), 400
-
-            is_valid = validate_signature(
-                nonce=nonce,
-                payload_str=raw_payload_str,
-                secret=key_info.api_secret,
-                timestamp=timestamp,
-                signature_from_header=signature_from_header
-            )
-
-            if not is_valid:
-                logger.error(f"[Webhook Auth] 403: Invalid signature (Dept: {dpt_name}).")
-                # 记录日志 (但不使用 task_config)
-                log_sync_error(
-                    task_config=None,
-                    error=Exception("无效签名"),
-                    payload={"raw_payload": raw_payload_str[:500]},  # 避免 payload 过大
-                    extra_info=f"Webhook 签名验证失败 (Dept: {dpt_name}, DB: {db_id}, Table: {table_name})"
-                )
-                return jsonify({"error": "签名无效"}), 403
-
-        # (鉴权通过或未配置Secret)
-
-        # --- 5. 解析 JSON 负载 ---
-        try:
-            payload = json.loads(raw_payload_str)
-        except json.JSONDecodeError:
-            logger.error(f"[Webhook] 400: Payload is not valid JSON.")
-            return jsonify({"error": "无效的 JSON 负载"}), 400
-
-        if not payload or not payload.get('data') or not payload.get('op'):
-            logger.error(f"[Webhook] 400: Invalid payload structure (op/data)")
-            return jsonify({"error": "负载结构无效"}), 400
-
-        op = payload.get('op')
-        data = payload.get('data')
-        app_id = data.get('appId') or payload.get('app_id')
-        entry_id = data.get('entryId') or payload.get('entry_id')
-
-        # --- 6. 查找任务配置 (SyncTask) ---
+        # --- 步骤 3. 查找任务配置 (SyncTask) ---
+        # 必须先找到任务，才能获取该任务的 api_secret
         task_config = session.scalar(
             select(SyncTask)
             .where(
+                SyncTask.id == task_id,
                 SyncTask.sync_type == 'jdy2db',
-                SyncTask.department_id == key_info.department_id,
                 SyncTask.database_id == db_id,
-                # 有可能用户还没填写表名，想让系统自动生成表名
-                # SyncTask.table_name == table_name,
-                # (
-                #         (SyncTask.table_name == table_name) |
-                #         ((SyncTask.table_name.is_(None)) & (table_name is None))
-                # ),
                 SyncTask.is_active == True
             )
             # 预加载所需的关系
@@ -934,24 +883,92 @@ def handle_jdy_webhook():
         )
 
         if not task_config:
-            table_name = table_name or task_config.table_name
             logger.error(
-                f"[Webhook] 404 No active jdy2db task found (Dept: {dpt_name}, DB_ID: {db_id}, Table: {table_name})")
+                f"[Webhook] 404 No active jdy2db task found (TaskID: {task_id}, DB_ID: {db_id})")
             log_sync_error(
                 task_config=None,  # 没有 task 对象
                 error=Exception("Webhook 404"),
-                payload=payload,
-                extra_info=f"找不到激活的 jdy2db 任务 (Dept: {dpt_name}, DB_ID: {db_id}, Table: {table_name})"
+                payload={"raw_payload": raw_payload_str[:500]},
+                extra_info=f"找不到激活的 jdy2db 任务 (TaskID: {task_id}, DB_ID: {db_id})"
             )
             return jsonify({"error": "Webhook 已失效: 未找到匹配的激活任务"}), 410
 
-        # --- 7. 实例化 API 客户端 (用于自动创建映射) ---
+        # --- 4. [鉴权] 获取 Webhook 原始负载 ---
+        try:
+            raw_payload_str = request.get_data(as_text=True)
+            if not raw_payload_str:
+                logger.error(f"[Webhook] 400: Payload is empty (Task ID: {task_id})")
+                return jsonify({"error": "负载为空"}), 400
+        except Exception as e:
+            logger.error(f"[Webhook] 400: Unable to read request body (Task ID: {task_id}): {e}")
+            return jsonify({"error": "读取请求体失败"}), 400
+
+        # --- 5. [鉴权] 验证签名 ---
+        api_secret = task_config.api_secret
+
+        # 仅在配置了 api_secret 时才执行验证
+        if api_secret:
+            if not all([nonce, timestamp, signature_from_header]):
+                logger.error(
+                    f"[Webhook Auth] 400: Request rejected (Task ID: {task_id}). Secret is configured but request lacks signature parameters (nonce/timestamp/header).")
+                return jsonify({"error": "缺少签名参数"}), 400
+
+            is_valid = validate_signature(
+                nonce=nonce,
+                payload_str=raw_payload_str,
+                secret=task_config.api_secret,
+                timestamp=timestamp,
+                signature_from_header=signature_from_header
+            )
+
+            if not is_valid:
+                logger.error(f"[Webhook Auth] 403: Invalid signature (Dept: {dpt_name}, TaskID: {task_id}).")
+                # 记录日志 (但不使用 task_config)
+                log_sync_error(
+                    task_config=task_config,
+                    error=Exception("无效签名"),
+                    payload={"raw_payload": raw_payload_str[:500]},  # 避免 payload 过大
+                    extra_info=f"Webhook 签名验证失败 (Dept: {dpt_name}, TaskID: {task_id}, DB: {db_id})"
+                )
+                return jsonify({"error": "签名无效"}), 403
+
+        # (鉴权通过或未配置Task Secret)
+
+        # --- 5. 解析 JSON 负载 ---
+        try:
+            payload = json.loads(raw_payload_str)
+        except json.JSONDecodeError:
+            logger.error(f"[Webhook] 400: Payload is not valid JSON (Task ID: {task_id}).")
+            return jsonify({"error": "无效的 JSON 负载"}), 400
+
+        if not payload or not payload.get('data') or not payload.get('op'):
+            logger.error(f"[Webhook] 400: Invalid payload structure (op/data) (Task ID: {task_id})")
+            return jsonify({"error": "负载结构无效"}), 400
+
+        op = payload.get('op')
+        data = payload.get('data')
+        app_id = data.get('appId') or payload.get('app_id')
+        entry_id = data.get('entryId') or payload.get('entry_id')
+
+        # --- 7. 查找 JdyKeyInfo (用于 API Key) ---
+        key_info = task_config.department.jdy_key_info
+        if not key_info or not key_info.api_key:
+            logger.error(f"[Webhook] 404: No JdyKeyInfo (api_key) found for department (Task ID: {task_id})")
+            log_sync_error(
+                task_config=task_config,
+                error=Exception("部门 API Key 未配置"),
+                payload=payload,
+                extra_info="Webhook 处理器: 找不到部门的 JdyKeyInfo (api_key)"
+            )
+            return jsonify({"error": "Webhook 已失效: 部门 API Key 未配置"}), 410
+
+        # --- 8. 实例化 API 客户端 (用于自动创建映射) ---
         api_client = FormApi(
             api_key=key_info.api_key,
             host=Config.JDY_API_BASE_URL
         )
 
-        # --- 8. 调用核心服务处理数据 ---
+        # --- 9. 调用核心服务处理数据 ---
         sync_service = Jdy2DbSyncService()
         sync_service.handle_webhook_data(
             config_session=session,  # 传入当前会话用于更新任务状态
@@ -971,7 +988,7 @@ def handle_jdy_webhook():
         entry_id_log = locals().get('payload', {}).get('entry_id', 'N/A')
 
         logger.error(
-            f"[Webhook] 500: (App: {app_id_log}, Entry: {entry_id_log}) 处理失败: {e}\n{traceback.format_exc()}")
+            f"[Webhook] 500: (Task ID: {task_id}, App: {app_id_log}, Entry: {entry_id_log}) processing failed: {e}\n{traceback.format_exc()}")
         # 尝试记录错误
         log_sync_error(
             task_config=task_config,  # task_config 可能为 None，但 log_sync_error 已处理

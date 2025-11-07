@@ -414,7 +414,16 @@
         const openDialog = (item = null) => {
             if (item) {
                 isEdit.value = true;
-                Object.assign(currentItem, JSON.parse(JSON.stringify(item)));
+                // 编辑时需要获取包含 secret 的完整对象
+                //  在前端设置一个占位符，或者发起一次 GET /task/<id> 调用)
+                let itemData = JSON.parse(JSON.stringify(item));
+                if (itemData.sync_type === 'jdy2db' && !('api_secret' in itemData)) {
+                     // 如果 secret 不在列表数据中 (推荐)，在此设置为空
+                     // 用户只有在想要 *修改* secret 时才需要填写
+                     itemData.api_secret = '';
+                }
+                Object.assign(currentItem, itemData);
+
             } else {
                 isEdit.value = false;
                 Object.keys(currentItem).forEach(key => delete currentItem[key]);
@@ -460,6 +469,13 @@
                 // 清理密码
                 if (method === 'put' && 'password' in dataToSend && !dataToSend.password) {
                     delete dataToSend.password;
+                }
+
+                // 清理 jdy2db 的 api_secret (如果未填写)
+                if (method === 'put' && dataToSend.sync_type === 'jdy2db' && !dataToSend.api_secret) {
+                     // 如果是编辑，且 api_secret 字段为空，则不发送该字段
+                     // (后端逻辑是 'api_secret' in data 才会更新)
+                    delete dataToSend.api_secret;
                 }
 
                 // 清理只读字段
@@ -1055,10 +1071,10 @@
                 <template #default="scope"> {{ scope.row.api_key ? scope.row.api_key.substring(0, 10) : '' }}...
                 </template>
               </el-table-column>
-              <el-table-column label="API Secret">
+              <!--<el-table-column label="API Secret">
                 <template #default="scope"> {{ scope.row.api_secret ? scope.row.api_secret.substring(0, 10) : '' }}...
                 </template>
-              </el-table-column>
+              </el-table-column>-->
               <el-table-column label="API 描述">
                 <template #default="scope"> {{ scope.row.description ? scope.row.description : '' }}
                 </template>
@@ -1084,10 +1100,10 @@
                 <el-form-item label="API Key" prop="api_key">
                   <el-input v-model="currentItem.api_key" placeholder="请输入简道云 API Key"></el-input>
                 </el-form-item>
-                <el-form-item label="API Secret" prop="api_secret">
+                <!--<el-form-item label="API Secret" prop="api_secret">
                   <el-input v-model="currentItem.api_secret"
                             placeholder="简道云 API Secret，用于接收简道云数据推送，可置空"></el-input>
-                </el-form-item>
+                </el-form-item>-->
                 <el-form-item label="API 描述" prop="description">
                   <el-input v-model="currentItem.description"
                             placeholder="简道云 API 描述"></el-input>
@@ -1102,13 +1118,13 @@
         `,
         props: ['isSuperuser'],
         setup(props) {
-            const defaultItem = {department_id: null, api_key: '', api_secret: '', description: ''};
+            const defaultItem = {department_id: null, api_key: '', description: ''};
             const crud = useCrud('/jdy-keys', '密钥', defaultItem, 'id');
             const departments = ref([]);
             const keyRules = computed(() => ({
                 department_id: [{required: props.isSuperuser, message: '请选择部门', trigger: 'change'}],
                 api_key: [{required: true, message: '请输入 API Key', trigger: 'blur'}],
-                api_secret: [{required: false, message: '请输入 API Secret', trigger: 'blur'}],
+                // api_secret: [{required: false, message: '请输入 API Secret', trigger: 'blur'}],
                 description: [{required: false, message: '请添加 API描述', trigger: 'blur'}],
             }));
             const fetchDepartments = async () => {
@@ -1601,6 +1617,11 @@
                   </el-col>
                 </el-row>
 
+                <el-form-item label="简道云 Webhook API Secret (用于签名校验)" prop="api_secret">
+                  <div class="form-item-note">在简道云「数据推送」中设置的 API Secret，若设置了则必须填写</div>
+                  <el-input type="password" v-model="currentItem.api_secret" :placeholder="isEdit ? '如需修改请输入新 Secret (选填)' : '请输入 API Secret (选填)'" show-password></el-input>
+                </el-form-item>
+
                 <el-divider>表结构配置</el-divider>
 
                 <el-row :gutter="20">
@@ -1692,7 +1713,8 @@
                 label_to_pinyin: false,
                 send_error_log_to_wecom: false,
                 wecom_robot_webhook_url: null,
-                sync_type: 'jdy2db' // 3.6 - Hardcode type
+                sync_type: 'jdy2db', // 3.6 - Hardcode type
+                api_secret: null
             };
 
             // 3.6 - Fix API endpoint
@@ -1724,6 +1746,7 @@
                 database_id: [{required: true, message: '请选择目标数据库', trigger: 'change'}],
                 table_name: [{required: false, message: '请输入目标表名', trigger: 'blur'}],
                 daily_sync_time: [{validator: validateDailyTime, trigger: 'change'}],
+                api_secret: [{required: false, message: '请输入 API Secret', trigger: 'blur'}], // [!!!] ADDED
             }));
 
             const onDepartmentChange = () => {
@@ -1827,6 +1850,13 @@
                             const deptId = localStorage.getItem('department_id');
                             crud.currentItem.department_id = deptId ? parseInt(deptId) : null;
                         }
+                    }
+
+                    // 处理 api_secret 的回显
+                    if (crud.isEdit.value) {
+                        // 当编辑时，我们将 api_secret 设置为空字符串
+                        // 用户只有在需要 *修改* 时才填写
+                        crud.currentItem.api_secret = '';
                     }
                 }
             });
