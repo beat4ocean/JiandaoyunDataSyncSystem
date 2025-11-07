@@ -534,7 +534,7 @@ class Db2JdySyncService:
             logger.error(f"task_id:[{task.id}] _run_full_sync failed: Task type is not 'db2jdy'.")
             return
 
-        mode = "FULL_REPLACE" if delete_first else "INITIAL_SYNC"
+        mode = "FULL_REPLACE" if delete_first else "FULL_SYNC"
         logger.info(f"task_id:[{task.id}] Running {mode} sync...")
 
         total_deleted = 0
@@ -1157,6 +1157,7 @@ class Db2JdySyncService:
                 log_pos=log_pos,
                 resume_stream=True,
                 blocking=True,
+                slave_heartbeat=5,  # 请求每 5 秒一次心跳
                 skip_to_timestamp=last_sync_time.timestamp() if last_sync_time else None
             )
 
@@ -1178,24 +1179,36 @@ class Db2JdySyncService:
                                    extra_info=f"[{thread_name}] Failed to check task status. Stopping listener.")
                     break  # 退出循环
 
-                # 7b. 如果 'timeout_seconds' 到了, binlog_event 为 None, 跳过
+                # 7b. 如果 'timeout_seconds' (slave_heartbeat) 到了, event 可能是 None
                 if binlog_event is None:
-                    continue
+                    continue  # 没有事件，继续等待
 
-                # 7c. 如果是心跳事件, 忽略它并继续
+                # 7c. 立即从流中获取当前位置。
+                current_log_file = stream.log_file
+                current_log_pos = stream.log_pos
+
+                # 7d. 如果是心跳事件, 我们只更新位置 (保存我们的位置) 然后继续
                 if isinstance(binlog_event, HeartbeatLogEvent):
-                    logger.debug(f"[{thread_name}] Received heartbeat.")
-                    continue  # 继续循环, 这将触发 7a 中的下一次状态检查
+                    logger.debug(f"[{thread_name}] Received heartbeat. Updating position.")
+                    try:
+                        with ConfigSession() as heartbeat_session:
+                            # 获取 'live' task 对象以更新
+                            task_to_update = heartbeat_session.query(SyncTask).get(task_id_safe)
+                            if task_to_update:
+                                self._update_task_status(heartbeat_session, task_to_update, 'running',
+                                                         current_log_file, current_log_pos)
+                    except Exception as e:
+                        # 记录更新位置时的错误, 但不要停止监听器
+                        log_sync_error(task_config=task, error=e,
+                                       extra_info=f"[{thread_name}] Failed to update position on heartbeat.")
+                    continue  # 继续等待下一个事件
 
-                # 7d. (原 7c) 正常处理事件
-                log_file = stream.log_file
-                log_pos = stream.log_pos
+                # 7e. 这是一个真实的事件 (Write/Update/Delete), 处理它
                 try:
                     # 在循环内部为 *每个事件* 创建短暂的会话
                     # 'task' 在这里是原始的游离对象, 我们只使用它来打开 get_dynamic_session
                     with ConfigSession() as loop_session, get_dynamic_session(task) as source_session:
 
-                        # 获取 'live' task 对象用于辅助方法
                         task_in_loop = loop_session.query(SyncTask).get(task_id_safe)
                         if not task_in_loop:  # 如果任务在两次检查之间被删除了
                             logger.warning(f"[{thread_name}] Task was deleted during event processing. Stopping.")
@@ -1301,7 +1314,9 @@ class Db2JdySyncService:
                                                    payload=row['values'])
 
                         # 8. 事件处理完成后, 在会话内更新位置
-                        self._update_task_status(loop_session, task_in_loop, 'running', log_file, log_pos)
+                        #    使用我们在此循环开始时捕获的位置
+                        self._update_task_status(loop_session, task_in_loop, 'running',
+                                                 current_log_file, current_log_pos)
 
                 except (requests.exceptions.RequestException, requests.exceptions.HTTPError) as api_err:
                     # API 错误, 记录日志但不停止监听器
@@ -1326,7 +1341,8 @@ class Db2JdySyncService:
                                        extra_info=f"[{thread_name}] Error processing binlog event (skipping).")
                         # 仍然在会话内更新位置, 以跳过错误事件
                         if error_task:
-                            self._update_task_status(error_session, error_task, 'running', log_file, log_pos)
+                            self._update_task_status(error_session, error_task, 'running',
+                                                     current_log_file, current_log_pos)
 
 
         except Exception as e:
