@@ -177,7 +177,7 @@ def run_jdy2db_task_wrapper(task_id: int):
 
             # 调用现有的全量同步逻辑
             sync_service = Jdy2DbSyncService()  # 实例化
-            sync_service.sync_historical_data(task, api_client)
+            sync_service.sync_historical_data(task, api_client, delete_first=False)
 
             # [关键] 如果同步类型是 ONCE，在成功后禁用任务 (或调度)
             if task.daily_sync_type == 'ONCE':

@@ -820,7 +820,7 @@ class Jdy2DbSyncService:
             task_config.sync_status = 'running'
             config_session.commit()
 
-            self.sync_historical_data(task_config, data_api_client)
+            self.sync_historical_data(task_config, data_api_client, delete_first=False)
 
             # 5. [关键] 标记首次全量已完成
             # 再次查询最新的 task_config，以防在同步期间被修改
@@ -1908,7 +1908,7 @@ class Jdy2DbSyncService:
     # --- 历史数据同步核心逻辑 ---
 
     @retry()
-    def sync_historical_data(self, task_config: SyncTask, api_client: DataApi):
+    def sync_historical_data(self, task_config: SyncTask, api_client: DataApi, delete_first: bool):
         """获取并同步指定任务的所有历史数据（已重构和优化）。"""
         app_id = task_config.app_id
         entry_id = task_config.entry_id
@@ -1963,18 +1963,19 @@ class Jdy2DbSyncService:
             table = self.get_table_if_exists(table_name, dynamic_engine)
 
             # 检查是否需要清空表 (仅当表存在时)
-            if table is not None:
-                logger.info(f"task_id:[{task_config.id}] Task {table_name}: Truncating table for full sync...")
-                try:
-                    with get_dynamic_session(task_config) as target_session:
-                        target_session.execute(table.delete())
-                        target_session.commit()
-                    logger.info(f"task_id:[{task_config.id}] Task {table_name}: Table truncated.")
-                except SQLAlchemyError as clear_err:
-                    logger.error(f"task_id:[{task_config.id}] Failed to truncate table {table_name}: {clear_err}",
-                                 exc_info=True)
-                    # (rollback 在 with 块中自动处理)
-                    raise  # 清空失败则无法继续全量同步
+            if delete_first:
+                if table is not None:
+                    logger.info(f"task_id:[{task_config.id}] Task {table_name}: Truncating table for full sync...")
+                    try:
+                        with get_dynamic_session(task_config) as target_session:
+                            target_session.execute(table.delete())
+                            target_session.commit()
+                        logger.info(f"task_id:[{task_config.id}] Task {table_name}: Table truncated.")
+                    except SQLAlchemyError as clear_err:
+                        logger.error(f"task_id:[{task_config.id}] Failed to truncate table {table_name}: {clear_err}",
+                                     exc_info=True)
+                        # (rollback 在 with 块中自动处理)
+                        raise  # 清空失败则无法继续全量同步
 
             # --- 2. 循环拉取和写入数据 ---
             logger.info(f"task_id:[{task_config.id}] Task {table_name}: Starting data fetch...")
