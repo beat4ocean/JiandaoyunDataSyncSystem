@@ -2102,6 +2102,11 @@ class Jdy2DbSyncService:
                 payload={"task_id": task_config.id, "last_processed_data_id": last_data_id},
                 extra_info="Error during sync_historical_data"
             )
+
+            # 重新引发异常，以通知 _run_full_sync 任务失败
+            # 这可以防止 _run_full_sync 中的“成功”块运行
+            raise e
+
         finally:
             # --- 5. 关闭会话 ---
             if config_session.is_active:

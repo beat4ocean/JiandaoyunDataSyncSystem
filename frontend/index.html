@@ -1280,16 +1280,6 @@
                   </el-row>
                 </template>
 
-                <template
-                    v-if="currentItem.sync_mode === 'INCREMENTAL' || currentItem.sync_mode === 'BINLOG'">
-                  <el-form-item label="首次执行全量同步">
-                    <el-switch v-model="currentItem.is_full_sync_first"></el-switch>
-                  </el-form-item>
-                  <el-form-item label="首次全量同步即覆盖目标表">
-                    <el-switch v-model="currentItem.is_delete_first"></el-switch>
-                  </el-form-item>
-                </template>
-
                 <template v-if="currentItem.sync_mode === 'INCREMENTAL'">
                   <el-row :gutter="20">
                     <el-col :span="12">
@@ -1307,6 +1297,22 @@
                   </el-row>
                 </template>
 
+                <template
+                    v-if="currentItem.sync_mode === 'INCREMENTAL' || currentItem.sync_mode === 'BINLOG'">
+                  <el-row :gutter="20">
+                    <el-col :span="12">
+                      <el-form-item label="首次执行全量同步">
+                        <el-switch v-model="currentItem.is_full_sync_first"></el-switch>
+                      </el-form-item>
+                    </el-col>
+                    <el-col :span="12">
+                      <el-form-item label="⚠️首次全量同步时，执行清空目标表操作">
+                        <el-switch v-model="currentItem.is_delete_first"></el-switch>
+                      </el-form-item>
+                    </el-col>
+                  </el-row>
+                </template>
+
                 <template v-if="currentItem.sync_mode === 'FULL_SYNC'">
                   <el-row :gutter="20">
                     <el-col :span="12">
@@ -1319,7 +1325,7 @@
                       <!--<el-form-item label="首次执行全量同步">
                         <el-switch v-model="currentItem.is_full_sync_first"></el-switch>
                       </el-form-item>-->
-                      <el-form-item label="首次全量同步即覆盖目标表">
+                      <el-form-item label="⚠️首次全量同步时，执行清空目标表操作">
                         <el-switch v-model="currentItem.is_delete_first"></el-switch>
                       </el-form-item>
                     </el-col>
@@ -1643,25 +1649,6 @@
                 </el-form-item>
 
                 <el-divider>表结构配置</el-divider>
-
-                <el-row :gutter="20">
-                  <el-col :span="12">
-                    <el-form-item label="首次执行全量同步">
-                      <el-switch v-model="currentItem.is_full_sync_first"></el-switch>
-                    </el-form-item>
-                  </el-col>
-                  <el-col :span="12">
-                    <el-form-item label="首次全量同步即覆盖目标表">
-                      <el-switch v-model="currentItem.is_delete_first"></el-switch>
-                    </el-form-item>
-                  </el-col>
-                  <el-col :span="12">
-                    <el-form-item label="任务激活">
-                      <el-switch v-model="currentItem.is_active"></el-switch>
-                    </el-form-item>
-                  </el-col>
-                </el-row>
-
                 <el-row :gutter="20">
                   <el-col :span="12">
                     <el-form-item label="列名转换拼音">
@@ -1679,7 +1666,7 @@
                   </el-col>
                 </el-row>
 
-                <el-divider>定时全量同步 (可选)</el-divider>
+                <el-divider>定时全量同步</el-divider>
                 <el-row :gutter="20">
                   <el-col :span="12">
                     <el-form-item label="全量同步类型" prop="daily_sync_type">
@@ -1687,6 +1674,11 @@
                         <el-option label="ONCE (仅首次)" value="ONCE"></el-option>
                         <el-option label="DAILY (每日定时)" value="DAILY"></el-option>
                       </el-select>
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="12">
+                    <el-form-item label="任务激活">
+                      <el-switch v-model="currentItem.is_active"></el-switch>
                     </el-form-item>
                   </el-col>
                   <el-col :span="12" v-if="currentItem.daily_sync_type === 'DAILY'">
@@ -1698,6 +1690,18 @@
                   </el-col>
                 </el-row>
 
+                <el-row :gutter="20">
+                  <el-col :span="12">
+                    <el-form-item label="首次执行全量同步">
+                      <el-switch v-model="currentItem.is_full_sync_first"></el-switch>
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="12">
+                    <el-form-item label="⚠️首次全量同步时，执行清空目标表操作">
+                      <el-switch v-model="currentItem.is_delete_first"></el-switch>
+                    </el-form-item>
+                  </el-col>
+                </el-row>
 
                 <el-divider>通知配置</el-divider>
                 <el-row :gutter="20">
