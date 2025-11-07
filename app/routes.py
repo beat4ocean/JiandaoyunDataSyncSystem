@@ -1048,6 +1048,7 @@ def add_department():
     try:
         new_dept = Department(
             department_name=data.get('department_name'),
+            department_full_name=data.get('department_full_name'),
             is_active=data.get('is_active', True)
         )
         session.add(new_dept)
@@ -1073,6 +1074,7 @@ def update_department(dept_id):
             return jsonify({"error": "部门不存在"}), 404
 
         dept.department_name = data.get('department_name', dept.department_name)
+        dept.department_full_name = data.get('department_full_name', dept.department_full_name)
         dept.is_active = data.get('is_active', dept.is_active)
 
         session.commit()

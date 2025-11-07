@@ -620,6 +620,7 @@
             <el-table :data="items" v-loading="loading" style="width: 100%">
               <el-table-column prop="id" label="部门ID" width="200" sortable></el-table-column>
               <el-table-column prop="department_name" label="部门简称 (英文)" sortable></el-table-column>
+              <el-table-column prop="department_full_name" label="部门全称" sortable></el-table-column>
               <el-table-column prop="is_active" label="是否激活" width="200">
                 <template #default="scope">
                   <el-tag :type="scope.row.is_active ? 'success' : 'info'">{{ scope.row.is_active ? '是' : '否' }}
@@ -644,6 +645,9 @@
                 <el-form-item label="部门简称 (英文)" prop="department_name">
                   <el-input v-model="currentItem.department_name" placeholder="例如：sales_dept (唯一)"></el-input>
                 </el-form-item>
+                <el-form-item label="部门全称" prop="department_name">
+                  <el-input v-model="currentItem.department_full_name" placeholder="例如：销售部门"></el-input>
+                </el-form-item>
                 <el-form-item label="是否激活">
                   <el-switch v-model="currentItem.is_active"></el-switch>
                 </el-form-item>
@@ -656,12 +660,13 @@
           </el-card>
         `,
         setup() {
-            const defaultItem = {id: null, department_name: '', is_active: true};
+            const defaultItem = {id: null, department_name: '', department_full_name: '', is_active: true};
             // 3.2 - API endpoint is /departments
             const crud = useCrud('/departments', '部门', defaultItem, 'id');
             const formRules = {
                 // id: [{required: true, message: '请输入部门ID', trigger: 'blur'}],
-                department_name: [{required: true, message: '请输入部门简称', trigger: 'blur'}],
+                department_name: [{required: true, message: '请输入部门简称(英文)', trigger: 'blur'}],
+                department_full_name: [{required: true, message: '请输入部门全称', trigger: 'blur'}],
             };
             return {...crud, formRules, ElementPlusIcons};
         }

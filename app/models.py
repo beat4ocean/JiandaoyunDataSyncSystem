@@ -33,7 +33,10 @@ class Department(ConfigBase):
     __tablename__ = 'department'
     id = Column(Integer, primary_key=True, autoincrement=True, comment="关联的租户部门外部ID")
     # 用于前端展示
-    department_name = Column(String(100), nullable=False, unique=True, comment="关联的租户部门全称, e.g., '软件部门'")
+    department_name = Column(String(100), nullable=False, unique=True,
+                             comment="关联的租户部门简称(英文), e.g., 'sft_dept'")
+    department_full_name = Column(String(255), nullable=False, unique=True, comment="部门全称, e.g., '软件部门'")
+
     is_active = Column(Boolean, default=True, comment="是否激活")
 
     created_at = Column(DateTime, default=lambda: datetime.now(TZ_UTC_8), comment="创建时间")
@@ -228,7 +231,6 @@ class SyncTask(ConfigBase):
     json_as_string = Column(Boolean, default=False, nullable=False, comment="是否将JSON存储为字符串")
     label_to_pinyin = Column(Boolean, default=False, nullable=False, comment="是否将label转换为拼音作为列名")
     webhook_url = Column(String(500), nullable=True, comment="简道云同步数据库的WebHook URL (后端自动生成)")
-
 
     # 关系1: 指向 Department
     department = relationship("Department", back_populates="sync_tasks")
