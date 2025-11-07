@@ -78,6 +78,7 @@ class FieldMappingService:
             else:
                 # 如果不是，必须使用 m.widget_alias
                 key, value = m.widget_alias, m.widget_alias
+                # key, value = m.widget_alias, m.widget_name
 
             result[key] = value
 
@@ -1355,6 +1356,37 @@ class Db2JdySyncService:
                 last_sync_time = session_task.last_sync_time
                 app_id = session_task.app_id
                 entry_id = session_task.entry_id
+
+                # --- 检查并获取初始 Binlog 位置 ---
+                if not log_file or not log_pos:
+                    logger.info(f"[{thread_name}] Binlog position not found. Fetching current master status...")
+                    try:
+                        # 必须使用源数据库引擎
+                        dynamic_engine = get_dynamic_engine(session_task)
+                        with dynamic_engine.connect() as connection:
+                            result = connection.execute(text("SHOW MASTER STATUS")).fetchone()
+                            # 确保 result 不是 None 并且至少有2个元素 (File, Position)
+                            if result and len(result) >= 2:
+                                file, pos = result[0], result[1]
+                                logger.info(f"[{thread_name}] Fetched master status: {file}:{pos}")
+                                log_file = file
+                                log_pos = pos
+                                # 立即保存此位置 (使用 config_session)
+                                self._update_task_status(config_session, session_task, 'running',
+                                                         binlog_file=log_file, binlog_pos=log_pos,
+                                                         last_sync_time=datetime.now(TZ_UTC_8))
+                            else:
+                                log_sync_error(task_config=session_task,
+                                               extra_info=f"[{thread_name}] Failed to get master status (no result). Stopping listener.")
+                                self._update_task_status(config_session, session_task, status='error',
+                                                         last_sync_time=datetime.now(TZ_UTC_8))
+                                return  # 退出
+                    except Exception as e:
+                        log_sync_error(task_config=session_task, error=e,
+                                       extra_info=f"[{thread_name}] Failed to get master status (exception). Stopping listener.")
+                        self._update_task_status(config_session, session_task, status='error',
+                                                 last_sync_time=datetime.now(TZ_UTC_8))
+                        return  # 退出
 
                 # 3g. 提取映射
                 mapping_service = FieldMappingService()
