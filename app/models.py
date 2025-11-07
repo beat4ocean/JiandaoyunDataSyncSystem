@@ -145,7 +145,7 @@ class JdyKeyInfo(ConfigBase):
     department_id = Column(Integer, ForeignKey('department.id'), nullable=False, unique=True, comment="关联的租户ID")
 
     api_key = Column(String(255), nullable=False, comment="该项目专属的 API Key")
-    api_secret = Column(String(255), nullable=True, comment="该项目专属的 API Secret")
+    # api_secret = Column(String(255), nullable=True, comment="该项目专属的 API Secret")
 
     description = Column(String(255), nullable=True, comment="该项目描述")
 
@@ -220,11 +220,15 @@ class SyncTask(ConfigBase):
                         comment="更新时间")
 
     # --- jdy2db (简道云 -> 数据库) 专属配置 ---
+    # 添加 api_secret
+    api_secret = Column(String(255), nullable=True, comment="简道云 Webhook API Secret (jdy2db 专属)")
+
     daily_sync_time = Column(Time, nullable=True, comment="简道云同步数据库的每日全量同步时间")
     daily_sync_type = Column(String(20), nullable=True, default='DAILY', comment="DAILY, ONCE")
     json_as_string = Column(Boolean, default=False, nullable=False, comment="是否将JSON存储为字符串")
     label_to_pinyin = Column(Boolean, default=False, nullable=False, comment="是否将label转换为拼音作为列名")
     webhook_url = Column(String(500), nullable=True, comment="简道云同步数据库的WebHook URL (后端自动生成)")
+
 
     # 关系1: 指向 Department
     department = relationship("Department", back_populates="sync_tasks")
