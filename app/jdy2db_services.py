@@ -1671,7 +1671,7 @@ class Jdy2DbSyncService:
     @retry()
     def clean_data_for_dml(self, table: Table, data: dict, task_config: SyncTask) -> dict:
         """根据表结构和动态配置清理数据"""
-        table_columns = {c.name: c for c in table.columns}  # 存储列对象以获取类型，不是table.columns()
+        table_columns = {c.name: c for c in table.columns()}  # 存储列对象以获取类型，不是table.columns()
         cleaned_data = {}
         task_id = task_config.id
 
