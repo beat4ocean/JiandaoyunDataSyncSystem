@@ -612,9 +612,9 @@ class Jdy2DbSyncService:
         if op in ('data_create', 'data_update', 'data_remove', 'data_recover', 'form_update'):
             table = self.get_table_if_exists(new_table_name, dynamic_engine)
 
-            if table is None or task_config.is_full_replace_first:
+            if table is None or (task_config.is_full_sync_first and not task_config.last_sync_time):
                 logger.info(
-                    f"task_id:[{task_config.id}] Task {task_config.id}: Triggering initial full sync (is_full_replace_first={task_config.is_full_replace_first}, table_exists={table is not None})")
+                    f"task_id:[{task_config.id}] Task {task_config.id}: Triggering initial full sync (is_full_sync_first={task_config.is_full_sync_first}, table_exists={table is not None})")
 
                 # 1. (同步) 确保表结构存在
                 if table is None:
@@ -639,7 +639,7 @@ class Jdy2DbSyncService:
                 logger.info(
                     f"task_id:[{task_config.id}] [Task {task_config.id}]: Starting background full data sync...")
                 thread = threading.Thread(
-                    target=self._run_initial_full_sync,
+                    target=self._run_full_sync,
                     args=(task_config.id,)  # 仅传递 task_id
                 )
                 thread.daemon = True  # 设置为守护线程
@@ -766,7 +766,7 @@ class Jdy2DbSyncService:
     # --- 后台全量同步方法 ---
 
     @retry()
-    def _run_initial_full_sync(self, task_id: int):
+    def _run_full_sync(self, task_id: int):
         """
         在后台线程中执行首次全量同步。
         此方法必须是完全独立的，并创建自己的数据库会话。
@@ -820,29 +820,35 @@ class Jdy2DbSyncService:
             task_config.sync_status = 'running'
             config_session.commit()
 
-            self.sync_historical_data(task_config, data_api_client, delete_first=False)
+            # 确保没有执行过同步任务
+            if not task_config.last_sync_time:
+                self.sync_historical_data(task_config, data_api_client, delete_first=task_config.is_delete_first)
 
             # 5. [关键] 标记首次全量已完成
             # 再次查询最新的 task_config，以防在同步期间被修改
             try:
                 task_to_update = config_session.query(SyncTask).get(task_id)
                 if task_to_update:
-                    task_to_update.is_full_replace_first = False
+                    task_to_update.is_full_sync_first = False
+                    # 首次全量同步完后需要关闭这个选项
+                    task_to_update.is_delete_first = False
+                    task_to_update.sync_status = 'idle'
+                    task_to_update.last_sync_time = datetime.now(TZ_UTC_8)
                     config_session.commit()
                     logger.info(
-                        f"task_id:[{task_id}]: Initial full sync flag (is_full_replace_first=False) updated successfully.")
+                        f"task_id:[{task_id}]: Initial full sync flag (is_full_sync_first=False) updated successfully.")
             except SQLAlchemyError as e:
                 logger.error(
-                    f"task_id:[{task_id}]: Error during commit of 'is_full_replace_first' flag: {e}",
+                    f"task_id:[{task_id}]: Error during commit of 'is_full_sync_first' flag: {e}",
                     exc_info=True)
                 log_sync_error(task_config=task_config, error=e,
-                               extra_info="Error during commit of 'is_full_replace_first' flag.")
+                               extra_info="Error during commit of 'is_full_sync_first' flag.")
             except Exception as e:
                 logger.error(
-                    f"task_id:[{task_id}]: Unexpected error during commit of 'is_full_replace_first' flag: {e}",
+                    f"task_id:[{task_id}]: Unexpected error during commit of 'is_full_sync_first' flag: {e}",
                     exc_info=True)
                 log_sync_error(task_config=task_config, error=e,
-                               extra_info="Unexpected error during commit of 'is_full_replace_first' flag.")
+                               extra_info="Unexpected error during commit of 'is_full_sync_first' flag.")
 
 
         except Exception as e:

@@ -533,7 +533,7 @@ def add_sync_task():
             new_task.sync_mode = data.get('sync_mode', 'INCREMENTAL')
             new_task.incremental_field = data.get('incremental_field')
             new_task.incremental_interval = data.get('incremental_interval')
-            new_task.full_replace_time = _parse_time_string(data.get('full_replace_time'))
+            new_task.full_sync_time = _parse_time_string(data.get('full_sync_time'))
             new_task.source_filter_sql = data.get('source_filter_sql')
 
         elif sync_type == 'jdy2db':
@@ -559,7 +559,8 @@ def add_sync_task():
             # new_task.webhook_url = f"{host_url}/api/jdy/webhook?{query_params}"
 
         # --- 6. 通用通知字段 ---
-        new_task.is_full_replace_first = data.get('is_full_replace_first', True)
+        new_task.is_full_sync_first = data.get('is_full_sync_first', False)
+        new_task.is_delete_first = data.get('is_delete_first', False)
         new_task.send_error_log_to_wecom = data.get('send_error_log_to_wecom', False)
         new_task.wecom_robot_webhook_url = data.get('wecom_robot_webhook_url')
 
@@ -669,9 +670,8 @@ def update_sync_task(task_id):
             task_to_update.incremental_field = data.get('incremental_field', task_to_update.incremental_field)
             task_to_update.incremental_interval = data.get('incremental_interval', task_to_update.incremental_interval)
             # 修正 _parse_time_string 对 null 的处理
-            full_replace_time_val = data.get('full_replace_time', task_to_update.full_replace_time)
-            task_to_update.full_replace_time = _parse_time_string(
-                full_replace_time_val) if full_replace_time_val else None
+            full_sync_time_val = data.get('full_sync_time', task_to_update.full_sync_time)
+            task_to_update.full_sync_time = _parse_time_string(full_sync_time_val) if full_sync_time_val else None
 
             task_to_update.source_filter_sql = data.get('source_filter_sql', task_to_update.source_filter_sql)
 
@@ -702,7 +702,8 @@ def update_sync_task(task_id):
             task_to_update.webhook_url = f"{host_url}/api/jdy/webhook?{query_params}"
 
         # --- 6. 通用通知字段 ---
-        task_to_update.is_full_replace_first = data.get('is_full_replace_first', task_to_update.is_full_replace_first)
+        task_to_update.is_full_sync_first = data.get('is_full_sync_first', task_to_update.is_full_sync_first)
+        task_to_update.is_delete_first = data.get('is_delete_first', task_to_update.is_delete_first)
         task_to_update.send_error_log_to_wecom = data.get('send_error_log_to_wecom',
                                                           task_to_update.send_error_log_to_wecom)
         task_to_update.wecom_robot_webhook_url = data.get('wecom_robot_webhook_url',

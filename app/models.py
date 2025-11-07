@@ -199,7 +199,7 @@ class SyncTask(ConfigBase):
     # 增量同步间隔 (分钟)
     incremental_interval = Column(Integer, comment="增量同步间隔 (分钟) (仅 INCREMENTAL 模式)")
     # 全量同步定时时间
-    full_replace_time = Column(Time, nullable=True, comment="全量同步时间 (仅 FULL_SYNC 模式)")
+    full_sync_time = Column(Time, nullable=True, comment="全量同步时间 (仅 FULL_SYNC 模式)")
     # 源数据 SQL 过滤器
     source_filter_sql = Column(Text, nullable=True, comment="源数据库过滤 SQL (用于 INCREMENTAL 和 FULL_SYNC模式)")
 
@@ -211,9 +211,13 @@ class SyncTask(ConfigBase):
     sync_status = Column(String(20), default='idle', comment="任务状态 (idle, running, error, disabled)")
     # 上次同步时间
     last_sync_time = Column(DateTime, comment="上次同步时间 (用于 INCREMENTAL 和 FULL_SYNC模式)")
+
     # 是否首次同步执行全量同步
-    is_full_replace_first = Column(Boolean, default=True,
-                                   comment="是否首次同步执行全量同步 (用于 INCREMENTAL, BINLOG, jdy2db)")
+    is_full_sync_first = Column(Boolean, default=False,
+                                comment="是否首次同步执行全量同步 (用于 INCREMENTAL, BINLOG, jdy2db)")
+    # 是否首次同步清空目标数据 即：简道云到数据库：清空数据库，数据库到简道云：清空简道云表
+    is_delete_first = Column(Boolean, default=False, nullable=False, comment="全量同步是否清空目标数据")
+
     is_active = Column(Boolean, default=True, comment="任务是否启用")
     send_error_log_to_wecom = Column(Boolean, default=False, nullable=False, comment="是否发送错误日志到企微")
     wecom_robot_webhook_url = Column(String(500), nullable=True, comment="企业微信机器人 Webhook URL")

@@ -87,7 +87,7 @@ def run_db2jdy_task_wrapper(task_id: int):
 
             # 4. 执行任务
             if task.sync_mode == 'FULL_SYNC':
-                sync_service.run_full_replace(config_session, task)
+                sync_service.run_full_sync(config_session, task)
 
             elif task.sync_mode == 'INCREMENTAL':
                 sync_service.run_incremental(config_session, task)
@@ -177,7 +177,7 @@ def run_jdy2db_task_wrapper(task_id: int):
 
             # 调用现有的全量同步逻辑
             sync_service = Jdy2DbSyncService()  # 实例化
-            sync_service.sync_historical_data(task, api_client, delete_first=False)
+            sync_service.sync_historical_data(task, api_client, delete_first=task.is_delete_first)
 
             # [关键] 如果同步类型是 ONCE，在成功后禁用任务 (或调度)
             if task.daily_sync_type == 'ONCE':
@@ -409,14 +409,14 @@ def remove_task_from_scheduler(task_id: int):
     job_id = f"task_{task_id}"
     try:
         scheduler.remove_job(job_id)
-        logger.info(f"[{job_id}] Removed job from scheduler.")
+        logger.info(f"job_id:[{job_id}] Removed job from scheduler.")
     except JobLookupError:
         # 作业不存在，这没问题
-        logger.debug(f"[{job_id}] Job not found in scheduler, nothing to remove.")
+        logger.debug(f"job_id:[{job_id}] Job not found in scheduler, nothing to remove.")
         pass
     except Exception as e:
         # 记录其他潜在错误
-        logger.error(f"[{job_id}] Error removing job: {e}")
+        logger.error(f"job_id:[{job_id}] Error removing job: {e}")
 
 
 def add_or_update_task_in_scheduler(task: SyncTask):
@@ -431,7 +431,7 @@ def add_or_update_task_in_scheduler(task: SyncTask):
     if not task.is_active:
         if existing_job:
             remove_task_from_scheduler(task.id)
-            logger.info(f"[{job_id}] Task is inactive, removing from schedule.")
+            logger.info(f"job_id:[{job_id}] Task is inactive, removing from schedule.")
         return
 
     # 2. 定义新 trigger 的参数
@@ -444,11 +444,11 @@ def add_or_update_task_in_scheduler(task: SyncTask):
         job_func = run_db2jdy_task_wrapper  # db2jdy 的包装器
 
         if task.sync_mode == 'FULL_SYNC':
-            if task.full_replace_time:
+            if task.full_sync_time:
                 mode_str = "FULL_SYNC"
                 new_trigger = CronTrigger(
-                    hour=task.full_replace_time.hour,
-                    minute=task.full_replace_time.minute,
+                    hour=task.full_sync_time.hour,
+                    minute=task.full_sync_time.minute,
                     timezone="Asia/Shanghai"  # 确保时区一致
                 )
             else:
@@ -474,7 +474,7 @@ def add_or_update_task_in_scheduler(task: SyncTask):
             # BINLOG 任务由 binlog_manager 自动处理。
             # 确保移除旧的作业（例如从 CRON 切换过来的）
             if existing_job:
-                logger.info(f"[{job_id}] Task changed to BINLOG. Removing old CRON/INTERVAL job.")
+                logger.info(f"job_id:[{job_id}] Task changed to BINLOG. Removing old CRON/INTERVAL job.")
                 remove_task_from_scheduler(task.id)
             return  # BINLOG tasks don't have a 'task_X' job
 
@@ -490,7 +490,7 @@ def add_or_update_task_in_scheduler(task: SyncTask):
             )
         else:
             # 不是 DAILY 类型，或者时间未设置，确保没有调度
-            logger.info(f"[{job_id}] Task (jdy2db) is not configured for DAILY sync. Removing from schedule.")
+            logger.info(f"job_id:[{job_id}] Task (jdy2db) is not configured for DAILY sync. Removing from schedule.")
             if existing_job:
                 remove_task_from_scheduler(task.id)
             return
@@ -501,14 +501,14 @@ def add_or_update_task_in_scheduler(task: SyncTask):
 
         # 确保 job_func 有效 (例如从 BINLOG 切换回来时)
         if not job_func:
-            logger.warning(f"[{job_id}] No valid job_func found for existing job. Removing.")
+            logger.warning(f"job_id:[{job_id}] No valid job_func found for existing job. Removing.")
             remove_task_from_scheduler(task.id)
             return
 
         # 检查执行函数是否已更改
         if existing_job.func.__name__ != job_func.__name__:
             trigger_changed = True
-            logger.info(f"[{job_id}] Job function changed (e.g., db2jdy -> jdy2db).")
+            logger.info(f"job_id:[{job_id}] Job function changed (e.g., db2jdy -> jdy2db).")
 
         # 检查 trigger 类型和参数是否匹配
         elif new_trigger is not None:
@@ -519,7 +519,7 @@ def add_or_update_task_in_scheduler(task: SyncTask):
             if current_trigger_type != new_trigger_type:
                 trigger_changed = True
                 logger.info(
-                    f"[{job_id}] Trigger type changed from {current_trigger_type.__name__} to {new_trigger_type.__name__}.")
+                    f"job_id:[{job_id}] Trigger type changed from {current_trigger_type.__name__} to {new_trigger_type.__name__}.")
             else:
                 # 相同类型，比较参数
                 if isinstance(new_trigger, CronTrigger):
@@ -529,8 +529,8 @@ def add_or_update_task_in_scheduler(task: SyncTask):
                     new_hour_str = 'None'
                     new_min_str = 'None'
                     if task.sync_type == 'db2jdy':
-                        new_hour_str = str(task.full_replace_time.hour)
-                        new_min_str = str(task.full_replace_time.minute)
+                        new_hour_str = str(task.full_sync_time.hour)
+                        new_min_str = str(task.full_sync_time.minute)
                     elif task.sync_type == 'jdy2db':
                         new_hour_str = str(task.daily_sync_time.hour)
                         new_min_str = str(task.daily_sync_time.minute)
@@ -553,7 +553,7 @@ def add_or_update_task_in_scheduler(task: SyncTask):
                     if current_hour_str != new_hour_str or current_min_str != new_min_str:
                         trigger_changed = True
                         logger.info(
-                            f"[{job_id}] CRON time changed from {current_hour_str}:{current_min_str} to {new_hour_str}:{new_min_str}.")
+                            f"job_id:[{job_id}] CRON time changed from {current_hour_str}:{current_min_str} to {new_hour_str}:{new_min_str}.")
 
                 elif isinstance(new_trigger, IntervalTrigger):
                     # 1. 获取新值 (来自 task) (单位: 秒)
@@ -567,10 +567,11 @@ def add_or_update_task_in_scheduler(task: SyncTask):
                         trigger_changed = True
                         current_interval_min = current_interval_sec / 60
                         new_interval_min = new_interval_sec / 60
-                        logger.info(f"[{job_id}] Interval changed from {current_interval_min}m to {new_interval_min}m.")
+                        logger.info(
+                            f"job_id:[{job_id}] Interval changed from {current_interval_min}m to {new_interval_min}m.")
 
         if trigger_changed:
-            logger.info(f"[{job_id}] Rescheduling job...")
+            logger.info(f"job_id:[{job_id}] Rescheduling job...")
 
             # 1. 必须修改函数 (func)
             scheduler.modify_job(job_id, func=job_func)
@@ -579,7 +580,7 @@ def add_or_update_task_in_scheduler(task: SyncTask):
             scheduler.reschedule_job(job_id, trigger=new_trigger)
 
         # else:
-        #     logger.info(f"[{job_id}] Job exists and trigger is unchanged. Skipping.") # (跳过是期望的行为)
+        #     logger.info(f"job_id:[{job_id}] Job exists and trigger is unchanged. Skipping.") # (跳过是期望的行为)
 
 
     # 4. Job 不存在: 添加 (且 trigger 和 func 有效)
@@ -588,8 +589,8 @@ def add_or_update_task_in_scheduler(task: SyncTask):
             if task.sync_mode == 'INCREMENTAL':
                 logger.info(f"Scheduling new {job_id} ({mode_str}) every {task.incremental_interval} minutes.")
             elif task.sync_mode == 'FULL_SYNC':
-                minute_str = str(task.full_replace_time.minute).zfill(2)
-                logger.info(f"Scheduling new {job_id} ({mode_str}) at {task.full_replace_time.hour}:{minute_str}.")
+                minute_str = str(task.full_sync_time.minute).zfill(2)
+                logger.info(f"Scheduling new {job_id} ({mode_str}) at {task.full_sync_time.hour}:{minute_str}.")
 
         elif task.sync_type == 'jdy2db':
             minute_str = str(task.daily_sync_time.minute).zfill(2)

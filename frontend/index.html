@@ -460,9 +460,9 @@
                 const dataToSend = {...currentItem};
 
                 // 清理前端临时字段
-                if ('full_replace_time_temp' in dataToSend) {
-                    dataToSend.full_replace_time = dataToSend.full_replace_time_temp || null;
-                    delete dataToSend.full_replace_time_temp;
+                if ('full_sync_time_temp' in dataToSend) {
+                    dataToSend.full_sync_time = dataToSend.full_sync_time_temp || null;
+                    delete dataToSend.full_sync_time_temp;
                 }
                 if ('daily_sync_time_temp' in dataToSend) {
                     dataToSend.daily_sync_time = dataToSend.daily_sync_time_temp || null;
@@ -1268,7 +1268,8 @@
                   </el-col>
                 </el-row>
 
-                <template v-if="currentItem.sync_mode === 'INCREMENTAL' || currentItem.sync_mode === 'BINLOG'">
+                <template
+                    v-if="currentItem.sync_mode === 'FULL_SYNC' || currentItem.sync_mode === 'INCREMENTAL' || currentItem.sync_mode === 'BINLOG'">
                   <el-row :gutter="20">
                     <el-col :span="12">
                       <el-form-item label="源表主键" prop="business_keys">
@@ -1279,9 +1280,13 @@
                   </el-row>
                 </template>
 
-                <template v-if="currentItem.sync_mode === 'INCREMENTAL' || currentItem.sync_mode === 'BINLOG'">
+                <template
+                    v-if="currentItem.sync_mode === 'INCREMENTAL' || currentItem.sync_mode === 'BINLOG'">
                   <el-form-item label="首次执行全量同步">
-                    <el-switch v-model="currentItem.is_full_replace_first"></el-switch>
+                    <el-switch v-model="currentItem.is_full_sync_first"></el-switch>
+                  </el-form-item>
+                  <el-form-item label="首次全量同步即覆盖目标表">
+                    <el-switch v-model="currentItem.is_delete_first"></el-switch>
                   </el-form-item>
                 </template>
 
@@ -1305,10 +1310,17 @@
                 <template v-if="currentItem.sync_mode === 'FULL_SYNC'">
                   <el-row :gutter="20">
                     <el-col :span="12">
-                      <el-form-item label="每日同步时间" prop="full_replace_time">
-                        <el-time-picker v-model="currentItem.full_replace_time_temp" format="HH:mm"
+                      <el-form-item label="每日同步时间" prop="full_sync_time">
+                        <el-time-picker v-model="currentItem.full_sync_time_temp" format="HH:mm"
                                         value-format="HH:mm:ss"
                                         placeholder="选择时间"></el-time-picker>
+                      </el-form-item>
+                      <!--默认就是True-->
+                      <!--<el-form-item label="首次执行全量同步">
+                        <el-switch v-model="currentItem.is_full_sync_first"></el-switch>
+                      </el-form-item>-->
+                      <el-form-item label="首次全量同步即覆盖目标表">
+                        <el-switch v-model="currentItem.is_delete_first"></el-switch>
                       </el-form-item>
                     </el-col>
                   </el-row>
@@ -1358,10 +1370,11 @@
                 is_active: true,
                 incremental_field: '',
                 incremental_interval: 5,
-                full_replace_time_temp: null,
-                full_replace_time: null,
+                full_sync_time_temp: null,
+                full_sync_time: null,
                 source_filter_sql: null,
-                is_full_replace_first: true,
+                is_full_sync_first: false,
+                is_delete_first: false,
                 send_error_log_to_wecom: false,
                 wecom_robot_webhook_url: null,
                 sync_type: 'db2jdy'
@@ -1394,8 +1407,8 @@
 
             // 规则: FULL_SYNC 模式需要指定 全量同步时间
             const validateFullReplaceTime = (rule, value, callback) => {
-                // 注意: 验证器是为 'full_replace_time' 注册的，但检查 'full_replace_time_temp'
-                if (crud.currentItem.sync_mode === 'FULL_SYNC' && !crud.currentItem.full_replace_time_temp) {
+                // 注意: 验证器是为 'full_sync_time' 注册的，但检查 'full_sync_time_temp'
+                if (crud.currentItem.sync_mode === 'FULL_SYNC' && !crud.currentItem.full_sync_time_temp) {
                     callback(new Error('请选择每日同步时间'));
                 } else {
                     callback();
@@ -1428,7 +1441,7 @@
                 app_id: [{required: true, message: '请输入 App ID', trigger: 'blur'}],
                 entry_id: [{required: true, message: '请输入 Entry ID', trigger: 'blur'}],
                 business_keys: [{validator: validatePkField, trigger: 'blur'}],
-                full_replace_time: [{validator: validateFullReplaceTime, trigger: 'change'}],
+                full_sync_time: [{validator: validateFullReplaceTime, trigger: 'change'}],
                 incremental_field: [{validator: validateIncrementalField, trigger: 'blur'}],
                 incremental_interval: [{validator: validateIncrementalInterval, trigger: 'change'}],
             }));
@@ -1469,7 +1482,7 @@
             //
             //     // 应用新的自定义验证器
             //     business_keys: [{validator: validatePkField, trigger: 'blur'}],
-            //     full_replace_time: [{validator: validateFullReplaceTime, trigger: 'change'}],
+            //     full_sync_time: [{validator: validateFullReplaceTime, trigger: 'change'}],
             //     incremental_field: [{validator: validateIncrementalField, trigger: 'blur'}],
             //     incremental_interval: [{validator: validateIncrementalInterval, trigger: 'change'}],
             // };
@@ -1483,10 +1496,10 @@
                     if (props.isSuperuser) fetchDepartments();
 
                     // (原) 处理时间回显
-                    if (crud.isEdit.value && crud.currentItem.full_replace_time) {
-                        crud.currentItem.full_replace_time_temp = crud.currentItem.full_replace_time;
+                    if (crud.isEdit.value && crud.currentItem.full_sync_time) {
+                        crud.currentItem.full_sync_time_temp = crud.currentItem.full_sync_time;
                     } else if (newVal && !crud.isEdit.value) {
-                        crud.currentItem.full_replace_time_temp = null;
+                        crud.currentItem.full_sync_time_temp = null;
                         // 非管理员自动设置部门ID
                         if (!props.isSuperuser) {
                             // 确保 department_id 是数字
@@ -1534,10 +1547,10 @@
               <el-table-column prop="table_name" label="目标表名 (自动)" sortable></el-table-column>
               <el-table-column prop="app_id" label="App ID (自动)" width="250"></el-table-column>
               <el-table-column prop="entry_id" label="Entry ID (自动)" width="250"></el-table-column>
-              <el-table-column prop="daily_sync_type" label="全量拉取类型" width="120">
+              <el-table-column prop="daily_sync_type" label="全量同步类型" width="120">
                 <template #default="scope">{{ scope.row.daily_sync_type || 'N/A' }}</template>
               </el-table-column>
-              <el-table-column prop="daily_sync_time" label="定时拉取时间" width="120">
+              <el-table-column prop="daily_sync_time" label="定时同步时间" width="120">
                 <template #default="scope">{{ formatTime(scope.row.daily_sync_time) }}</template>
               </el-table-column>
               <el-table-column prop="last_sync_time" label="上次同步时间" width="170">
@@ -1634,7 +1647,12 @@
                 <el-row :gutter="20">
                   <el-col :span="12">
                     <el-form-item label="首次执行全量同步">
-                      <el-switch v-model="currentItem.is_full_replace_first"></el-switch>
+                      <el-switch v-model="currentItem.is_full_sync_first"></el-switch>
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="12">
+                    <el-form-item label="首次全量同步即覆盖目标表">
+                      <el-switch v-model="currentItem.is_delete_first"></el-switch>
                     </el-form-item>
                   </el-col>
                   <el-col :span="12">
@@ -1661,18 +1679,18 @@
                   </el-col>
                 </el-row>
 
-                <el-divider>定时全量拉取 (可选)</el-divider>
+                <el-divider>定时全量同步 (可选)</el-divider>
                 <el-row :gutter="20">
                   <el-col :span="12">
-                    <el-form-item label="全量拉取类型" prop="daily_sync_type">
-                      <el-select v-model="currentItem.daily_sync_type" placeholder="选择全量拉取类型">
+                    <el-form-item label="全量同步类型" prop="daily_sync_type">
+                      <el-select v-model="currentItem.daily_sync_type" placeholder="选择全量同步类型">
                         <el-option label="ONCE (仅首次)" value="ONCE"></el-option>
                         <el-option label="DAILY (每日定时)" value="DAILY"></el-option>
                       </el-select>
                     </el-form-item>
                   </el-col>
                   <el-col :span="12" v-if="currentItem.daily_sync_type === 'DAILY'">
-                    <el-form-item label="每日拉取时间" prop="daily_sync_time">
+                    <el-form-item label="每日同步时间" prop="daily_sync_time">
                       <el-time-picker v-model="currentItem.daily_sync_time_temp" format="HH:mm"
                                       value-format="HH:mm:ss"
                                       placeholder="选择时间"></el-time-picker>
@@ -1712,7 +1730,8 @@
                 database_id: null,
                 table_name: '',
                 is_active: true,
-                is_full_replace_first: true,
+                is_full_sync_first: false,
+                is_delete_first: false,
                 daily_sync_time_temp: null,
                 daily_sync_time: null,
                 daily_sync_type: 'ONCE',

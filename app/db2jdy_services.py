@@ -335,7 +335,7 @@ class Db2JdySyncService:
             raise ValueError(f"task_id:[{task.id}] business_keys is not configured.")
 
         # pk_field_name 格式 "pk1,pk2,pk3"
-        pk_fields = [pk.strip() for pk in task.business_keys.split(',')]
+        pk_fields = [pk.strip() for pk in task.business_keys.split(',') if pk and pk.strip()]
         pk_values = []
 
         for field in pk_fields:
@@ -518,7 +518,8 @@ class Db2JdySyncService:
             binlog_file: str = None,
             binlog_pos: int = None,
             last_sync_time: datetime = None,
-            is_full_replace_first: bool = None
+            is_full_sync_first: bool = None,
+            is_delete_first: bool = None,
     ):
         """
         安全地更新任务状态 (使用传入的会话)
@@ -531,8 +532,10 @@ class Db2JdySyncService:
                 task.last_binlog_pos = binlog_pos
             if last_sync_time:
                 task.last_sync_time = last_sync_time
-            if is_full_replace_first is not None:
-                task.is_full_replace_first = is_full_replace_first
+            if is_full_sync_first is not None:
+                task.is_full_sync_first = is_full_sync_first
+            if is_delete_first is not None:
+                task.is_delete_first = is_delete_first
 
             config_session.commit()
         except Exception as e:
@@ -540,27 +543,24 @@ class Db2JdySyncService:
             logger.info(f"task_id:[{task.id}] CRITICAL: Failed to update task status to {status}: {e}")
 
     # --- 公共同步方法 ---
-    # --- 首次全量同步的内部方法 ---
+    # --- 清空简道云表单数据方法
     @retry()
-    def _run_full_sync(self, config_session: Session, task: SyncTask, delete_first: bool):
+    def _truncate_jdy_data(self, config_session: Session, task: SyncTask):
         """
-        内部全量同步逻辑, 支持SQL过滤和选择性删除
-        流式查询以处理大数据量
+        清空简道云表单
         """
         # --- 检查任务类型 ---
         if task.sync_type != 'db2jdy':
-            logger.error(f"task_id:[{task.id}] _run_full_sync failed: Task type is not 'db2jdy'.")
+            logger.error(f"task_id:[{task.id}] _truncate_jdy_form failed: Task type is not 'db2jdy'.")
             return
 
-        mode = "FULL_REPLACE" if delete_first else "FULL_SYNC"
-        logger.info(f"task_id:[{task.id}] Running {mode} sync...")
+        logger.info(f"task_id:[{task.id}] Running _truncate_jdy_form ...")
 
         total_deleted = 0
-        total_created = 0
-        total_source_rows = 0
 
         if not task.department or not task.department.jdy_key_info or not task.department.jdy_key_info.api_key:
-            raise ValueError(f"task_id:[{task.id}] Task {task.id} missing department or API key for {mode}.")
+            raise ValueError(
+                f"task_id:[{task.id}] Task {task.id} missing department or API key for _truncate_jdy_form.")
         api_key = task.department.jdy_key_info.api_key
 
         try:
@@ -572,37 +572,68 @@ class Db2JdySyncService:
             # 1. 实例化
             data_api_query = DataApi(api_key, Config.JDY_API_BASE_URL, qps=30)
             data_api_delete = DataApi(api_key, Config.JDY_API_BASE_URL, qps=10)
-            data_api_create = DataApi(api_key, Config.JDY_API_BASE_URL, qps=10)
 
             # 2. 仅在 delete_first=True 时删除
-            if delete_first:
-                logger.info(f"task_id:[{task.id}] Deleting all data from Jdy...")
-                data_id = None
-                while True:
-                    response = data_api_query.query_list_data(
-                        task.app_id, task.entry_id,
-                        limit=100, data_id=data_id, fields=["_id"]
-                    )
-                    jdy_data = response.get('data', [])
-                    if not jdy_data:
-                        break
+            logger.info(f"task_id:[{task.id}] Deleting all data from Jdy...")
+            data_id = None
+            while True:
+                response = data_api_query.query_list_data(
+                    task.app_id, task.entry_id,
+                    limit=100, data_id=data_id, fields=["_id"]
+                )
+                jdy_data = response.get('data', [])
+                if not jdy_data:
+                    break
 
-                    data_ids = [d['_id'] for d in jdy_data]
-                    delete_responses = data_api_delete.delete_batch_data(task.app_id, task.entry_id, data_ids)
+                data_ids = [d['_id'] for d in jdy_data]
+                delete_responses = data_api_delete.delete_batch_data(task.app_id, task.entry_id, data_ids)
 
-                    # delete_batch_data 返回一个列表，需要对列表中的每个响应求和
-                    success_count = sum(resp.get('success_count', 0) for resp in delete_responses)
-                    logger.info(f"task_id:[{task.id}] Deleted {success_count} items.")
+                # delete_batch_data 返回一个列表，需要对列表中的每个响应求和
+                success_count = sum(resp.get('success_count', 0) for resp in delete_responses)
+                logger.info(f"task_id:[{task.id}] Deleted {success_count} items.")
 
-                    total_deleted += success_count
-                    # if success_count != len(data_ids):
-                    #     log_sync_error(task_config=task,
-                    #                    extra_info=f"task_id:[{task.id}] Delete mismatch. Requested: {len(data_ids)}, Deleted: {success_count}.")
+                total_deleted += success_count
+                # if success_count != len(data_ids):
+                #     log_sync_error(task_config=task,
+                #                    extra_info=f"task_id:[{task.id}] Delete mismatch. Requested: {len(data_ids)}, Deleted: {success_count}.")
 
-                    data_id = jdy_data[-1]['_id']
-                logger.info(f"task_id:[{task.id}] Jdy data deleted ({total_deleted} items). Fetching from source DB...")
-            else:
-                logger.info(f"task_id:[{task.id}] Skipping deletion for {mode}.")
+                data_id = jdy_data[-1]['_id']
+            logger.info(f"task_id:[{task.id}] Jdy data deleted ({total_deleted} items). Fetching from source DB...")
+
+        except Exception as e:
+            # 不更新状态, 只记录日志, 抛出异常
+            log_sync_error(task_config=task, error=e, extra_info=f"task_id:[{task.id}] _truncate_jdy_form failed.")
+            raise e  # 抛出异常, 让调用者处理状态
+
+    # --- 首次全量同步的内部方法 ---
+    @retry()
+    def _insert_jdy_data_with_no_primary_key(self, config_session: Session, task: SyncTask):
+        """
+        内部全量同步逻辑, 支持SQL过滤和选择性删除
+        """
+        # --- 检查任务类型 ---
+        if task.sync_type != 'db2jdy':
+            logger.error(f"task_id:[{task.id}] _run_full_sync failed: Task type is not 'db2jdy'.")
+            return
+
+        logger.info(f"task_id:[{task.id}] Running _insert_jdy_data_with_no_primary_key...")
+
+        total_created = 0
+        total_source_rows = 0
+
+        if not task.department or not task.department.jdy_key_info or not task.department.jdy_key_info.api_key:
+            raise ValueError(
+                f"task_id:[{task.id}] Task {task.id} missing department or API key for _insert_jdy_data_with_no_primary_key.")
+        api_key = task.department.jdy_key_info.api_key
+
+        try:
+            mapping_service = FieldMappingService()
+            payload_map = mapping_service.get_payload_mapping(config_session, task.id)
+            if not payload_map:
+                raise ValueError(f"task_id:[{task.id}] Field mapping is empty.")
+
+            # 1. 实例化
+            data_api_create = DataApi(api_key, Config.JDY_API_BASE_URL, qps=10)
 
             # 3. 构建带 SQL 过滤的查询, 并使用流式处理
             with get_dynamic_session(task) as source_session:
@@ -672,7 +703,7 @@ class Db2JdySyncService:
                         logger.info(f"task_id:[{task.id}] No data found.")
 
             logger.info(
-                f"task_id:[{task.id}] {mode} sync completed. Source rows: {total_source_rows}, Created in Jdy: {total_created}.")
+                f"task_id:[{task.id}] _insert_jdy_data_with_no_primary_key completed. Source rows: {total_source_rows}, Created in Jdy: {total_created}.")
             if total_source_rows != total_created:
                 log_sync_error(task_config=task,
                                extra_info=f"task_id:[{task.id}] FINAL COUNT MISMATCH. Source: {total_source_rows}, Created: {total_created}.")
@@ -684,13 +715,150 @@ class Db2JdySyncService:
 
         except Exception as e:
             # 不更新状态, 只记录日志, 抛出异常
-            log_sync_error(task_config=task, error=e, extra_info=f"task_id:[{task.id}] {mode} failed.")
+            log_sync_error(task_config=task, error=e,
+                           extra_info=f"task_id:[{task.id}] _insert_jdy_data_with_no_primary_key failed.")
             raise e  # 抛出异常, 让调用者处理状态
 
     @retry()
-    def run_full_replace(self, config_session: Session, task: SyncTask):
+    def _insert_jdy_data_with_primary_key(self, config_session: Session, task: SyncTask):
         """
-        执行全量替换同步
+        执行增量同步 (Upsert)
+        (接受会话, 事务 ID, 去重, 复合主键，支持首次全量同步 和 source_filter_sql)
+        """
+        # --- 检查任务类型 ---
+        if task.sync_type != 'db2jdy':
+            logger.error(f"task_id:[{task.id}] _insert_jdy_data_with_primary_key failed: Task type is not 'db2jdy'.")
+            self._update_task_status(config_session, task, status='error')
+            return
+
+        logger.info(f"task_id:[{task.id}] Running _insert_jdy_data_with_primary_key sync...")
+        self._update_task_status(config_session, task, status='running')
+
+        if not task.department or not task.department.jdy_key_info or not task.department.jdy_key_info.api_key:
+            log_sync_error(
+                task_config=task,
+                error=ValueError(f"Task {task.id} missing department or API key for INCREMENTAL."),
+                extra_info=f"task_id:[{task.id}] INCREMENTAL failed."
+            )
+            self._update_task_status(config_session, task, status='error')
+            return
+        api_key = task.department.jdy_key_info.api_key
+
+        current_sync_time = datetime.now(TZ_UTC_8)
+
+        try:
+            mapping_service = FieldMappingService()
+            payload_map = mapping_service.get_payload_mapping(config_session, task.id)
+            alias_map = mapping_service.get_alias_mapping(config_session, task.id)
+            if not payload_map or not alias_map:
+                raise ValueError(f"task_id:[{task.id}] Field mapping is empty.")
+
+            # 3. 实例化
+            data_api_query = DataApi(api_key, Config.JDY_API_BASE_URL, qps=30)
+            data_api_delete = DataApi(api_key, Config.JDY_API_BASE_URL, qps=10)  # 用于去重
+            data_api_create = DataApi(api_key, Config.JDY_API_BASE_URL, qps=20)  # Single create
+            data_api_update = DataApi(api_key, Config.JDY_API_BASE_URL, qps=20)  # Single update
+
+            with get_dynamic_session(task) as source_session:
+
+                base_query = f"SELECT * FROM `{task.table_name}`"
+                params = {}
+                if task.source_filter_sql:
+                    base_query += f" WHERE {task.source_filter_sql}"
+
+                # --- 性能优化: 使用流式查询 ---
+                # 移除: rows = source_session.execute(text(base_query), params).mappings().all()
+                # sqlalchemy < 2 版本
+                # result_stream = source_session.execution_options(stream_results=True).execute(text(base_query), params)
+                # sqlalchemy >= 2 版本
+                result_stream = source_session.connection().execution_options(stream_results=True).execute(
+                    text(base_query), params)
+
+                # 标记是否处理了任何行
+                has_processed_rows = False
+                count_new, count_updated = 0, 0
+
+                # 6. 遍历新增/更新
+                # for row in rows:
+                # 直接遍历迭代器，这会从数据库中逐行（或按小批量）获取数据
+                for row in result_stream.mappings():
+                    has_processed_rows = True  # 标记已处理
+                    row_dict = dict(row)
+                    try:
+                        self._get_pk_fields_and_values(task, row_dict)
+                    except ValueError as e:
+                        log_sync_error(task_config=task, error=e,
+                                       extra_info=f"task_id:[{task.id}] Row missing PK. Skipping.",
+                                       payload=row_dict)
+                        continue
+
+                    data_payload = self._transform_row_to_jdy(row_dict, payload_map)
+                    if not data_payload:
+                        log_sync_error(task_config=task,
+                                       payload=row_dict,
+                                       extra_info=f"task_id:[{task.id}] Row missing required fields. Skipping.")
+                        continue
+
+                    # 传入 row_dict 以进行复合主键去重
+                    jdy_id = row_dict.get('_id') or self._find_jdy_id_by_pk(
+                        task, row_dict,
+                        data_api_query, data_api_delete, alias_map
+                    )
+                    trans_id = str(uuid.uuid4())
+                    if jdy_id:
+                        # 更新
+                        update_response = data_api_update.update_single_data(
+                            task.app_id, task.entry_id, jdy_id,
+                            data_payload, transaction_id=trans_id
+                        )
+                        update_jdy_id = update_response.get('data', {}).get('_id')
+
+                        if not update_jdy_id:
+                            log_sync_error(task_config=task,
+                                           payload=data_payload,
+                                           error=update_response,
+                                           extra_info=f"task_id:[{task.id}] Failed to update data.")
+                        else:
+                            count_updated += 1
+                            logger.debug(f"task_id:[{task.id}] Updated data with _id: {jdy_id}.")
+
+                    else:
+                        # 新增
+                        create_response = data_api_create.create_single_data(
+                            task.app_id, task.entry_id,
+                            data_payload, transaction_id=trans_id
+                        )
+                        new_jdy_id = create_response.get('data', {}).get('_id')
+                        if not new_jdy_id:
+                            log_sync_error(task_config=task,
+                                           payload=data_payload,
+                                           error=create_response,
+                                           extra_info=f"task_id:[{task.id}] Failed to create data.")
+                        else:
+                            count_new += 1
+                            logger.debug(f"task_id:[{task.id}] Created data with _id: {new_jdy_id}.")
+                            # 是否需要回写，有待商榷，实际可不用回写
+                            # # 传入 row_dict 以进行复合主键回写
+                            # self._writeback_id_to_source(source_session, task, new_jdy_id, row_dict)
+
+                # 检查是否因为没有数据而退出循环
+                if not has_processed_rows:
+                    logger.info(f"task_id:[{task.id}] No new data where {task.source_filter_sql}.")
+                    self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
+                    return
+
+            logger.info(f"task_id:[{task.id}] INCREMENTAL sync completed. New: {count_new}, Updated: {count_updated}.")
+            self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
+
+        except Exception as e:
+            config_session.rollback()
+            log_sync_error(task_config=task, error=e, extra_info=f"task_id:[{task.id}] INCREMENTAL failed.")
+            self._update_task_status(config_session, task, status='error')
+
+    @retry()
+    def run_full_sync(self, config_session: Session, task: SyncTask):
+        """
+        执行全量同步
         (视图检查, 事务 ID, 修复响应逻辑)
         """
         # --- 检查任务类型 ---
@@ -699,329 +867,44 @@ class Db2JdySyncService:
             self._update_task_status(config_session, task, status='error')
             return
 
-        # 视图支持全量
-        # if self._is_view(task):
-        #     log_sync_error(task_config=task,
-        #                    extra_info=f"task_id:[{task.id}] FULL_SYNC mode is not allowed for VIEWS. Skipping task.")
-        #     return
+        if not task.is_active:
+            logger.info(f"task_id:[{task.id}] run_full_replace is disabled: Task is not active.")
+            return
 
         logger.info(f"task_id:[{task.id}] Running FULL_SYNC sync (Scheduled)...")
-        self._update_task_status(config_session, task, status='running')
 
         try:
-            # 调用新的内部方法, 强制删除
-            self._run_full_sync(config_session, task, delete_first=False)
-            # 成功, 设置为空闲
-            self._update_task_status(config_session, task, status='idle')
+            # 如果首次清空数据
+            # 双重确认
+            if not task.last_sync_time:
+                if task.is_delete_first:
+                    # 执行清空操作
+                    self._update_task_status(config_session, task, status='running')
+                    self._truncate_jdy_data(config_session, task)
+                    # 成功, 设置为空闲
+                    self._update_task_status(config_session, task, status='idle', last_sync_time=datetime.now(TZ_UTC_8),
+                                             is_full_sync_first=True, is_delete_first=False)
 
-        except Exception:
-            # _run_full_sync 已经记录了日志
+            # 执行全量同步
+            self._update_task_status(config_session, task, status='running')
+            # 如果没有主键
+            if not task.business_keys:
+                logger.info(
+                    f"task_id:[{task.id}] No primary key found. Running _insert_jdy_data_with_no_primary_key sync...")
+                self._insert_jdy_data_with_no_primary_key(config_session, task)
+            # 如果有主键
+            else:
+                logger.info(
+                    f"task_id:[{task.id}] Primary key found. Running _insert_jdy_data_with_primary_key sync...")
+                self._insert_jdy_data_with_primary_key(config_session, task)
+
+            self._update_task_status(config_session, task, status='idle', last_sync_time=datetime.now(TZ_UTC_8))
+
+        except Exception as e:
             config_session.rollback()
+            logger.error(f"task_id:[{task.id}] FULL_SYNC failed.")
+            log_sync_error(task_config=task, error=e, extra_info="task_id:[{task.id}] FULL_SYNC failed.")
             self._update_task_status(config_session, task, status='error')
-
-    # @retry()
-    # def run_user_define_sync(self, config_session: Session, task: SyncTask):
-    #     """
-    #     执行增量同步 (Upsert)
-    #     (接受会话, 事务 ID, 去重, 复合主键，支持首次全量同步 和 source_filter_sql)
-    #     """
-    #     # --- 检查任务类型 ---
-    #     if task.sync_type != 'db2jdy':
-    #         logger.error(f"task_id:[{task.id}] run_incremental failed: Task type is not 'db2jdy'.")
-    #         self._update_task_status(config_session, task, status='error')
-    #         return
-    #
-    #     logger.info(f"task_id:[{task.id}] Running INCREMENTAL sync...")
-    #     self._update_task_status(config_session, task, status='running')
-    #
-    #     if not task.department or not task.department.jdy_key_info or not task.department.jdy_key_info.api_key:
-    #         log_sync_error(
-    #             task_config=task,
-    #             error=ValueError(f"Task {task.id} missing department or API key for INCREMENTAL."),
-    #             extra_info=f"task_id:[{task.id}] INCREMENTAL failed."
-    #         )
-    #         self._update_task_status(config_session, task, status='error')
-    #         return
-    #     api_key = task.department.jdy_key_info.api_key
-    #
-    #     try:
-    #         current_sync_time = datetime.now(TZ_UTC_8)
-    #
-    #         # 1. 检查是否需要首次全量同步
-    #         if task.is_full_replace_first:
-    #             logger.info(f"task_id:[{task.id}] First run: Executing initial full replace...")
-    #             try:
-    #                 # 调用全量同步
-    #                 self._run_full_sync(config_session, task, delete_first=False)
-    #                 # 成功后, 更新状态并退出
-    #                 self._update_task_status(config_session, task,
-    #                                          status='idle',
-    #                                          last_sync_time=current_sync_time,
-    #                                          is_full_replace_first=False)
-    #                 logger.info(f"task_id:[{task.id}] Initial full sync complete.")
-    #                 return  # 本次运行结束
-    #             except Exception as e:
-    #                 # 首次全量同步失败, 保持 is_full_replace_first=True, 设为 error
-    #                 config_session.rollback()
-    #                 self._update_task_status(config_session, task, status='error')
-    #                 return  # 退出
-    #
-    #         # 2. 正常增量逻辑
-    #         if not task.incremental_field:
-    #             raise ValueError(f"task_id:[{task.id}] Incremental field (e.g., last_modified) is not configured.")
-    #
-    #         # # 2a. 动态获取 API Key
-    #         # if not task.department:
-    #         #     raise ValueError(f"Task {task.id} missing department/api_key configuration for run_incremental.")
-    #         # api_key = task.department.jdy_key_info.api_key
-    #
-    #         mapping_service = FieldMappingService()
-    #         payload_map = mapping_service.get_payload_mapping(config_session, task.id)
-    #         alias_map = mapping_service.get_alias_mapping(config_session, task.id)
-    #         if not payload_map or not alias_map:
-    #             raise ValueError(f"task_id:[{task.id}] Field mapping is empty.")
-    #
-    #         # 3. 实例化
-    #         data_api_query = DataApi(api_key, Config.JDY_API_BASE_URL, qps=30)
-    #         data_api_delete = DataApi(api_key, Config.JDY_API_BASE_URL, qps=10)  # 用于去重
-    #         data_api_create = DataApi(api_key, Config.JDY_API_BASE_URL, qps=20)  # Single create
-    #         data_api_update = DataApi(api_key, Config.JDY_API_BASE_URL, qps=20)  # Single update
-    #
-    #         # 4. 确定时间戳
-    #         last_sync_time = task.last_sync_time or datetime(1970, 1, 1, tzinfo=TZ_UTC_8)
-    #
-    #         # 动态创建 source_session 和 engine
-    #         dynamic_engine = get_dynamic_engine(task)
-    #         with get_dynamic_session(task) as source_session:
-    #
-    #             # --- 数据探测逻辑 ---
-    #
-    #             # 解析 incremental 字段（有可能是复杂字段）
-    #             raw_field = task.incremental_field.strip() if task.incremental_field else None
-    #             if not raw_field:
-    #                 raise ValueError(f"task_id:[{task.id}] No incremental field specified.")
-    #
-    #             raw_field = ','.join([item.strip() for item in raw_field.split(',') if item.strip()])
-    #
-    #             field_for_probing = raw_field  # 用第一个字段用于数据类型探测
-    #             incremental_field_for_query = raw_field
-    #             is_complex_field = False
-    #
-    #             # 1. 检查字段格式
-    #             if ',' in raw_field and '(' not in raw_field and ')' not in raw_field:
-    #                 # 格式: updated_time,created_time
-    #                 # 转换为 coalesce
-    #                 incremental_field_for_query = f"COALESCE({raw_field})"
-    #                 # 探测字段: updated_time
-    #                 field_for_probing = raw_field.split(',')[0].strip().replace('`', '')
-    #                 is_complex_field = True
-    #                 logger.debug(
-    #                     f"task_id:[{task.id}] Detected comma-separated fields. Query: {incremental_field_for_query}, ProbeField: {field_for_probing}")
-    #
-    #             elif 'coalesce(' in raw_field.lower() or 'ifnull(' in raw_field.lower():
-    #                 # 格式: coalesce(updated_time,created_time) 或 IFNULL(...) 或 (其他复杂表达式)
-    #                 incremental_field_for_query = f"({raw_field})"
-    #                 is_complex_field = True
-    #
-    #                 # 提取第一个字段用于探测
-    #                 # 查找第一个单词 (可能是函数名) 和随后的字段名
-    #                 # r'[a-zA-Z0-9_]+' 匹配字段名
-    #                 fields = re.findall(r'[a-zA-Z0-9_]+', raw_field.replace('`', ''))
-    #
-    #                 if fields:
-    #                     first_word = fields[0].lower()
-    #                     if first_word in ['coalesce', 'ifnull'] and len(fields) > 1:
-    #                         field_for_probing = fields[1]  # e.g., coalesce(THIS_ONE, ...)
-    #                     else:
-    #                         field_for_probing = fields[0]  # e.g., THIS_ONE ...
-    #                 else:
-    #                     field_for_probing = raw_field  # 回退
-    #
-    #                 logger.debug(
-    #                     f"task_id:[{task.id}] Detected complex function. Query: {incremental_field_for_query}, ProbeField: {field_for_probing}")
-    #
-    #             else:
-    #                 # 简单字段: updated_time
-    #                 incremental_field_for_query = f"`{raw_field}`"
-    #                 field_for_probing = raw_field.replace('`', '')
-    #                 is_complex_field = False
-    #                 logger.debug(
-    #                     f"task_id:[{task.id}] Detected simple field. Query: {incremental_field_for_query}, ProbeField: {field_for_probing}")
-    #
-    #             # 2. 检查探测字段 (field_for_probing) 的类型
-    #             inspector = inspect(dynamic_engine)
-    #             col_info = None
-    #             try:
-    #                 columns = inspector.get_columns(task.table_name)
-    #                 # 使用 field_for_probing 查找列信息
-    #                 col_info = next((col for col in columns if col['name'] == field_for_probing), None)
-    #             except NoSuchTableError:
-    #                 raise ValueError(f"task_id:[{task.id}] Incremental field's table '{task.table_name}' not found.")
-    #
-    #             # 如果找不到字段
-    #             if not col_info:
-    #                 log_sync_error(task_config=task,
-    #                                extra_info=f"task_id:[{task.id}] Incremental field (ProbeField) '{field_for_probing}' not found in table '{task.table_name}'.")
-    #                 raise ValueError(
-    #                     f"task_id:[{task.id}] Incremental field (ProbeField) '{field_for_probing}' not found in table '{task.table_name}'.")
-    #
-    #             col_type_name = str(col_info['type']).upper()
-    #
-    #             last_sync_time_for_query = None
-    #
-    #             # 3. 如果是 DATE 类型，总是截断
-    #             if col_type_name == 'DATE':
-    #                 last_sync_time_for_query = last_sync_time.replace(hour=0, minute=0, second=0, microsecond=0)
-    #                 logger.debug(
-    #                     f"task_id:[{task.id}] Detected DATE type. Querying >= {last_sync_time_for_query} (Truncated)")
-    #
-    #             # 4. 如果是 DATETIME，执行数据探测
-    #             elif col_type_name.startswith('DATETIME'):
-    #                 logger.debug(f"task_id:[{task.id}] Detected DATETIME type. Probing data ...")
-    #                 is_fake_datetime = False
-    #
-    #                 # 探测查询，限制100条
-    #                 probe_query = text(
-    #                     f"SELECT `{field_for_probing}` FROM `{task.table_name}` "
-    #                     f"WHERE `{field_for_probing}` IS NOT NULL LIMIT 100"
-    #                 )
-    #                 probe_results = source_session.execute(probe_query).fetchall()
-    #
-    #                 # 没有数据，无法判断。为安全起见，使用截断（防止丢失数据）
-    #                 if not probe_results:
-    #                     logger.debug(f"task_id:[{task.id}] No data found for probing.")
-    #                     is_fake_datetime = True
-    #                 else:
-    #                     min_time = time_obj(0, 0, 0)
-    #                     all_are_midnight = True
-    #                     for row in probe_results:
-    #                         dt_val = row[0]
-    #                         if dt_val is not None and dt_val.time() != min_time:
-    #                             # logger.debug(f"task_id:[{task.id}] Detected DATETIME type is yyyy-MM-dd HH:mm:ss.")
-    #                             all_are_midnight = False
-    #                             break
-    #                     is_fake_datetime = all_are_midnight
-    #
-    #                 if is_fake_datetime:
-    #                     logger.debug(
-    #                         f"task_id:[{task.id}] Probe confirms yyyy-MM-dd 00:00:00 DATETIME format. Using truncated timestamp.")
-    #                     last_sync_time_for_query = last_sync_time.replace(hour=0, minute=0, second=0, microsecond=0)
-    #                 else:
-    #                     logger.debug(
-    #                         f"task_id:[{task.id}] Probe found yyyy-MM-dd HH:mm:ss DATETIME format. Using exact timestamp.")
-    #                     last_sync_time_for_query = last_sync_time
-    #             else:
-    #                 # 3. 如果是 TIMESTAMP 或其他类型，使用精确时间
-    #                 last_sync_time_for_query = last_sync_time
-    #                 logger.debug(
-    #                     f"task_id:[{task.id}] Detected {col_type_name} type. Querying >= {last_sync_time_for_query}")
-    #
-    #             # 6. 获取源数据 (带 SQL 过滤)
-    #             base_query = (
-    #                 f"SELECT * FROM `{task.table_name}` "
-    #                 f"WHERE {incremental_field_for_query} >= :last_sync_time"
-    #             )
-    #             # 使用动态确定的时间戳
-    #             params = {"last_sync_time": last_sync_time_for_query}
-    #             if task.source_filter_sql:
-    #                 base_query += f" AND ({task.source_filter_sql})"
-    #
-    #             # --- 2. 性能优化: 流式查询 ---
-    #             # 移除: rows = source_session.execute(text(base_query), params).mappings().all()
-    #
-    #             # if not rows:
-    #             #     logger.info(f"task_id:[{task.id}] No new data found since {last_sync_time_for_query}.")
-    #             #     self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
-    #             #     return
-    #
-    #             # 1. 不要使用 .all()，而是获取结果迭代器
-    #             # 2. 使用 stream_results=True 启用服务器端游标，防止数据库连接因长时间处理而超时
-    #             # sqlalchemy < 2 版本
-    #             # result_stream = source_session.execution_options(stream_results=True).execute(text(base_query), params)
-    #             # sqlalchemy >= 2 版本
-    #             result_stream = source_session.connection().execution_options(stream_results=True).execute(
-    #                 text(base_query), params)
-    #
-    #             # 标记是否处理了任何行
-    #             has_processed_rows = False
-    #             count_new, count_updated = 0, 0
-    #
-    #             # 6. 遍历新增/更新
-    #             # for row in rows:
-    #             # 直接遍历迭代器，这会从数据库中逐行（或按小批量）获取数据
-    #             for row in result_stream.mappings():
-    #                 has_processed_rows = True  # 标记已处理
-    #                 row_dict = dict(row)
-    #                 try:
-    #                     self._get_pk_fields_and_values(task, row_dict)
-    #                 except ValueError as e:
-    #                     log_sync_error(task_config=task, error=e,
-    #                                    extra_info=f"task_id:[{task.id}] Row missing PK. Skipping.",
-    #                                    payload=row_dict)
-    #                     continue
-    #
-    #                 data_payload = self._transform_row_to_jdy(row_dict, payload_map)
-    #                 if not data_payload:
-    #                     log_sync_error(task_config=task,
-    #                                    payload=row_dict,
-    #                                    extra_info=f"task_id:[{task.id}] Row missing required fields. Skipping.")
-    #                     continue
-    #
-    #                 # 传入 row_dict 以进行复合主键去重
-    #                 jdy_id = row_dict.get('_id') or self._find_jdy_id_by_pk(
-    #                     task, row_dict,
-    #                     data_api_query, data_api_delete, alias_map
-    #                 )
-    #                 trans_id = str(uuid.uuid4())
-    #                 if jdy_id:
-    #                     # 更新
-    #                     update_response = data_api_update.update_single_data(
-    #                         task.app_id, task.entry_id, jdy_id,
-    #                         data_payload, transaction_id=trans_id
-    #                     )
-    #                     update_jdy_id = update_response.get('data', {}).get('_id')
-    #
-    #                     if not update_jdy_id:
-    #                         log_sync_error(task_config=task,
-    #                                        payload=data_payload,
-    #                                        error=update_response,
-    #                                        extra_info=f"task_id:[{task.id}] Failed to update data.")
-    #                     else:
-    #                         count_updated += 1
-    #                         logger.debug(f"task_id:[{task.id}] Updated data with _id: {jdy_id}.")
-    #
-    #                 else:
-    #                     # 新增
-    #                     create_response = data_api_create.create_single_data(
-    #                         task.app_id, task.entry_id,
-    #                         data_payload, transaction_id=trans_id
-    #                     )
-    #                     new_jdy_id = create_response.get('data', {}).get('_id')
-    #                     if not new_jdy_id:
-    #                         log_sync_error(task_config=task,
-    #                                        payload=data_payload,
-    #                                        error=create_response,
-    #                                        extra_info=f"task_id:[{task.id}] Failed to create data.")
-    #                     else:
-    #                         count_new += 1
-    #                         logger.debug(f"task_id:[{task.id}] Created data with _id: {new_jdy_id}.")
-    #                         # 是否需要回写，有待商榷，实际可不用回写
-    #                         # # 传入 row_dict 以进行复合主键回写
-    #                         # self._writeback_id_to_source(source_session, task, new_jdy_id, row_dict)
-    #
-    #             # 检查是否因为没有数据而退出循环
-    #             if not has_processed_rows:
-    #                 logger.info(f"task_id:[{task.id}] No new data found since {last_sync_time_for_query}.")
-    #                 self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
-    #                 return
-    #
-    #         logger.info(f"task_id:[{task.id}] INCREMENTAL sync completed. New: {count_new}, Updated: {count_updated}.")
-    #         self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
-    #
-    #     except Exception as e:
-    #         config_session.rollback()
-    #         log_sync_error(task_config=task, error=e, extra_info=f"task_id:[{task.id}] INCREMENTAL failed.")
-    #         self._update_task_status(config_session, task, status='error')
 
     @retry()
     def run_incremental(self, config_session: Session, task: SyncTask):
@@ -1048,36 +931,48 @@ class Db2JdySyncService:
             return
         api_key = task.department.jdy_key_info.api_key
 
-        try:
-            current_sync_time = datetime.now(TZ_UTC_8)
+        if not task.incremental_field:
+            raise ValueError(f"task_id:[{task.id}] Incremental field (e.g., last_modified) is not configured.")
 
+        if not task.business_keys:
+            raise ValueError(f"task_id:[{task.id}] No primary key found. Please configure primary keys.")
+
+        try:
             # 1. 检查是否需要首次全量同步
-            if task.is_full_replace_first:
-                logger.info(f"task_id:[{task.id}] First run: Executing initial FULL SYNC...")
-                try:
-                    # 调用全量同步
-                    self._run_full_sync(config_session, task, delete_first=False)
-                    # 成功后, 更新状态并退出
-                    self._update_task_status(config_session, task,
-                                             status='idle',
-                                             last_sync_time=current_sync_time,
-                                             is_full_replace_first=False)
-                    logger.info(f"task_id:[{task.id}] Initial full sync complete.")
-                    return  # 本次运行结束
-                except Exception as e:
-                    # 首次全量同步失败, 保持 is_full_replace_first=True, 设为 error
-                    config_session.rollback()
-                    self._update_task_status(config_session, task, status='error')
-                    return  # 退出
+            if not task.last_sync_time:
+                if task.is_full_sync_first:
+                    logger.info(f"task_id:[{task.id}] First run: Executing initial FULL SYNC...")
+                    try:
+                        # 双重确认
+                        if task.is_delete_first:
+                            # 执行清空操作
+                            self._update_task_status(config_session, task, status='running')
+                            self._truncate_jdy_data(config_session, task)
+                            # 成功后, 更新状态并退出
+                            self._update_task_status(config_session, task,
+                                                     status='idle',
+                                                     last_sync_time=datetime.now(TZ_UTC_8),
+                                                     is_delete_first=False)
+                        # 调用全量同步
+                        self._update_task_status(config_session, task, status='running')
+                        self._insert_jdy_data_with_primary_key(config_session, task)
+                        # 成功后, 更新状态并退出
+                        self._update_task_status(config_session, task,
+                                                 status='idle',
+                                                 last_sync_time=datetime.now(TZ_UTC_8),
+                                                 is_full_sync_first=False,
+                                                 is_delete_first=False)
+
+                        logger.info(f"task_id:[{task.id}] Initial full sync complete.")
+                        return  # 本次运行结束
+                    except Exception as e:
+                        # 首次全量同步失败, 保持 is_full_sync_first=True, 设为 error
+                        config_session.rollback()
+                        self._update_task_status(config_session, task, status='error')
+                        return  # 退出
 
             # 2. 正常增量逻辑
-            if not task.incremental_field:
-                raise ValueError(f"task_id:[{task.id}] Incremental field (e.g., last_modified) is not configured.")
-
-            # # 2a. 动态获取 API Key
-            # if not task.department:
-            #     raise ValueError(f"Task {task.id} missing department/api_key configuration for run_incremental.")
-            # api_key = task.department.jdy_key_info.api_key
+            current_sync_time = datetime.now(TZ_UTC_8)
 
             mapping_service = FieldMappingService()
             payload_map = mapping_service.get_payload_mapping(config_session, task.id)
@@ -1419,24 +1314,37 @@ class Db2JdySyncService:
                 db_name = session_task.database.db_name  # 存储为局部变量
 
                 # 3e. 检查是否需要首次全量同步
-                if session_task.is_full_replace_first:
-                    logger.info(f"[{thread_name}] First run: Executing initial FULL SYNC...")
-                    try:
-                        # _run_full_sync 使用传入的会话
-                        self._run_full_sync(config_session, session_task, delete_first=False)
+                if not session_task.last_sync_time:
+                    if session_task.is_full_sync_first:
+                        logger.info(f"task_id:[{task.id}] First run: Executing initial FULL SYNC...")
+                        try:
+                            # 双重确认
+                            if session_task.is_delete_first:
+                                # 执行清空操作
+                                self._update_task_status(config_session, session_task, status='running')
+                                self._truncate_jdy_data(config_session, session_task)
+                                # 成功后, 更新状态并退出
+                                self._update_task_status(config_session, session_task,
+                                                         status='idle',
+                                                         last_sync_time=datetime.now(TZ_UTC_8),
+                                                         is_delete_first=False)
+                            # 调用全量同步
+                            self._update_task_status(config_session, task, status='running')
+                            self._insert_jdy_data_with_primary_key(config_session, session_task)
+                            # 成功后, 更新状态并退出
+                            self._update_task_status(config_session, task,
+                                                     status='idle',
+                                                     last_sync_time=datetime.now(TZ_UTC_8),
+                                                     is_full_sync_first=False,
+                                                     is_delete_first=False)
 
-                        # 成功后, 更新状态
-                        self._update_task_status(config_session, session_task,
-                                                 status='running',  # 保持 running
-                                                 last_sync_time=datetime.now(TZ_UTC_8),
-                                                 is_full_replace_first=False)
-                        logger.info(f"[{thread_name}] Initial full sync complete. Proceeding to binlog...")
-                    except Exception as e:
-                        log_sync_error(task_config=session_task, error=e,
-                                       extra_info=f"[{thread_name}] Initial full sync failed. Stopping binlog listener.")
-                        # 确保错误状态被提交
-                        self._update_task_status(config_session, session_task, status='error')
-                        return  # 退出线程
+                            logger.info(f"[{thread_name}] Initial full sync complete. Proceeding to binlog...")
+                        except Exception as e:
+                            log_sync_error(task_config=session_task, error=e,
+                                           extra_info=f"[{thread_name}] Initial full sync failed. Stopping binlog listener.")
+                            # 确保错误状态被提交
+                            self._update_task_status(config_session, session_task, status='error')
+                            return  # 退出线程
                 else:
                     # 仅在非首次运行时更新状态
                     self._update_task_status(config_session, session_task, status='running')
