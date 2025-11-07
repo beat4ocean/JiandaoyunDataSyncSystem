@@ -692,7 +692,7 @@ class Db2JdySyncService:
 
         try:
             # 调用新的内部方法, 强制删除
-            self._run_full_sync(config_session, task, delete_first=True)
+            self._run_full_sync(config_session, task, delete_first=False)
             # 成功, 设置为空闲
             self._update_task_status(config_session, task, status='idle')
 
@@ -734,7 +734,7 @@ class Db2JdySyncService:
                 logger.info(f"task_id:[{task.id}] First run: Executing initial full replace...")
                 try:
                     # 调用全量同步
-                    self._run_full_sync(config_session, task, delete_first=True)
+                    self._run_full_sync(config_session, task, delete_first=False)
                     # 成功后, 更新状态并退出
                     self._update_task_status(config_session, task,
                                              status='idle',
@@ -1101,7 +1101,7 @@ class Db2JdySyncService:
                     logger.info(f"[{thread_name}] First run: Executing initial full replace...")
                     try:
                         # _run_full_sync 使用传入的会话
-                        self._run_full_sync(config_session, session_task, delete_first=True)
+                        self._run_full_sync(config_session, session_task, delete_first=False)
 
                         # 成功后, 更新状态
                         self._update_task_status(config_session, session_task,

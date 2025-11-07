@@ -1280,7 +1280,7 @@
                 </template>
 
                 <template v-if="currentItem.sync_mode === 'INCREMENTAL' || currentItem.sync_mode === 'BINLOG'">
-                  <el-form-item label="首次执行全量同步 (会覆盖目标数据)">
+                  <el-form-item label="首次执行全量同步">
                     <el-switch v-model="currentItem.is_full_replace_first"></el-switch>
                   </el-form-item>
                 </template>
