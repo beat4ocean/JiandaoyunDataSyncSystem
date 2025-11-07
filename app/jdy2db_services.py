@@ -1345,7 +1345,7 @@ class Jdy2DbSyncService:
                                                 f"task_id:[{task_id}] Failed to add column '{col_name}': {e}")
                                             log_sync_error(task_config=task_config,
                                                            error=e,
-                                                           extra_info="Error during handle_table_schema_from_data (connection/transaction)")
+                                                           extra_info="Error during update_table_schema_from_data (connection/transaction)")
 
                                     for col_name in cols_to_drop:
                                         if col_name == '_id':
@@ -1359,7 +1359,7 @@ class Jdy2DbSyncService:
                                             logger.error(
                                                 f"task_id:[{task_id}] Failed to delete column '{col_name}': {e}")
                                             log_sync_error(task_config=task_config, error=e,
-                                                           extra_info="Error during handle_table_schema_from_data (connection/transaction)")
+                                                           extra_info="Error during update_table_schema_from_data (connection/transaction)")
                                     transaction.commit()
 
                             # 刷新表缓存
@@ -1389,8 +1389,8 @@ class Jdy2DbSyncService:
 
 
         except Exception as e:
-            logger.error(f"task_id:[{task_id}] Error during handle_table_schema_from_data: {e}", exc_info=True)
-            log_sync_error(task_config=task_config, error=e, extra_info="Error in handle_table_schema_from_data")
+            logger.error(f"task_id:[{task_id}] Error during update_table_schema_from_data: {e}", exc_info=True)
+            log_sync_error(task_config=task_config, error=e, extra_info="Error in update_table_schema_from_data")
             return table  # 失败时返回原表
 
     # 优化：比较 SQLAlchemy 类型实例
