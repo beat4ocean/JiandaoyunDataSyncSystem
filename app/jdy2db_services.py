@@ -1157,14 +1157,14 @@ class Jdy2DbSyncService:
             # 3. 排除已知的系统字段
             system_fields = {
                 '_id', 'appId', 'entryId', 'creator', 'updater', 'deleter',
-                'createTime', 'updateTime', 'deleteTime', 'formName', 'flowState',
+                'createTime', 'updateTime', 'deleteTime', 'formName',  # 'flowState', 不是系统默认字段
                 # 'wx_open_id', 'wx_nickname', 'wx_gender' # 微信字段
             }
 
             # 4. 找到数据中有但映射中没有的 keys
-            new_keys_found = data_keys - (mapping_keys + system_fields)
+            new_keys_found = data_keys - (mapping_keys.union(system_fields))
             # 4. 找到映射中有但数据中没有的 keys
-            deleted_keys_found = (mapping_keys + system_fields) - data_keys
+            deleted_keys_found = (mapping_keys.union(system_fields)) - data_keys
 
             # 5. 如果发现 keys 变化，则触发完整的 DDL 和映射更新
             if new_keys_found or deleted_keys_found:
@@ -1455,9 +1455,11 @@ class Jdy2DbSyncService:
             existing_column_names = set(existing_columns_info.keys())
 
             # 定义系统字段 (这些字段不参与 DDL 变更)
-            system_fields = {'_id', 'appId', 'entryId', 'creator', 'updater', 'deleter', 'createTime', 'updateTime',
-                             'deleteTime', 'formName', 'flowState'}
-
+            system_fields = {
+                '_id', 'appId', 'entryId', 'creator', 'updater', 'deleter',
+                'createTime', 'updateTime', 'deleteTime', 'formName',  # 'flowState', 不是系统默认字段
+                # 'wx_open_id', 'wx_nickname', 'wx_gender' # 微信字段
+            }
             # 2. 获取旧状态 (Old State)
             # 从 FormFieldMapping 表 (config_session)
             old_mappings = {
@@ -1692,8 +1694,11 @@ class Jdy2DbSyncService:
                 widget_map_for_name_gen[m.widget_name] = widget_dict
 
             # 2. 添加系统字段映射 (如果它们不在映射表中)
-            system_fields = ['_id', 'appId', 'entryId', 'creator', 'updater', 'deleter',
-                             'createTime', 'updateTime', 'deleteTime', 'formName', 'flowState']
+            system_fields = [
+                '_id', 'appId', 'entryId', 'creator', 'updater', 'deleter',
+                'createTime', 'updateTime', 'deleteTime', 'formName',  # 'flowState', 不是系统默认字段
+                # 'wx_open_id', 'wx_nickname', 'wx_gender' # 微信字段
+            ]
             for field in system_fields:
                 if field not in mappings:
                     mappings[field] = field  # 假设系统字段名与列名相同
