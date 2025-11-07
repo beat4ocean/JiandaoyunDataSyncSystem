@@ -21,6 +21,8 @@ from app.utils import (retry, convert_to_pinyin, log_sync_error, TZ_UTC_8)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+EXTRACT_SCHEMA_FROM_DATA = False
+
 
 class FieldMappingService:
     """
@@ -115,7 +117,7 @@ class FieldMappingService:
         return final_name
 
     @retry()
-    def get_sql_type(self, type: str, data_value: any) -> TypeEngine:
+    def get_sql_type(self, type: str | None, data_value: any) -> TypeEngine:
         """
         根据简道云的字段类型（优先）或值的Python类型推断出合适的 SQLAlchemy 数据类型。
         :param type: 从 `form_fields_mapping` 表中获取的简道云字段类型字符串。
@@ -271,12 +273,12 @@ class FieldMappingService:
             if not api_widgets:
                 logger.warning(
                     f"task_id:[{task_id}] API returned no field information, skipping.")
-                # 根据需求，这里可以决定是否要删除所有现有映射
+                # 根据需求，可删除所有现有映射
                 # config_session.query(FormFieldMapping).filter_by(app_id=app_id, entry_id=entry_id).delete()
                 # config_session.commit()
                 return
 
-            # 2. 获取数据库中已存在的“当前”映射 (按 task_id)
+            # 2. 获取数据库中已存在的“当前”映射
             existing_mappings_query = config_session.query(FormFieldMapping).filter_by(task_id=task_id)
 
             # 3. 将已存在映射转为 {widget_name: mapping_object} 的字典
@@ -435,22 +437,23 @@ class Jdy2DbSyncService:
 
         # --- 1. 确定目标表名 ---
         table_name = None
-        update_task_config_flag = False  # 重命名标志以避免歧义
+        update_task_config_flag = False
+        old_table_name = task_config.table_name
 
         # 优先级 1: table_param (URL参数)
         if table_param and table_param.strip():
             table_name = table_param.strip()
             logger.info(f"task_id:[{task_config.id}] Using dynamic table name from ?table= parameter: {table_name}")
             # 检查是否需要更新配置库中的表名
-            if task_config.table_name != table_name:
+            if old_table_name != table_name:
                 logger.info(
-                    f"task_id:[{task_config.id}] Task {task_config.id} table_name will be updated from '{task_config.table_name}' to: {table_name}")
+                    f"task_id:[{task_config.id}] Task {task_config.id} table_name will be updated from '{old_table_name}' to: {table_name}")
                 task_config.table_name = table_name
                 update_task_config_flag = True
 
         # 优先级 2: task_config.table_name (数据库配置)
-        elif task_config.table_name and task_config.table_name.strip():
-            table_name = task_config.table_name.strip()
+        elif old_table_name and old_table_name.strip():
+            table_name = old_table_name.strip()
             logger.info(f"task_id:[{task_config.id}] Using table name from dynamic task config: {table_name}")
 
         # 优先级 3: (表单名转换)
@@ -470,14 +473,61 @@ class Jdy2DbSyncService:
             logger.info(f"task_id:[{task_config.id}] Using table name from form name pinyin: {table_name}")
 
             # 如果配置中没有表名，则将新生成的拼音表名存入
-            if task_config.table_name != table_name:
+            if old_table_name != table_name:
                 logger.info(f"task_id:[{task_config.id}] Task {task_config.id} table_name will be set to: {table_name}")
                 task_config.table_name = table_name
                 update_task_config_flag = True
 
-        # --- 2. 提交表名更新 (如果需要) ---
+        # --- 2. 提交表名更新 ---
         if update_task_config_flag:
             try:
+                # 检查老表是否存在
+                if old_table_name and old_table_name != table_name:
+                    logger.info(
+                        f"task_id:[{task_config.id}] Table name changed. Checking if old table '{old_table_name}' exists...")
+                    # 检查老表是否存在
+                    inspector = inspect(dynamic_engine)
+
+                    # 检查是否老表已存在
+                    exist_old_table = inspector.has_table(old_table_name)
+                    # 检查新表是否存在
+                    exist_new_table = inspector.has_table(table_name)
+
+                    if exist_old_table:
+                        if not exist_new_table:
+                            logger.info(
+                                f"task_id:[{task_config.id}] Old table '{old_table_name}' exists. Renaming to '{table_name}'...")
+                            with dynamic_engine.connect() as connection:
+                                # 确保新表名不存在，否则 RENAME 会失败
+                                if inspector.has_table(table_name):
+                                    logger.warning(
+                                        f"task_id:[{task_config.id}] Cannot rename: Target table '{table_name}' already exists. Skipping rename.")
+                                else:
+                                    connection.execute(text(f"RENAME TABLE `{old_table_name}` TO `{table_name}`"))
+                                    logger.info(f"task_id:[{task_config.id}] Table renamed successfully.")
+                                    # 更新缓存
+                                    engine_url_key = str(dynamic_engine.url)
+                                    if engine_url_key in self.inspected_tables_cache:
+                                        # 弹出旧表名，（新表名将在 get_table_if_exists 时加载）
+                                        self.inspected_tables_cache[engine_url_key].pop(old_table_name, None)
+                                        logger.info(
+                                            f"task_id:[{task_config.id}] Inspected tables cache updated (removed old table).")
+
+                        else:
+                            logger.warning(
+                                f"task_id:[{task_config.id}] Old table '{old_table_name}' exists and new table '{table_name}' exists. Skipping rename.")
+                            log_sync_error(
+                                task_config=task_config,
+                                error=Exception(
+                                    f"task_id:[{task_config.id}] Old table '{old_table_name}' exists and new table '{table_name}' exists. Skipping rename."),
+                                payload=payload,
+                                extra_info="table already exists, do not recreate table!"
+                            )
+
+                    else:
+                        logger.info(
+                            f"task_id:[{task_config.id}] Old table '{old_table_name}' does not exist. No rename necessary.")
+
                 config_session.commit()
                 logger.info(f"task_id:[{task_config.id}] Task {task_config.id} table_name updated successfully.")
             except SQLAlchemyError as e:  # 使用更具体的异常
@@ -585,7 +635,7 @@ class Jdy2DbSyncService:
 
                 # 2. 先同步 DDL
                 # 比较 DB 映射 (旧) 和 data (新))
-                table = self.handle_table_schema_from_form(config_session, table, data, task_config, dynamic_engine,
+                table = self.update_table_schema_from_form(config_session, table, data, task_config, dynamic_engine,
                                                            dynamic_metadata)
 
                 # 3. DDL 成功后，再更新映射表
@@ -624,8 +674,8 @@ class Jdy2DbSyncService:
                     try:
                         if op in ('data_create', 'data_update', 'data_recover'):
                             # 确保表结构与数据兼容 (主要处理新增列)
-                            table = self.handle_table_schema_from_data(table, [data], task_config, dynamic_engine,
-                                                                       dynamic_metadata)
+                            table = self.update_table_schema_from_data(table, [data], task_config, dynamic_engine,
+                                                                       dynamic_metadata, config_session)
                             self.upsert_data(target_session, table, data, task_config)
 
                         elif op == 'data_remove':
@@ -798,10 +848,10 @@ class Jdy2DbSyncService:
 
     # --- 数据库表结构 (DDL) ---
 
+    @retry()
     def get_table_if_exists(self, table_name: str, engine) -> Table | None:
         """
         如果表存在，则从缓存或数据库加载表定义。
-        --- 6. 动态引擎 ---
         """
         engine_url_key = str(engine.url)
 
@@ -825,11 +875,11 @@ class Jdy2DbSyncService:
             self.inspected_tables_cache[engine_url_key].pop(table_name, None)
         return None
 
+    @retry()
     def get_or_create_table_from_data(self, table_name: str, data_samples: list[dict], task_config: SyncTask, engine,
                                       metadata) -> Table:
         """
         获取或创建数据表。如果表不存在，则根据数据样本动态创建。
-        --- 7. 动态引擎/元数据 ---
         """
         table = self.get_table_if_exists(table_name, engine)
         if table is not None:
@@ -837,13 +887,16 @@ class Jdy2DbSyncService:
 
         logger.info(f"task_id:[{task_config.id}] Table '{table_name}' does not exist, creating from data samples...")
         try:
-            column_defs, column_comments = self.get_column_schema(data_samples, task_config)
+            # 获取字段 comment
+            column_defs, column_comments = self.get_column_schema_from_data(data_samples, task_config)
             columns = [Column(name, col_type, comment=column_comments.get(name)) for name, col_type in
                        column_defs.items()]
 
-            table_comment = table_name
+            # 获取表 comment
             if data_samples and data_samples[0]:  # 确保 data_samples 非空且第一个元素非空
                 table_comment = data_samples[0].get('formName', table_name)
+            else:
+                table_comment = table_name
 
             # 确保 _id 列是主键或唯一键（如果创建新表）
             final_columns = []
@@ -862,7 +915,7 @@ class Jdy2DbSyncService:
                 logger.warning(
                     f"task_id:[{task_config.id}] '_id' field not found in data samples for table '{table_name}', auto-adding as unique key.")
 
-            # 确保列名不重复 (理论上 get_column_definitions 应该处理了)
+            # 确保列名不重复 (理论上 get_column_schema 应该处理了)
             final_column_names = {c.name for c in final_columns}
             if len(final_column_names) != len(final_columns):
                 logger.error(
@@ -883,6 +936,7 @@ class Jdy2DbSyncService:
                            extra_info=f"Failed to create table '{table_name}' from data samples")
             raise  # 创建失败则向上抛出异常
 
+    @retry()
     def get_or_create_table_from_schema(self, table_name: str, form_schema_data: dict, task_config: SyncTask, engine,
                                         metadata) -> Table:
         """
@@ -964,7 +1018,8 @@ class Jdy2DbSyncService:
                            extra_info=f"Failed to create table '{table_name}' from schema")
             raise
 
-    def get_column_schema(self, data_samples: list[dict], task_config: SyncTask) -> (dict, dict):
+    @retry()
+    def get_column_schema_from_data(self, data_samples: list[dict], task_config: SyncTask) -> (dict, dict):
         """根据一批数据样本分析并生成所有字段的列定义"""
         column_types = {}
         column_comments = {}
@@ -1010,23 +1065,32 @@ class Jdy2DbSyncService:
                 mapping_info = mappings.get(key)
                 if mapping_info:
                     # 从 mapping_info 推断列名
-                    db_col_name = self.mapping_service.get_column_name(
-                        {'name': mapping_info.widget_alias, 'label': mapping_info.label,
-                         'widgetName': mapping_info.widget_name},
-                        task_config.label_to_pinyin
-                    )
+                    widget = {'name': mapping_info.widget_alias, 'label': mapping_info.label,
+                              'widgetName': mapping_info.widget_name}
+                    db_col_name = self.mapping_service.get_column_name(widget, task_config.label_to_pinyin)
                     comment = mapping_info.label
                     jdy_type = mapping_info.type  # 获取简道云类型
                     sql_type_instance = self.mapping_service.get_sql_type(jdy_type, sample_value)  # 直接获取实例
+
                 else:
-                    # # 如果映射不存在，则退化为旧逻辑
-                    # db_col_name = re.sub(r'[^a-zA-Z0-9_]', '', key)
-                    # sql_type_instance = get_sql_type(None, sample_value)
-                    logger.error(
-                        f"task_id:[{task_config.id}] Field mapping not found for {task_config.app_id}/{task_config.entry_id}: {key}")
-                    log_sync_error(task_config=task_config,
-                                   error=Exception("Field mapping not found"),
-                                   extra_info=f"字段映射不存在 for {task_config.app_id}/{task_config.entry_id}: {key}")
+                    # 如果映射不存在
+                    # 如果使用 EXTRACT_SCHEMA_FROM_DATA
+                    if EXTRACT_SCHEMA_FROM_DATA:
+                        # 退化为旧逻辑
+                        # # 替换所有非字母、数字、下划线的字符为空字符串
+                        # db_col_name = re.sub(r'[^a-zA-Z0-9_]', '', key)
+                        # 保留中文、英文、数字、下划线
+                        db_col_name = re.sub(r'[^a-zA-Z0-9_\u4e00-\u9fff]', '', key)
+                        sql_type_instance = self.mapping_service.get_sql_type(None, sample_value)
+                        logger.warning(
+                            f"task_id:[{task_config.id}] Field mapping not found for {task_config.app_id}/{task_config.entry_id}: {key}, extract column name = {db_col_name}.")
+
+                    else:
+                        logger.error(
+                            f"task_id:[{task_config.id}] Field mapping not found for {task_config.app_id}/{task_config.entry_id}: {key}")
+                        log_sync_error(task_config=task_config,
+                                       error=Exception("Field mapping not found"),
+                                       extra_info=f"字段映射不存在 for {task_config.app_id}/{task_config.entry_id}: {key}")
 
             if not db_col_name or db_col_name in processed_col_names:
                 if db_col_name in processed_col_names:
@@ -1060,180 +1124,305 @@ class Jdy2DbSyncService:
 
         return column_types, column_comments
 
-    def handle_table_schema_from_data(self, table: Table, data_batch: list[dict], task_config: SyncTask, engine,
-                                      metadata) -> Table:
-        """
-        同步数据库表结构（数据同步触发）：仅处理新增列。
-        --- 9. 动态引擎/元数据 ---
-        """
-        inspector = inspect(engine)
-        try:
-            existing_columns_info = {c['name']: c for c in inspector.get_columns(table.name)}
-            existing_columns = set(existing_columns_info.keys())
-        except Exception as e:
-            logger.error(f"task_id:[{task_config.id}] Cannot get column information for table '{table.name}': {e}",
-                         exc_info=True)
-            return table  # 无法获取结构信息，直接返回
+    # @retry()
+    # def get_column_schema_from_widget(self, widget: dict, data: dict, use_label_pinyin: bool) -> str:
+    #     column_name = self.mapping_service.get_column_name(widget, use_label_pinyin)
+    #     data_value = data.values()[0]
+    #     column_type = self.mapping_service.get_sql_type(widget.get('type'), data_value)
+    #     column_comment = widget.get('label')
+    #
+    #     return column_name, column_type, column_comment
 
-        config_session = ConfigSession()
-        all_new_columns = {}  # {col_name: {"value": ..., "type": ..., "comment": ...}}
-
-        # 存储 widget 字典
-        widget_map_for_name_gen = {}
+    @retry()
+    def update_table_schema_from_data(self, table: Table, data_batch: list[dict], task_config: SyncTask, engine,
+                                      metadata, config_session: Session) -> Table | None:
+        """
+        检查数据负载，如果发现 data 与 FormFieldMapping 不一致，则触发完整的 DDL 同步。
+        """
+        task_id = task_config.id
 
         try:
-            # 1. 获取当前映射
-            mappings = {
-                m.widget_name: m
-                for m in config_session.query(FormFieldMapping).filter_by(
-                    task_id=task_config.id
-                ).all()
+            # 1. 获取当前映射中的所有 widget_alias
+            mapping_keys = {
+                m.widget_alias for m in
+                config_session.query(FormFieldMapping.widget_alias).filter_by(task_id=task_id).all()
             }
 
-            expected_db_columns = set()
-            for m in mappings.values():
-                # 动态获取列名
-                widget_dict = {'name': m.widget_alias, 'label': m.label, 'widgetName': m.widget_name}
-                db_col_name = self.mapping_service.get_column_name(widget_dict, task_config.label_to_pinyin)
-                expected_db_columns.add(db_col_name)
-                widget_map_for_name_gen[m.widget_name] = widget_dict
+            # 2. 获取数据负载中的所有 keys
+            data_keys = set()
+            for data_item in data_batch:
+                if isinstance(data_item, dict):
+                    data_keys.update(data_item.keys())
 
+            # 3. 排除已知的系统字段
             system_fields = {
-                '_id', 'appId', 'entryId', 'creator', 'updater', 'deleter', 'createTime', 'updateTime', 'deleteTime',
-                'formName', 'flowState'}
-            all_expected_columns = expected_db_columns.union(system_fields)
+                '_id', 'appId', 'entryId', 'creator', 'updater', 'deleter',
+                'createTime', 'updateTime', 'deleteTime', 'formName', 'flowState',
+                # 'wx_open_id', 'wx_nickname', 'wx_gender' # 微信字段
+            }
 
-            # 2. 计算需要添加的列 (基于传入的数据和映射)
-            if data_batch:  # 仅当有数据时才检查新列
-                for data_item in data_batch:
-                    if not isinstance(data_item, dict):
-                        continue  # 跳过无效数据项
+            # 4. 找到数据中有但映射中没有的 keys
+            new_keys_found = data_keys - (mapping_keys + system_fields)
+            # 4. 找到映射中有但数据中没有的 keys
+            deleted_keys_found = (mapping_keys + system_fields) - data_keys
 
-                    for key, value in data_item.items():
-                        mapping_info = mappings.get(key)
-                        if not mapping_info: continue
+            # 5. 如果发现 keys 变化，则触发完整的 DDL 和映射更新
+            if new_keys_found or deleted_keys_found:
+                if new_keys_found:
+                    logger.warning(
+                        f"task_id:[{task_id}] Stale mapping detected (data event). Data contains new keys: {new_keys_found}. Forcing full schema sync...")
+                if deleted_keys_found:
+                    logger.warning(
+                        f"task_id:[{task_id}] Stale mapping detected (data event). Data contains deleted keys: {deleted_keys_found}. Forcing full schema sync...")
 
+                # 5a. 调用 API 获取最新的表单结构
+                if not task_config.department or not task_config.department.jdy_key_info:
+                    raise ValueError(f"task_id:[{task_id}] Missing department/key info for stale mapping update")
+                key_info = task_config.department.jdy_key_info
+
+                api_client = FormApi(
+                    api_key=key_info.api_key,
+                    host=Config.JDY_API_BASE_URL
+                )
+                resp = api_client.get_form_widgets(task_config.app_id, task_config.entry_id)
+                form_schema_data = {
+                    'name': resp.get('name') or resp.get('formName', ''),
+                    'widgets': resp.get('widgets', []),
+                    'appId': task_config.app_id,
+                    'entryId': task_config.entry_id
+                }
+
+                # 5b. 调用 handle_table_schema_from_form 执行完整的 DDL (ADD/DROP/RENAME)
+                # (传入 config_session，因为它包含旧的映射)
+                new_table = self.update_table_schema_from_form(
+                    config_session, table, form_schema_data, task_config, engine, metadata
+                )
+
+                # 5c. DDL 成功后，立即更新 FormFieldMapping 表
+                self.mapping_service.create_or_update_form_fields_mapping(
+                    config_session, task_config, api_client, form_schema_data.get('name')
+                )
+
+                logger.info(f"task_id:[{task_id}] Full schema sync triggered by data event completed.")
+                return new_table  # 返回新加载的表
+
+            else:
+                # 6. ADD COLUMN FROM DATA
+                if EXTRACT_SCHEMA_FROM_DATA:
+                    # logger.debug(f"task_id:[{task_id}] Mapping appears fresh. Checking for missing and deleted columns.")
+
+                    # 加载表 schema
+                    inspector = inspect(engine)
+                    try:
+                        # get_columns 应该传入 table_name, 不是 table.name
+                        existing_columns_map = {c['name']: c for c in
+                                                inspector.get_columns(table.name, _warn_deprecated_dialect=True)}
+                        existing_columns = set(existing_columns_map.keys())
+                    except Exception as e:
+                        logger.error(
+                            f"task_id:[{task_id}] Cannot get column information for table '{table.name}': {e}",
+                            exc_info=True)
+                        return table  # 无法获取结构信息，直接返回
+
+                    # 重新加载映射
+                    mappings = {
+                        m.widget_name: m
+                        for m in config_session.query(FormFieldMapping).filter_by(
+                            task_id=task_config.id
+                        ).all()
+                    }
+
+                    # 需要增加的列
+                    cols_to_add = {}  # {col_name: {"value": ..., "type": ..., "comment": ...}}
+                    # 需要删除的列
+                    cols_to_drop = {}
+
+                    # 1. 计算需要新增的列
+                    if data_batch:
+                        for data_item in data_batch:
+                            if not isinstance(data_item, dict):
+                                continue  # 跳过无效数据项
+
+                            for key, value in data_item.items():
+                                mapping_info = mappings.get(key)
+                                # 没找到映射
+                                if not mapping_info:
+                                    # 检查系统字段
+                                    if key in system_fields:
+                                        if key not in existing_columns:
+                                            sql_type = self.mapping_service.get_sql_type(mapping_info.type, value)
+                                            cols_to_add[key] = {
+                                                "value": value,
+                                                "type": sql_type,
+                                                "comment": key  # 使用 简道云 widget_alias/widget_name 作为 comment
+                                            }
+                                        # 处理下一个
+                                        continue
+
+                                    # 如果映射不存在，并且不是系统字段，则使用旧逻辑
+                                    if EXTRACT_SCHEMA_FROM_DATA:
+                                        # # 替换所有非字母、数字、下划线的字符为空字符串
+                                        # db_col_name = re.sub(r'[^a-zA-Z0-9_]', '', key)
+                                        # 保留中文、英文、数字、下划线
+                                        db_col_name = re.sub(r'[^a-zA-Z0-9_\u4e00-\u9fff]', '', key)
+                                        if db_col_name and db_col_name not in existing_columns and db_col_name not in cols_to_add:
+                                            sql_type = self.mapping_service.get_sql_type(None, value)
+                                            cols_to_add[db_col_name] = {
+                                                "value": value,
+                                                "type": sql_type,
+                                                "comment": key  # 使用 简道云 widget_alias/widget_name 作为 comment
+                                            }
+                                            logger.warning(
+                                                f"task_id:[{task_id}] Field mapping not found for {key}, auto-adding column '{db_col_name}' based on data.")
+
+                                    else:
+                                        logger.warning(
+                                            f"task_id:[{task_id}] Field mapping not found for {key}, skipping.")
+                                        log_sync_error(task_config=task_config,
+                                                       error=Exception("Field mapping not found"),
+                                                       extra_info="Task skipped: Field mapping not found.")
+                                    # 处理下一个
+                                    continue
+
+                                # 找到映射
+                                else:
+                                    widget_dict = {'widgetName': mapping_info.widget_name,
+                                                   'name': mapping_info.widget_alias,
+                                                   'label': mapping_info.label}
+                                    db_col_name = self.mapping_service.get_column_name(widget_dict,
+                                                                                       task_config.label_to_pinyin)
+
+                                    if db_col_name and db_col_name not in existing_columns and db_col_name not in cols_to_add:
+                                        cols_to_add[db_col_name] = {
+                                            "value": value,
+                                            "type": mapping_info.type,
+                                            "comment": mapping_info.label
+                                        }
+                                    # 处理下一个
+                                    continue
+
+                    # 2. 计算需要删除的列
+                    expected_db_columns = set()
+                    for m in mappings.values():
                         # 动态获取列名
-                        widget_dict = widget_map_for_name_gen.get(key)
-                        if not widget_dict: continue  # 理论上不应发生
-
+                        widget_dict = {'name': m.widget_alias, 'label': m.label, 'widgetName': m.widget_name}
                         db_col_name = self.mapping_service.get_column_name(widget_dict, task_config.label_to_pinyin)
-                        if not db_col_name or not db_col_name.strip():
-                            # logger.warning(f"警告: 检测到空的列名，跳过添加。Widget Name: {key}")
-                            continue
+                        expected_db_columns.add(db_col_name)
+                    # 数据库中存在，但期望的列定义中没有的列
+                    cols_to_drop = existing_columns - expected_db_columns - system_fields  # 排除系统字段
+                    # 为防止映射表更新延迟，如果一个列刚被识别为新列，就不应该删除它
+                    cols_to_drop = cols_to_drop - set(cols_to_add.keys())
 
-                        # 如果列不存在 且 未被标记为待添加
-                        if db_col_name not in existing_columns and db_col_name not in all_new_columns:
-                            all_new_columns[db_col_name] = {
-                                "value": value,  # 用于类型推断
-                                "type": mapping_info.type,  # 简道云类型
-                                "comment": mapping_info.label
-                            }
-
-            # 3. 计算需要删除的列
-            # 数据库中存在，但期望的列定义中没有的列
-            cols_to_drop = existing_columns - all_expected_columns
-            # 为防止映射表更新延迟，如果一个列刚被识别为新列，就不应该删除它
-            cols_to_drop = cols_to_drop - set(all_new_columns.keys())
-
-        except SQLAlchemyError as e:
-            logger.error(f"task_id:[{task_config.id}] Failed to query field mappings for Task {task_config.id}: {e}",
-                         exc_info=True)
-            # 映射查询失败，无法安全地添加列
-            all_new_columns = {}
-        finally:
-            config_session.close()
-
-        # 如果没有结构变更，则直接返回
-        if not all_new_columns and not cols_to_drop:
-            return table
-
-        # 4. 执行数据库变更
-        logger.info(f"task_id:[{task_config.id}] Starting to sync table structure for '{table.name}'...")
-        if all_new_columns:
-            logger.info(
-                f"task_id:[{task_config.id}] Detected new fields in table '{table.name}', batch adding: {', '.join(all_new_columns.keys())}")
-        if cols_to_drop:
-            logger.info(
-                f"task_id:[{task_config.id}] Detected redundant fields in table '{table.name}', batch deleting: {', '.join(cols_to_drop)}")
-
-        try:
-            with engine.connect() as connection:
-                with connection.begin() as transaction:
-                    # 执行删除操作
-                    for col_name in cols_to_drop:
-                        if col_name == '_id':
-                            continue  # 保护 _id 不被删除
-                        connection.execute(text(f"ALTER TABLE `{table.name}` DROP COLUMN `{col_name}`"))
-
-                    # 执行添加操作
-                    for col_name, col_info in all_new_columns.items():
-                        if not col_name or not col_name.strip():  # 再次检查
-                            logger.warning(
-                                f"task_id:[{task_config.id}] Empty column name detected again, skipping before executing SQL.")
-                            continue
-
-                        # 使用 get_sql_type 获取 SQLAlchemy 类型实例
-                        sql_type_instance = self.mapping_service.get_sql_type(col_info["type"], col_info['value'])
-                        # 获取类型的 SQL 字符串表示
-                        type_string = sql_type_instance.compile(dialect=engine.dialect)
-
-                        try:
-                            connection.execute(
-                                text(
-                                    f"ALTER TABLE `{table.name}` ADD COLUMN `{col_name}` {type_string} COLLATE utf8mb4_general_ci COMMENT :comment"),
-                                {'comment': col_info['comment']}
-                            )
+                    if cols_to_add or cols_to_drop:
+                        if cols_to_add:
+                            # 调用 DDL
                             logger.info(
-                                f"task_id:[{task_config.id}] Successfully added column '{col_name}' type '{type_string}' to table '{table.name}'.")
-                        except Exception as alter_err:
-                            # 如果添加单列失败（例如，列已存在于并发操作中），记录错误并继续尝试添加其他列
-                            logger.error(
-                                f"task_id:[{task_config.id}] Failed to add column '{col_name}' to table '{table.name}': {alter_err}")
-                            # 不回滚整个事务，允许其他列的添加继续
+                                f"task_id:[{task_id}] Detected new fields in table '{table.name}', batch adding: {', '.join(cols_to_add.keys())}")
+                        if cols_to_drop:
+                            # 调用 DDL
+                            logger.info(
+                                f"task_id:[{task_id}] Detected deleted fields in table '{table.name}', batch deleting: {', '.join(cols_to_drop)}")
+                        try:
+                            with engine.connect() as connection:
+                                with connection.begin() as transaction:
 
-                    transaction.commit()  # 提交所有成功的 ALTER TABLE 操作
+                                    for col_name, col_info in cols_to_add.items():
+                                        if not col_name:
+                                            continue
+                                        sql_type_instance = self.mapping_service.get_sql_type(col_info["type"],
+                                                                                              col_info['value'])
+                                        type_string = sql_type_instance.compile(dialect=engine.dialect)
+                                        try:
+                                            logger.info(
+                                                f"task_id:[{task_id}] Will add column '{col_name}' with type '{type_string}'")
+                                            connection.execute(
+                                                text(
+                                                    f"ALTER TABLE `{table.name}` ADD COLUMN `{col_name}` {type_string} COLLATE utf8mb4_general_ci COMMENT :comment"),
+                                                {'comment': col_info['comment']}
+                                            )
+                                        except Exception as e:
+                                            logger.error(
+                                                f"task_id:[{task_id}] Failed to add column '{col_name}': {e}")
+                                            log_sync_error(task_config=task_config,
+                                                           error=e,
+                                                           extra_info="Error during handle_table_schema_from_data (connection/transaction)")
+
+                                    for col_name in cols_to_drop:
+                                        if col_name == '_id':
+                                            continue  # 保护 _id 不被删除
+                                        try:
+                                            logger.info(
+                                                f"task_id:[{task_id}] Will delete column '{col_name}'")
+                                            connection.execute(
+                                                text(f"ALTER TABLE `{table.name}` DROP COLUMN `{col_name}`"))
+                                        except Exception as e:
+                                            logger.error(
+                                                f"task_id:[{task_id}] Failed to delete column '{col_name}': {e}")
+                                            log_sync_error(task_config=task_config, error=e,
+                                                           extra_info="Error during handle_table_schema_from_data (connection/transaction)")
+                                    transaction.commit()
+
+                            # 刷新表缓存
+                            metadata.clear()
+                            engine_url_key = str(engine.url)
+                            if engine_url_key in self.inspected_tables_cache:
+                                self.inspected_tables_cache[engine_url_key].pop(table.name, None)
+
+                            new_table = self.get_table_if_exists(table.name, engine)  # 返回新表
+                            if new_table is not None:
+                                logger.info(
+                                    f"task_id:[{task_id}] Table '{table.name}' structure updated and reloaded.")
+                                return new_table
+                            else:
+                                logger.error(
+                                    f"task_id:[{task_id}] Failed to reload table definition for '{table.name}'")
+                                log_sync_error(task_config=task_config,
+                                               error=Exception(f"Failed to reload table {table.name}"),
+                                               extra_info=f"Failed to reload table definition for '{table.name}'")
+                                return table  # 返回旧表
+
+                        except Exception as e:
+                            logger.error(f"task_id:[{task_id}] Connection error: {e}", exc_info=True)
+                            log_sync_error(task_config=task_config, error=e, extra_info="Error during DDL")
+
+                    return table  # 返回原表
+
+
         except Exception as e:
-            # 如果连接或事务启动失败
-            # transaction.rollback() # (已在 with connection.begin() 中自动回滚)
-            logger.error(
-                f"task_id:[{task_config.id}] Connection or transaction error while adding columns to table '{table.name}': {e}",
-                exc_info=True)
-            log_sync_error(task_config=task_config, error=e,
-                           extra_info="Error during handle_table_schema_from_data (connection/transaction)")
-            # 发生严重错误，可能无法继续，但还是尝试重新加载表定义
-            # return table # 返回旧表定义可能更安全
-
-        # 清理缓存并重新加载更新后的表定义
-        metadata.clear()
-
-        engine_url_key = str(engine.url)
-        if engine_url_key in self.inspected_tables_cache:
-            self.inspected_tables_cache[engine_url_key].pop(table.name, None)
-
-        new_table = self.get_table_if_exists(table.name, engine)
-        if new_table is not None:
-            logger.info(f"task_id:[{task_config.id}] Table '{table.name}' structure updated and reloaded.")
-            return new_table
-        else:
-            logger.error(
-                f"task_id:[{task_config.id}] Failed to reload table definition for '{table.name}' after adding columns!")
-            return table  # 返回旧表
+            logger.error(f"task_id:[{task_id}] Error during handle_table_schema_from_data: {e}", exc_info=True)
+            log_sync_error(task_config=task_config, error=e, extra_info="Error in handle_table_schema_from_data")
+            return table  # 失败时返回原表
 
     # 优化：比较 SQLAlchemy 类型实例
     def _is_type_different(self, existing_sqlalch_type: TypeEngine, expected_sqlalch_type: TypeEngine) -> bool:
         """比较两个 SQLAlchemy 类型实例是否代表不同的数据库类型"""
         if type(existing_sqlalch_type) != type(expected_sqlalch_type):
+            # # 允许从 String/Text 升级到 LONGTEXT
+            # if isinstance(existing_sqlalch_type, (String, Text)) and isinstance(expected_sqlalch_type, (LONGTEXT)):
+            #     return True
+            # # 允许从 Integer 升级到 BigInteger
+            # if isinstance(existing_sqlalch_type, Integer) and isinstance(expected_sqlalch_type, BigInteger):
+            #     return True
+            # # 允许从 Integer/BigInteger 升级到 Float
+            # if isinstance(existing_sqlalch_type, (Integer, BigInteger)) and isinstance(expected_sqlalch_type, Float):
+            #     return True
+            # 其他类型不匹配
             return True
+
         # 对于 String 类型，还需要比较长度
         if isinstance(existing_sqlalch_type, String) and isinstance(expected_sqlalch_type, String):
-            # 注意：这里的比较可能不完全准确，因为数据库实际长度可能不同
-            # return existing_sqlalch_type.length != expected_sqlalch_type.length
-            return False  # 忽略长度比较
+            # 仅在期望长度大于现有长度时才认为不同 (允许扩展)
+            if (existing_sqlalch_type.length is not None and
+                    expected_sqlalch_type.length is not None and
+                    expected_sqlalch_type.length > existing_sqlalch_type.length):
+                return True
+            # 允许从 String 升级到 Text/LONGTEXT (已在 type check 中处理)
+            return False
+
         # 可以为其他需要比较属性的类型添加更多逻辑 (如 DECIMAL 的精度)
         return False
 
-    def handle_table_schema_from_form(self, config_session: Session, table: Table, data: dict, task_config: SyncTask,
+    def update_table_schema_from_form(self, config_session: Session, table: Table, data: dict, task_config: SyncTask,
                                       engine, metadata):
         """
         处理表单结构更新 (form_update)，比较 DB 映射 (旧) 和 Webhook (新)。
@@ -1318,7 +1507,8 @@ class Jdy2DbSyncService:
                      'widgetName': old_mapping.widget_name},
                     task_config.label_to_pinyin
                 )
-                if not old_db_col_name: continue
+                if not old_db_col_name:
+                    continue
 
                 if old_db_col_name in existing_column_names and old_db_col_name not in system_fields:
                     cols_to_drop.append(old_db_col_name)
@@ -1476,9 +1666,10 @@ class Jdy2DbSyncService:
 
     # --- 数据库数据 (DML) ---
 
-    def clean_data_for_db(self, table: Table, data: dict, task_config: SyncTask) -> dict:
+    @retry()
+    def clean_data_for_dml(self, table: Table, data: dict, task_config: SyncTask) -> dict:
         """根据表结构和动态配置清理数据"""
-        table_columns = {c.name: c for c in table.columns}  # 存储列对象以获取类型
+        table_columns = {c.name: c for c in table.columns}  # 存储列对象以获取类型，不是table.columns()
         cleaned_data = {}
         task_id = task_config.id
 
@@ -1511,6 +1702,25 @@ class Jdy2DbSyncService:
             for key, value in data.items():
                 # 使用新的双重映射字典查找列名
                 db_col_name = mappings.get(key)
+
+                # 如果映射中没有，并且 EXTRACT_SCHEMA_FROM_DATA 为 True，尝试从 key 推断 db_col_name
+                if not db_col_name and key not in system_fields:
+                    if EXTRACT_SCHEMA_FROM_DATA:
+                        # # 替换所有非字母、数字、下划线的字符为空字符串
+                        # db_col_name = re.sub(r'[^a-zA-Z0-9_]', '', key)
+                        # 保留中文、英文、数字、下划线
+                        db_col_name = re.sub(r'[^a-zA-Z0-9_\u4e00-\u9fff]', '', key)
+                        if db_col_name and db_col_name[0].isdigit():
+                            db_col_name = '_' + db_col_name
+                        logger.warning(
+                            f"task_id:[{task_id}] Inferring column name for field '{key}' as '{db_col_name}'.")
+
+                    else:
+                        logger.error(
+                            f"task_id:[{task_id}] Cannot infer column name for field '{key}', skipping.")
+                        log_sync_error(task_config=task_config,
+                                       error=Exception(f"Cannot infer column name for field '{key}'"),
+                                       extra_info=f"Cannot infer column name for field '{key}'", )
 
                 if db_col_name and db_col_name in table_columns:
                     column_obj = table_columns[db_col_name]
@@ -1588,7 +1798,7 @@ class Jdy2DbSyncService:
     @retry()
     def upsert_data(self, session: Session, table: Table, data: dict, task_config: SyncTask):
         """插入或更新单条数据 (使用 ON DUPLICATE KEY UPDATE 增强)"""
-        cleaned_data = self.clean_data_for_db(table, data, task_config)
+        cleaned_data = self.clean_data_for_dml(table, data, task_config)
         if not cleaned_data:
             logger.warning(f"task_id:[{task_config.id}] Cleaned data is empty, nothing to sync.")
             return
@@ -1685,6 +1895,7 @@ class Jdy2DbSyncService:
 
         # 在 sync_historical_data 开始时 task_config 是从当前 config_session 加载的
         try:
+            # 重新加载 task_config
             task_config = config_session.query(SyncTask).options(
                 joinedload(SyncTask.department).joinedload(Department.jdy_key_info),
                 joinedload(SyncTask.database),
@@ -1761,15 +1972,15 @@ class Jdy2DbSyncService:
                         f"task_id:[{task_config.id}] Task {table_name}: Table does not exist, creating from first batch...")
                     table = self.get_or_create_table_from_data(table_name, data_list, task_config, dynamic_engine,
                                                                dynamic_metadata)
-                    table = self.handle_table_schema_from_data(table, data_list, task_config, dynamic_engine,
-                                                               dynamic_metadata)
+                    table = self.update_table_schema_from_data(table, data_list, task_config, dynamic_engine,
+                                                               dynamic_metadata, config_session)
                     first_batch = False
                 elif first_batch and table is not None:
                     # 表已存在，但仍需根据第一批数据检查并更新结构
                     logger.info(
                         f"task_id:[{task_config.id}] Task {table_name}: Table exists, checking structure against first batch...")
-                    table = self.handle_table_schema_from_data(table, data_list, task_config, dynamic_engine,
-                                                               dynamic_metadata)
+                    table = self.update_table_schema_from_data(table, data_list, task_config, dynamic_engine,
+                                                               dynamic_metadata, config_session)
                     first_batch = False
                 elif table is None:
                     # 理论上不应发生，因为表应在第一批数据时创建
@@ -1795,7 +2006,6 @@ class Jdy2DbSyncService:
                     logger.error(
                         f"task_id:[{task_config.id}] Task {table_name}: Unexpected error processing item (last_data_id={last_data_id}): {item_err}",
                         exc_info=True)
-                    target_session.rollback()
                     raise item_err
 
                 # QPS 由 jdy_api.py 内部的 _throttle 控制
