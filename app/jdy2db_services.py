@@ -4,6 +4,7 @@ import logging
 import re
 import threading
 from datetime import datetime, time
+from urllib.parse import quote
 
 from sqlalchemy import inspect, Table, Column, String, text, JSON, DateTime, Text, BigInteger, Float
 from sqlalchemy.dialects.mysql import insert, LONGTEXT
@@ -436,25 +437,26 @@ class Jdy2DbSyncService:
         entry_id = task_config.entry_id
 
         # --- 1. 确定目标表名 ---
-        table_name = None
+        new_table_name = None
         update_task_config_flag = False
         old_table_name = task_config.table_name
 
         # 优先级 1: table_param (URL参数)
         if table_param and table_param.strip():
-            table_name = table_param.strip()
-            logger.info(f"task_id:[{task_config.id}] Using dynamic table name from ?table= parameter: {table_name}")
+            new_table_name = table_param.strip()
+            logger.info(
+                f"task_id:[{task_config.id}] Using dynamic table name from ?table= parameter: {new_table_name}")
             # 检查是否需要更新配置库中的表名
-            if old_table_name != table_name:
+            if old_table_name != new_table_name:
                 logger.info(
-                    f"task_id:[{task_config.id}] Task {task_config.id} table_name will be updated from '{old_table_name}' to: {table_name}")
-                task_config.table_name = table_name
+                    f"task_id:[{task_config.id}] Task {task_config.id} table_name will be updated from '{old_table_name}' to: {new_table_name}")
+                task_config.table_name = new_table_name
                 update_task_config_flag = True
 
         # 优先级 2: task_config.table_name (数据库配置)
         elif old_table_name and old_table_name.strip():
-            table_name = old_table_name.strip()
-            logger.info(f"task_id:[{task_config.id}] Using table name from dynamic task config: {table_name}")
+            new_table_name = old_table_name.strip()
+            logger.info(f"task_id:[{task_config.id}] Using table name from dynamic task config: {new_table_name}")
 
         # 优先级 3: (表单名转换)
         else:
@@ -469,20 +471,47 @@ class Jdy2DbSyncService:
                 return
 
             # 使用表单转拼音
-            table_name = convert_to_pinyin(form_name)
-            logger.info(f"task_id:[{task_config.id}] Using table name from form name pinyin: {table_name}")
+            new_table_name = convert_to_pinyin(form_name)
+            logger.info(f"task_id:[{task_config.id}] Using table name from form name pinyin: {new_table_name}")
 
             # 如果配置中没有表名，则将新生成的拼音表名存入
-            if old_table_name != table_name:
-                logger.info(f"task_id:[{task_config.id}] Task {task_config.id} table_name will be set to: {table_name}")
-                task_config.table_name = table_name
+            if old_table_name != new_table_name:
+                logger.info(
+                    f"task_id:[{task_config.id}] Task {task_config.id} table_name will be set to: {new_table_name}")
+                task_config.table_name = new_table_name
                 update_task_config_flag = True
 
         # --- 2. 提交表名更新 ---
         if update_task_config_flag:
             try:
-                # 检查老表是否存在
-                if old_table_name and old_table_name != table_name:
+                # 如果 table_name 发生变化 (例如自动生成或被 URL 参数覆盖),
+                # 必须立即更新 task_config.webhook_url 字段以反映此更改。
+
+                # 从 task_config (已加载) 中获取所需组件
+                department_name = task_config.department.department_name
+                database_id = task_config.database_id
+                task_id = task_config.id
+                # 'table_name' 变量此时已是新名称
+
+                # 从 Config 获取基础 URL
+                host_url = Config.WEB_HOOK_BASE_URL
+                if not host_url:
+                    # 如果未配置，记录一个严重错误，但继续执行 (URL 在数据库中将是旧的)
+                    logger.error(
+                        f"task_id:[{task_id}] CRITICAL: Config.WEB_HOOK_BASE_URL is not set. Cannot update webhook URL.")
+                    log_sync_error(task_config=task_config, error=Exception("WEB_HOOK_BASE_URL 未设置"))
+
+                else:
+                    if host_url.endswith('/'):
+                        host_url = host_url.rstrip('/')
+                    # 使用新 table_name 重新生成 query_params 和 URL
+                    query_params = f"dpt={quote(department_name)}&db_id={database_id}&task_id={task_id}&table={quote(new_table_name)}"
+                    task_config.webhook_url = f"{host_url}/api/jdy/webhook?{query_params}"
+                    logger.info(
+                        f"task_id:[{task_id}] Task {task_id} webhook_url auto-updated to: {task_config.webhook_url}")
+
+                # 检查老表是否存在 (重命名逻辑)
+                if old_table_name and old_table_name != new_table_name:
                     logger.info(
                         f"task_id:[{task_config.id}] Table name changed. Checking if old table '{old_table_name}' exists...")
                     # 检查老表是否存在
@@ -491,19 +520,20 @@ class Jdy2DbSyncService:
                     # 检查是否老表已存在
                     exist_old_table = inspector.has_table(old_table_name)
                     # 检查新表是否存在
-                    exist_new_table = inspector.has_table(table_name)
+                    exist_new_table = inspector.has_table(new_table_name)
 
                     if exist_old_table:
                         if not exist_new_table:
                             logger.info(
-                                f"task_id:[{task_config.id}] Old table '{old_table_name}' exists. Renaming to '{table_name}'...")
+                                f"task_id:[{task_config.id}] Old table '{old_table_name}' exists. Renaming to '{new_table_name}'...")
                             with dynamic_engine.connect() as connection:
                                 # 确保新表名不存在，否则 RENAME 会失败
-                                if inspector.has_table(table_name):
+                                if inspector.has_table(new_table_name):
                                     logger.warning(
-                                        f"task_id:[{task_config.id}] Cannot rename: Target table '{table_name}' already exists. Skipping rename.")
+                                        f"task_id:[{task_config.id}] Cannot rename: Target table '{new_table_name}' already exists. Skipping rename.")
                                 else:
-                                    connection.execute(text(f"RENAME TABLE `{old_table_name}` TO `{table_name}`"))
+                                    connection.execute(
+                                        text(f"RENAME TABLE `{old_table_name}` TO `{new_table_name}`"))
                                     logger.info(f"task_id:[{task_config.id}] Table renamed successfully.")
                                     # 更新缓存
                                     engine_url_key = str(dynamic_engine.url)
@@ -515,11 +545,11 @@ class Jdy2DbSyncService:
 
                         else:
                             logger.warning(
-                                f"task_id:[{task_config.id}] Old table '{old_table_name}' exists and new table '{table_name}' exists. Skipping rename.")
+                                f"task_id:[{task_config.id}] Old table '{old_table_name}' exists and new table '{new_table_name}' exists. Skipping rename.")
                             log_sync_error(
                                 task_config=task_config,
                                 error=Exception(
-                                    f"task_id:[{task_config.id}] Old table '{old_table_name}' exists and new table '{table_name}' exists. Skipping rename."),
+                                    f"task_id:[{task_config.id}] Old table '{old_table_name}' exists and new table '{new_table_name}' exists. Skipping rename."),
                                 payload=payload,
                                 extra_info="table already exists, do not recreate table!"
                             )
@@ -529,13 +559,14 @@ class Jdy2DbSyncService:
                             f"task_id:[{task_config.id}] Old table '{old_table_name}' does not exist. No rename necessary.")
 
                 config_session.commit()
-                logger.info(f"task_id:[{task_config.id}] Task {task_config.id} table_name updated successfully.")
+                logger.info(
+                    f"task_id:[{task_config.id}] Task {task_config.id} table_name and webhook_url updated successfully.")
             except SQLAlchemyError as e:  # 使用更具体的异常
                 config_session.rollback()
                 log_sync_error(
                     task_config=task_config,
                     error=e,
-                    extra_info=f"更新 table_name 失败: {table_name}"
+                    extra_info=f"更新 table_name 失败: {new_table_name}"
                 )
                 logger.error(
                     f"task_id:[{task_config.id}] Error: Failed to update table_name for task {task_config.id}: {e}")
@@ -579,7 +610,7 @@ class Jdy2DbSyncService:
 
         # --- 检查是否需要启动后台全量同步 ---
         if op in ('data_create', 'data_update', 'data_remove', 'data_recover', 'form_update'):
-            table = self.get_table_if_exists(table_name, dynamic_engine)
+            table = self.get_table_if_exists(new_table_name, dynamic_engine)
 
             if table is None or task_config.is_full_replace_first:
                 logger.info(
@@ -589,14 +620,14 @@ class Jdy2DbSyncService:
                 if table is None:
                     try:
                         logger.info(
-                            f"task_id:[{task_config.id}] Table {table_name} does not exist, creating from API Schema...")
+                            f"task_id:[{task_config.id}] Table {new_table_name} does not exist, creating from API Schema...")
                         # 调用 API 获取真实 schema，而不是传递 data 负载
                         form_widgets = api_client.get_form_widgets(app_id, entry_id)
                         # 组装为特定的 form_schema
                         form_schema = {'name': form_name, 'widgets': form_widgets.get('widgets', [])}
-                        table = self.get_or_create_table_from_schema(table_name, form_schema, task_config,
+                        table = self.get_or_create_table_from_schema(new_table_name, form_schema, task_config,
                                                                      dynamic_engine, dynamic_metadata)
-                        logger.info(f"task_id:[{task_config.id}] Table {table_name} created successfully.")
+                        logger.info(f"task_id:[{task_config.id}] Table {new_table_name} created successfully.")
                     except Exception as schema_err:
                         logger.error(
                             f"task_id:[{task_config.id}] Task {task_config.id}: Failed to create table structure synchronously: {schema_err}",
@@ -625,12 +656,12 @@ class Jdy2DbSyncService:
             # 3.1 form_update 单独处理
             if op == 'form_update':
                 logger.info(
-                    f"task_id:[{task_config.id}] Processing form_update event for {table_name} ({app_id}/{entry_id})")
+                    f"task_id:[{task_config.id}] Processing form_update event for {new_table_name} ({app_id}/{entry_id})")
 
                 # 1. 获取或创建表
-                table = self.get_table_if_exists(table_name, dynamic_engine)
+                table = self.get_table_if_exists(new_table_name, dynamic_engine)
                 if table is None:
-                    table = self.get_or_create_table_from_schema(table_name, data, task_config, dynamic_engine,
+                    table = self.get_or_create_table_from_schema(new_table_name, data, task_config, dynamic_engine,
                                                                  dynamic_metadata)
 
                 # 2. 先同步 DDL
@@ -644,7 +675,8 @@ class Jdy2DbSyncService:
 
             # 3.2 其他数据操作
             elif op in ('data_create', 'data_update', 'data_recover', 'data_remove'):
-                logger.info(f"task_id:[{task_config.id}] Processing {op} event for {table_name} ({app_id}/{entry_id})")
+                logger.info(
+                    f"task_id:[{task_config.id}] Processing {op} event for {new_table_name} ({app_id}/{entry_id})")
                 # 确保映射存在 (如果不存在则创建)
                 exists = config_session.query(FormFieldMapping).filter_by(
                     task_id=task_config.id
@@ -656,16 +688,17 @@ class Jdy2DbSyncService:
                                                                               api_client, form_name)
 
                 # 获取或创建表
-                table = self.get_table_if_exists(table_name, dynamic_engine)
+                table = self.get_table_if_exists(new_table_name, dynamic_engine)
                 if table is None and op != 'data_remove':  # 只有在需要写入数据时才创建表
-                    logger.info(f"task_id:[{task_config.id}] Table {table_name} does not exist, creating from data...")
-                    table = self.get_or_create_table_from_data(table_name, [data], task_config, dynamic_engine,
+                    logger.info(
+                        f"task_id:[{task_config.id}] Table {new_table_name} does not exist, creating from data...")
+                    table = self.get_or_create_table_from_data(new_table_name, [data], task_config, dynamic_engine,
                                                                dynamic_metadata)
 
                 # 如果是 data_remove 且表不存在，则无需操作
                 if table is None and op == 'data_remove':
                     logger.warning(
-                        f"task_id:[{task_config.id}] Received data_remove operation, but table '{table_name}' does not exist. Skipping...")
+                        f"task_id:[{task_config.id}] Received data_remove operation, but table '{new_table_name}' does not exist. Skipping...")
                     return
 
                 # --- 动态会话 DML ---
@@ -712,10 +745,10 @@ class Jdy2DbSyncService:
             # 仅当操作涉及 target_session 时才提交
             if op in ('data_create', 'data_update', 'data_recover', 'data_remove'):
                 logger.info(
-                    f"task_id:[{task_config.id}] Webhook data processed successfully: op={op}, table={table_name}")
+                    f"task_id:[{task_config.id}] Webhook data processed successfully: op={op}, table={new_table_name}")
             elif op == 'form_update':
                 logger.info(
-                    f"task_id:[{task_config.id}] Webhook form structure update processed successfully: table={table_name}")
+                    f"task_id:[{task_config.id}] Webhook form structure update processed successfully: table={new_table_name}")
 
         except SQLAlchemyError as db_err:  # 捕获 DDL 或 映射 相关的错误
             logger.error(f"task_id:[{task_config.id}] Database error during webhook processing (DDL/Mapping): {db_err}",
