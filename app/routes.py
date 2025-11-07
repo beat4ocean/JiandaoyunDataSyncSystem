@@ -547,15 +547,16 @@ def add_sync_task():
             new_task.label_to_pinyin = data.get('label_to_pinyin', False)
             new_task.api_secret = data.get('api_secret')
 
-            # 3.2 - 动态生成 Webhook URL
-            # 格式: http://<host>/api/jdy/webhook?dpt=<dept_name>&db_id=<db_id>&table=<table_name>
-            # 使用 db_id (数字) 而不是 db_show_name (可能变化)
-            # 使用 dpt (部门简称)
-            host_url = Config.WEB_HOOK_BASE_URL or request.host_url
-            if host_url.endswith('/'):
-                host_url = host_url.rstrip('/')
-            query_params = f"dpt={quote(department.department_name)}&db_id={database_id}&task_id={new_task.id}&table={quote(table_name)}"
-            new_task.webhook_url = f"{host_url}/api/jdy/webhook?{query_params}"
+            # 第一次commit时没有生成task_id
+            # # 3.2 - 动态生成 Webhook URL
+            # # 格式: http://<host>/api/jdy/webhook?dpt=<dept_name>&db_id=<db_id>&table=<table_name>
+            # # 使用 db_id (数字) 而不是 db_show_name (可能变化)
+            # # 使用 dpt (部门简称)
+            # host_url = Config.WEB_HOOK_BASE_URL or request.host_url
+            # if host_url.endswith('/'):
+            #     host_url = host_url.rstrip('/')
+            # query_params = f"dpt={quote(department.department_name)}&db_id={database_id}&task_id={new_task.id}&table={quote(table_name)}"
+            # new_task.webhook_url = f"{host_url}/api/jdy/webhook?{query_params}"
 
         # --- 6. 通用通知字段 ---
         new_task.is_full_replace_first = data.get('is_full_replace_first', True)
@@ -564,6 +565,20 @@ def add_sync_task():
 
         session.add(new_task)
         session.commit()  # 提交以获取 task_id
+
+        # 3.2 - 动态生成 Webhook URL (在第一次 commit 之后)
+        # 此时 new_task.id 已经有值
+        if new_task.sync_type == 'jdy2db':
+            host_url = Config.WEB_HOOK_BASE_URL or request.host_url
+            if host_url.endswith('/'):
+                host_url = host_url.rstrip('/')
+
+            # 使用 new_task.id (现在已填充)
+            query_params = f"dpt={quote(department.department_name)}&db_id={database_id}&task_id={new_task.id}&table={quote(table_name)}"
+            new_task.webhook_url = f"{host_url}/api/jdy/webhook?{query_params}"
+
+            # 再次提交以保存 webhook_url
+            session.commit()
 
         # --- 7. 通知调度器 ---
         # 重新查询更新后的任务 (包含 department 和 database)
