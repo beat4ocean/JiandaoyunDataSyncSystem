@@ -856,6 +856,10 @@ class Db2JdySyncService:
             log_sync_error(task_config=task, error=e, extra_info=f"task_id:[{task.id}] INCREMENTAL failed.")
             self._update_task_status(config_session, task, status='error')
 
+            # 重新引发异常，以通知 run_incremental 或 run_binlog_listener 任务失败
+            # 这可以防止它们错误地更新 is_full_sync_first
+            raise e
+
     @retry()
     def run_full_sync(self, config_session: Session, task: SyncTask):
         """
@@ -880,14 +884,15 @@ class Db2JdySyncService:
             if not task.last_sync_time:
                 if task.is_delete_first:
                     # 执行清空操作
-                    self._update_task_status(config_session, task, status='running')
+                    self._update_task_status(config_session, task, status='running',
+                                             last_sync_time=datetime.now(TZ_UTC_8))
                     self._truncate_jdy_data(config_session, task)
                     # 成功, 设置为空闲
                     self._update_task_status(config_session, task, status='idle', last_sync_time=datetime.now(TZ_UTC_8),
                                              is_full_sync_first=True, is_delete_first=False)
 
             # 执行全量同步
-            self._update_task_status(config_session, task, status='running')
+            self._update_task_status(config_session, task, status='running', last_sync_time=datetime.now(TZ_UTC_8))
             # 如果没有主键
             if not task.business_keys:
                 logger.info(
@@ -955,7 +960,8 @@ class Db2JdySyncService:
                                                      last_sync_time=datetime.now(TZ_UTC_8),
                                                      is_delete_first=False)
                         # 调用全量同步
-                        self._update_task_status(config_session, task, status='running')
+                        self._update_task_status(config_session, task, status='running',
+                                                 last_sync_time=datetime.now(TZ_UTC_8))
                         self._insert_jdy_data_with_primary_key(config_session, task)
                         # 成功后, 更新状态并退出
                         self._update_task_status(config_session, task,
@@ -969,7 +975,9 @@ class Db2JdySyncService:
                     except Exception as e:
                         # 首次全量同步失败, 保持 is_full_sync_first=True, 设为 error
                         config_session.rollback()
-                        self._update_task_status(config_session, task, status='error')
+                        # self._update_task_status(config_session, task, status='error')
+                        log_sync_error(task_config=task, error=e,
+                                       extra_info=f"task_id:[{task.id}] Initial FULL SYNC failed.")
                         return  # 退出
 
             # 2. 正常增量逻辑
@@ -1285,6 +1293,7 @@ class Db2JdySyncService:
                 if self._is_view(session_task):
                     log_sync_error(task_config=session_task,
                                    extra_info=f"task_id:[{task_id_safe}] BINLOG mode is not allowed for VIEWS. Stopping listener.")
+                    self._update_task_status(config_session, session_task, status='error')
                     return
 
                 # 3b. 提取 API 密钥
@@ -1330,7 +1339,8 @@ class Db2JdySyncService:
                                                          last_sync_time=datetime.now(TZ_UTC_8),
                                                          is_delete_first=False)
                             # 调用全量同步
-                            self._update_task_status(config_session, task, status='running')
+                            self._update_task_status(config_session, task, status='running',
+                                                     last_sync_time=datetime.now(TZ_UTC_8))
                             self._insert_jdy_data_with_primary_key(config_session, session_task)
                             # 成功后, 更新状态并退出
                             self._update_task_status(config_session, task,
@@ -1341,14 +1351,17 @@ class Db2JdySyncService:
 
                             logger.info(f"[{thread_name}] Initial full sync complete. Proceeding to binlog...")
                         except Exception as e:
+                            config_session.rollback()
                             log_sync_error(task_config=session_task, error=e,
                                            extra_info=f"[{thread_name}] Initial full sync failed. Stopping binlog listener.")
                             # 确保错误状态被提交
-                            self._update_task_status(config_session, session_task, status='error')
+                            # self._update_task_status(config_session, session_task, status='error',
+                            #                          last_sync_time=datetime.now(TZ_UTC_8))
                             return  # 退出线程
                 else:
                     # 仅在非首次运行时更新状态
-                    self._update_task_status(config_session, session_task, status='running')
+                    self._update_task_status(config_session, session_task, status='running',
+                                             last_sync_time=datetime.now(TZ_UTC_8))
 
                 # 3f. 提取剩余的标量值
                 log_file = session_task.last_binlog_file
@@ -1356,6 +1369,37 @@ class Db2JdySyncService:
                 last_sync_time = session_task.last_sync_time
                 app_id = session_task.app_id
                 entry_id = session_task.entry_id
+
+                # --- 检查并获取初始 Binlog 位置 ---
+                if not log_file or not log_pos:
+                    logger.info(f"[{thread_name}] Binlog position not found. Fetching current master status...")
+                    try:
+                        # 必须使用源数据库引擎
+                        dynamic_engine = get_dynamic_engine(session_task)
+                        with dynamic_engine.connect() as connection:
+                            result = connection.execute(text("SHOW MASTER STATUS")).fetchone()
+                            # 确保 result 不是 None 并且至少有2个元素 (File, Position)
+                            if result and len(result) >= 2:
+                                file, pos = result[0], result[1]
+                                logger.info(f"[{thread_name}] Fetched master status: {file}:{pos}")
+                                log_file = file
+                                log_pos = pos
+                                # 立即保存此位置 (使用 config_session)
+                                self._update_task_status(config_session, session_task, 'running',
+                                                         binlog_file=log_file, binlog_pos=log_pos,
+                                                         last_sync_time=datetime.now(TZ_UTC_8))
+                            else:
+                                log_sync_error(task_config=session_task,
+                                               extra_info=f"[{thread_name}] Failed to get master status (no result). Stopping listener.")
+                                self._update_task_status(config_session, session_task, status='error',
+                                                         last_sync_time=datetime.now(TZ_UTC_8))
+                                return  # 退出
+                    except Exception as e:
+                        log_sync_error(task_config=session_task, error=e,
+                                       extra_info=f"[{thread_name}] Failed to get master status (exception). Stopping listener.")
+                        self._update_task_status(config_session, session_task, status='error',
+                                                 last_sync_time=datetime.now(TZ_UTC_8))
+                        return  # 退出
 
                 # 3g. 提取映射
                 mapping_service = FieldMappingService()
@@ -1427,7 +1471,8 @@ class Db2JdySyncService:
                             task_to_update = heartbeat_session.query(SyncTask).get(task_id_safe)
                             if task_to_update:
                                 self._update_task_status(heartbeat_session, task_to_update, 'running',
-                                                         current_log_file, current_log_pos)
+                                                         current_log_file, current_log_pos,
+                                                         last_sync_time=datetime.now(TZ_UTC_8))
                     except Exception as e:
                         # 记录更新位置时的错误, 但不要停止监听器
                         log_sync_error(task_config=task, error=e,
@@ -1582,7 +1627,8 @@ class Db2JdySyncService:
                         # 8. 事件处理完成后, 在会话内更新位置
                         #    使用我们在此循环开始时捕获的位置
                         self._update_task_status(loop_session, task_in_loop, 'running',
-                                                 current_log_file, current_log_pos)
+                                                 current_log_file, current_log_pos,
+                                                 last_sync_time=datetime.now(TZ_UTC_8))
 
                 except (requests.exceptions.RequestException, requests.exceptions.HTTPError) as api_err:
                     # API 错误, 记录日志但不停止监听器
