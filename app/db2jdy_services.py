@@ -10,6 +10,7 @@ from typing import Tuple, List, Any
 
 import requests
 from pymysqlreplication import BinLogStreamReader
+from pymysqlreplication.event import HeartbeatLogEvent
 from pymysqlreplication.row_event import (
     WriteRowsEvent,
     UpdateRowsEvent,
@@ -1148,7 +1149,8 @@ class Db2JdySyncService:
             stream = BinLogStreamReader(
                 connection_settings=dynamic_binlog_settings,
                 server_id=server_id,
-                only_events=[WriteRowsEvent, UpdateRowsEvent, DeleteRowsEvent],
+                # 确保我们监听心跳事件
+                only_events=[WriteRowsEvent, UpdateRowsEvent, DeleteRowsEvent, HeartbeatLogEvent],
                 only_tables=[table_name],
                 only_schemas=[db_name],
                 log_file=log_file,
@@ -1162,23 +1164,42 @@ class Db2JdySyncService:
 
             # 7. 开始循环 (在循环内部使用短暂的会话)
             for binlog_event in stream:
+
+                # 7a. 每次循环都检查任务是否被禁用 (会因心跳而每 5 秒运行一次)
+                try:
+                    with ConfigSession() as check_session:
+                        current_task_state = check_session.query(SyncTask).get(task_id_safe)
+                        if not current_task_state or not current_task_state.is_active:
+                            logger.info(f"[{thread_name}] Task disabled. Stopping listener.")
+                            break  # 退出 'for binlog_event in stream:' 循环
+                except Exception as check_e:
+                    # 如果无法检查数据库，这是一个严重问题，最好停止监听器
+                    log_sync_error(task_config=task, error=check_e,
+                                   extra_info=f"[{thread_name}] Failed to check task status. Stopping listener.")
+                    break  # 退出循环
+
+                # 7b. 如果 'timeout_seconds' 到了, binlog_event 为 None, 跳过
+                if binlog_event is None:
+                    continue
+
+                # 7c. 如果是心跳事件, 忽略它并继续
+                if isinstance(binlog_event, HeartbeatLogEvent):
+                    logger.debug(f"[{thread_name}] Received heartbeat.")
+                    continue  # 继续循环, 这将触发 7a 中的下一次状态检查
+
+                # 7d. (原 7c) 正常处理事件
                 log_file = stream.log_file
                 log_pos = stream.log_pos
                 try:
                     # 在循环内部为 *每个事件* 创建短暂的会话
                     # 'task' 在这里是原始的游离对象, 我们只使用它来打开 get_dynamic_session
-                    # 更好的做法是重构 get_dynamic_session 以接受 task_id
-                    # 但现在, 我们将在循环会话中获取 'live' 的 task
                     with ConfigSession() as loop_session, get_dynamic_session(task) as source_session:
 
-                        # 获取任务的当前状态 (用于检查 .is_active)
-                        current_task_state = loop_session.query(SyncTask).get(task_id_safe)
-                        if not current_task_state or not current_task_state.is_active:
-                            logger.info(f"[{thread_name}] Task disabled. Stopping listener.")
-                            break  # 退出 for 循环
-
-                        # 将 'live' task 对象用于需要它的辅助方法
-                        task_in_loop = current_task_state
+                        # 获取 'live' task 对象用于辅助方法
+                        task_in_loop = loop_session.query(SyncTask).get(task_id_safe)
+                        if not task_in_loop:  # 如果任务在两次检查之间被删除了
+                            logger.warning(f"[{thread_name}] Task was deleted during event processing. Stopping.")
+                            break  # 退出循环
 
                         for row in binlog_event.rows:
                             trans_id = str(uuid.uuid4())  # 每个 row 操作都是一个事务
