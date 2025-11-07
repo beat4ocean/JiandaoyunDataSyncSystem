@@ -48,7 +48,7 @@ class FieldMappingService:
         result = {}
         for m in mappings:
             # 判断 widget_alias 是否是 _widget_数字 的格式
-            if m.widget_alias and m.widget_alias.startswith('_widget_') and m.widget_alias[8:].isdigit():
+            if m.widget_alias and m.widget_alias.startswith('_widget_'):
                 # 如果是 _widget_数字 格式，使用 m.label 作为 表字段名
                 key, value = m.label, m.widget_name
             else:
@@ -72,13 +72,12 @@ class FieldMappingService:
         result = {}
         for m in mappings:
             # 判断 widget_alias 是否是 _widget_数字 的格式
-            if m.widget_alias and m.widget_alias.startswith('_widget_') and m.widget_alias[8:].isdigit():
+            if m.widget_alias and m.widget_alias.startswith('_widget_'):
                 # 如果是 _widget_数字 格式，使用 m.label
                 key, value = m.label, m.widget_name
             else:
-                # 如果不是，使用 m.widget_alias
-                # key, value = m.widget_alias, m.widget_alias
-                key, value = m.widget_alias, m.widget_name
+                # 如果不是，必须使用 m.widget_alias
+                key, value = m.widget_alias, m.widget_alias
 
             result[key] = value
 
