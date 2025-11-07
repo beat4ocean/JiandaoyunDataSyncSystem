@@ -1448,6 +1448,13 @@ class Db2JdySyncService:
                             trans_id = str(uuid.uuid4())  # 每个 row 操作都是一个事务
 
                             if isinstance(binlog_event, WriteRowsEvent):
+                                # 1. 查找 ID, 使用 row['values']
+                                jdy_id = row['values'].get('_id') or self._find_jdy_id_by_pk(
+                                    task_in_loop, row['values'],
+                                    data_api_query, data_api_delete, alias_map
+                                )
+
+                                # 2. 准备 payload, 使用 row['values']
                                 data_payload = self._transform_row_to_jdy(row['values'], payload_map)
 
                                 if not data_payload:
@@ -1456,18 +1463,41 @@ class Db2JdySyncService:
                                                    extra_info=f"task_id:[{task_id_safe}] Row missing required fields. Skipping.")
                                     continue
 
-                                create_response = data_api_create.create_single_data(
-                                    app_id, entry_id,  # 使用局部变量
-                                    data_payload, transaction_id=trans_id
-                                )
-                                new_jdy_id = create_response.get('data', {}).get('_id')
-                                if not new_jdy_id:
-                                    log_sync_error(task_config=task_in_loop,
-                                                   payload=data_payload,
-                                                   error=create_response,
-                                                   extra_info=f"[{thread_name}] Failed to create data.")
+                                if jdy_id:
+                                    # 3. 如果找到了 (罕见, 但为了数据一致性), 更新
+                                    logger.debug(
+                                        f"task_id:[{task_id_safe}] WriteEvent: ID {jdy_id} found. Updating...")
+                                    update_response = data_api_update.update_single_data(
+                                        app_id, entry_id, jdy_id,  # 使用局部变量
+                                        data_payload, transaction_id=trans_id
+                                    )
+                                    update_jdy_id = update_response.get('data', {}).get('_id')
+                                    if not update_jdy_id:
+                                        log_sync_error(task_config=task_in_loop,
+                                                       payload=data_payload,
+                                                       error=update_response,
+                                                       extra_info=f"task_id:[{task_id_safe}] WriteEvent: Failed to update data (ID found).")
+                                    else:
+                                        logger.debug(
+                                            f"task_id:[{task_id_safe}] WriteEvent: Updated data with _id: {update_jdy_id} (ID found).")
+
                                 else:
-                                    logger.debug(f"task_id:[{task_id_safe}] Created data with _id: {new_jdy_id}")
+                                    # 4. 如果没找到 (正常情况), 创建
+                                    logger.debug(f"task_id:[{task_id_safe}] WriteEvent: ID not found. Creating...")
+                                    create_response = data_api_create.create_single_data(
+                                        app_id, entry_id,  # 使用局部变量
+                                        data_payload, transaction_id=trans_id
+                                    )
+                                    new_jdy_id = create_response.get('data', {}).get('_id')
+                                    if not new_jdy_id:
+                                        log_sync_error(task_config=task_in_loop,
+                                                       payload=data_payload,
+                                                       error=create_response,
+                                                       extra_info=f"[{thread_name}] Failed to create data.")
+                                    else:
+                                        logger.debug(
+                                            f"task_id:[{task_id_safe}] Created data with _id: {new_jdy_id}")
+
 
                             elif isinstance(binlog_event, UpdateRowsEvent):
                                 jdy_id = row['after_values'].get('_id') or self._find_jdy_id_by_pk(
@@ -1484,6 +1514,8 @@ class Db2JdySyncService:
                                                        extra_info=f"task_id:[{task_id_safe}] Row missing required fields. Skipping.")
                                         continue
 
+                                    logger.debug(
+                                        f"task_id:[{task_id_safe}] UpdateEvent: ID {jdy_id} found. Updating...")
                                     update_response = data_api_update.update_single_data(
                                         app_id, entry_id, jdy_id,  # 使用局部变量
                                         data_payload, transaction_id=trans_id
@@ -1499,6 +1531,7 @@ class Db2JdySyncService:
 
                                 else:
                                     # 简道云中没有，则新增
+                                    logger.debug(f"task_id:[{task_id_safe}] UpdateEvent: ID not found. Creating...")
                                     data_payload = self._transform_row_to_jdy(row['after_values'], payload_map)
                                     if not data_payload:
                                         log_sync_error(task_config=task_in_loop,
@@ -1527,6 +1560,8 @@ class Db2JdySyncService:
                                 )
 
                                 if jdy_id:
+                                    logger.debug(
+                                        f"task_id:[{task_id_safe}] DeleteEvent: ID {jdy_id} found. Deleting...")
                                     delete_response = data_api_delete.delete_single_data(
                                         app_id, entry_id, jdy_id  # 使用局部变量
                                     )
