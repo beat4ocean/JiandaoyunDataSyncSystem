@@ -48,7 +48,7 @@ class FieldMappingService:
         result = {}
         for m in mappings:
             # 判断 widget_alias 是否是 _widget_数字 的格式
-            if m.widget_alias and m.widget_alias.startswith('_widget_') and m.widget_alias[8:].isdigit():
+            if m.widget_alias and m.widget_alias.startswith('_widget_'):
                 # 如果是 _widget_数字 格式，使用 m.label 作为 表字段名
                 key, value = m.label, m.widget_name
             else:
@@ -72,13 +72,13 @@ class FieldMappingService:
         result = {}
         for m in mappings:
             # 判断 widget_alias 是否是 _widget_数字 的格式
-            if m.widget_alias and m.widget_alias.startswith('_widget_') and m.widget_alias[8:].isdigit():
+            if m.widget_alias and m.widget_alias.startswith('_widget_'):
                 # 如果是 _widget_数字 格式，使用 m.label
                 key, value = m.label, m.widget_name
             else:
                 # 如果不是，使用 m.widget_alias
-                # key, value = m.widget_alias, m.widget_alias
-                key, value = m.widget_alias, m.widget_name
+                key, value = m.widget_alias, m.widget_alias
+                # key, value = m.widget_alias, m.widget_name
 
             result[key] = value
 
@@ -307,18 +307,22 @@ class Db2JdySyncService:
                     try:
                         processed_value = json.loads(value)
                     except json.JSONDecodeError:
-                        # 不是有效的 JSON，保持为原始字符串
-                        processed_value = value
+                        # 如果解析JSON失败 (e.g., "[1,2,3"), 它是一个普通字符串
+                        try:
+                            processed_value = json_serializer(value)
+                        except TypeError:
+                            processed_value = str(value)
 
-                # 2. 序列化简单类型 (datetime, decimal)
-                #    如果 processed_value 是 list/dict, json_serializer 不会被调用
-                #    如果 processed_value 是 简单类型, 它将被正确序列化
-                try:
-                    # 此步骤确保 datetime, Decimal 等被正确转换为 str/float
-                    processed_value = json.loads(json.dumps(processed_value, default=json_serializer))
-                except TypeError:
-                    # 回退: 适用于不由 json_serializer 处理的复杂对象
-                    processed_value = str(processed_value)
+                # 2. 序列化所有其他类型 (Decimals, AND Date Strings)
+                else:
+                    try:
+                        # 错误写法，无法正确解析字符串str格式的时间
+                        # processed_value = json.loads(json.dumps(processed_value, default=json_serializer))
+                        # 移除 json.dumps/loads，直接调用 json_serializer
+                        processed_value = json_serializer(processed_value)
+                    except TypeError:
+                        # (如果 serializer 不支持该类型, e.g., list/dict, 回退)
+                        processed_value = str(processed_value)
 
                 data_payload[widget_name] = {"value": processed_value}
 
@@ -340,7 +344,16 @@ class Db2JdySyncService:
                 raise ValueError(f"task_id:[{task.id}] Composite PK field '{field}' not found in row data.")
             # 修复 TypeError: Object of type date is not JSON serializable bug
             # pk_values.append(row[field])
-            row_value = json.loads(json.dumps(row[field], default=json_serializer))
+            # 错误写法，无法正确解析字符串str格式的时间
+            # row_value = json.loads(json.dumps(row[field], default=json_serializer))
+            try:
+                # 直接调用 serializer，它会正确处理 datetime 对象、
+                # date 字符串 (转UTC)、Decimal 和普通字符串
+                row_value = json_serializer(row[field])
+            except TypeError:
+                # 如果 serializer 无法处理 (例如一个 list 或 dict)，则回退
+                row_value = str(row[field])
+
             pk_values.append(row_value)
 
         return pk_fields, pk_values
@@ -357,6 +370,9 @@ class Db2JdySyncService:
         """
         通过主键 (PK) 在简道云中查找对应的 _id
         """
+
+        filter_payload = {}
+        log_pk_str = ""
 
         try:
             # 1. 获取复合主键字段和值
@@ -409,6 +425,7 @@ class Db2JdySyncService:
 
                 log_sync_error(
                     task_config=task,
+                    payload=filter_payload,
                     extra_info=f"task_id:[{task.id}] Found {len(jdy_data)} duplicate entries for PK {log_pk_str}. Keeping {id_to_keep}, deleting {len(ids_to_delete)}."
                 )
 
@@ -425,6 +442,7 @@ class Db2JdySyncService:
                 except Exception as e:
                     log_sync_error(
                         task_config=task,
+                        payload=filter_payload,
                         error=e,
                         extra_info=f"task_id:[{task.id}] Failed to delete duplicate entries for PK {log_pk_str}."
                     )
@@ -437,8 +455,9 @@ class Db2JdySyncService:
         except Exception as e:  # 捕获包括 ValueError
             log_sync_error(
                 task_config=task,
+                payload=filter_payload,
                 error=e,
-                extra_info=f"task_id:[{task.id}] V5 API error finding Jdy _id by PK."
+                extra_info=f"task_id:[{task.id}] V5 API error finding Jdy _id by PK. Details: {log_pk_str}"
             )
             return None
 
@@ -700,6 +719,310 @@ class Db2JdySyncService:
             # _run_full_sync 已经记录了日志
             config_session.rollback()
             self._update_task_status(config_session, task, status='error')
+
+    # @retry()
+    # def run_user_define_sync(self, config_session: Session, task: SyncTask):
+    #     """
+    #     执行增量同步 (Upsert)
+    #     (接受会话, 事务 ID, 去重, 复合主键，支持首次全量同步 和 source_filter_sql)
+    #     """
+    #     # --- 检查任务类型 ---
+    #     if task.sync_type != 'db2jdy':
+    #         logger.error(f"task_id:[{task.id}] run_incremental failed: Task type is not 'db2jdy'.")
+    #         self._update_task_status(config_session, task, status='error')
+    #         return
+    #
+    #     logger.info(f"task_id:[{task.id}] Running INCREMENTAL sync...")
+    #     self._update_task_status(config_session, task, status='running')
+    #
+    #     if not task.department or not task.department.jdy_key_info or not task.department.jdy_key_info.api_key:
+    #         log_sync_error(
+    #             task_config=task,
+    #             error=ValueError(f"Task {task.id} missing department or API key for INCREMENTAL."),
+    #             extra_info=f"task_id:[{task.id}] INCREMENTAL failed."
+    #         )
+    #         self._update_task_status(config_session, task, status='error')
+    #         return
+    #     api_key = task.department.jdy_key_info.api_key
+    #
+    #     try:
+    #         current_sync_time = datetime.now(TZ_UTC_8)
+    #
+    #         # 1. 检查是否需要首次全量同步
+    #         if task.is_full_replace_first:
+    #             logger.info(f"task_id:[{task.id}] First run: Executing initial full replace...")
+    #             try:
+    #                 # 调用全量同步
+    #                 self._run_full_sync(config_session, task, delete_first=False)
+    #                 # 成功后, 更新状态并退出
+    #                 self._update_task_status(config_session, task,
+    #                                          status='idle',
+    #                                          last_sync_time=current_sync_time,
+    #                                          is_full_replace_first=False)
+    #                 logger.info(f"task_id:[{task.id}] Initial full sync complete.")
+    #                 return  # 本次运行结束
+    #             except Exception as e:
+    #                 # 首次全量同步失败, 保持 is_full_replace_first=True, 设为 error
+    #                 config_session.rollback()
+    #                 self._update_task_status(config_session, task, status='error')
+    #                 return  # 退出
+    #
+    #         # 2. 正常增量逻辑
+    #         if not task.incremental_field:
+    #             raise ValueError(f"task_id:[{task.id}] Incremental field (e.g., last_modified) is not configured.")
+    #
+    #         # # 2a. 动态获取 API Key
+    #         # if not task.department:
+    #         #     raise ValueError(f"Task {task.id} missing department/api_key configuration for run_incremental.")
+    #         # api_key = task.department.jdy_key_info.api_key
+    #
+    #         mapping_service = FieldMappingService()
+    #         payload_map = mapping_service.get_payload_mapping(config_session, task.id)
+    #         alias_map = mapping_service.get_alias_mapping(config_session, task.id)
+    #         if not payload_map or not alias_map:
+    #             raise ValueError(f"task_id:[{task.id}] Field mapping is empty.")
+    #
+    #         # 3. 实例化
+    #         data_api_query = DataApi(api_key, Config.JDY_API_BASE_URL, qps=30)
+    #         data_api_delete = DataApi(api_key, Config.JDY_API_BASE_URL, qps=10)  # 用于去重
+    #         data_api_create = DataApi(api_key, Config.JDY_API_BASE_URL, qps=20)  # Single create
+    #         data_api_update = DataApi(api_key, Config.JDY_API_BASE_URL, qps=20)  # Single update
+    #
+    #         # 4. 确定时间戳
+    #         last_sync_time = task.last_sync_time or datetime(1970, 1, 1, tzinfo=TZ_UTC_8)
+    #
+    #         # 动态创建 source_session 和 engine
+    #         dynamic_engine = get_dynamic_engine(task)
+    #         with get_dynamic_session(task) as source_session:
+    #
+    #             # --- 数据探测逻辑 ---
+    #
+    #             # 解析 incremental 字段（有可能是复杂字段）
+    #             raw_field = task.incremental_field.strip() if task.incremental_field else None
+    #             if not raw_field:
+    #                 raise ValueError(f"task_id:[{task.id}] No incremental field specified.")
+    #
+    #             raw_field = ','.join([item.strip() for item in raw_field.split(',') if item.strip()])
+    #
+    #             field_for_probing = raw_field  # 用第一个字段用于数据类型探测
+    #             incremental_field_for_query = raw_field
+    #             is_complex_field = False
+    #
+    #             # 1. 检查字段格式
+    #             if ',' in raw_field and '(' not in raw_field and ')' not in raw_field:
+    #                 # 格式: updated_time,created_time
+    #                 # 转换为 coalesce
+    #                 incremental_field_for_query = f"COALESCE({raw_field})"
+    #                 # 探测字段: updated_time
+    #                 field_for_probing = raw_field.split(',')[0].strip().replace('`', '')
+    #                 is_complex_field = True
+    #                 logger.debug(
+    #                     f"task_id:[{task.id}] Detected comma-separated fields. Query: {incremental_field_for_query}, ProbeField: {field_for_probing}")
+    #
+    #             elif 'coalesce(' in raw_field.lower() or 'ifnull(' in raw_field.lower():
+    #                 # 格式: coalesce(updated_time,created_time) 或 IFNULL(...) 或 (其他复杂表达式)
+    #                 incremental_field_for_query = f"({raw_field})"
+    #                 is_complex_field = True
+    #
+    #                 # 提取第一个字段用于探测
+    #                 # 查找第一个单词 (可能是函数名) 和随后的字段名
+    #                 # r'[a-zA-Z0-9_]+' 匹配字段名
+    #                 fields = re.findall(r'[a-zA-Z0-9_]+', raw_field.replace('`', ''))
+    #
+    #                 if fields:
+    #                     first_word = fields[0].lower()
+    #                     if first_word in ['coalesce', 'ifnull'] and len(fields) > 1:
+    #                         field_for_probing = fields[1]  # e.g., coalesce(THIS_ONE, ...)
+    #                     else:
+    #                         field_for_probing = fields[0]  # e.g., THIS_ONE ...
+    #                 else:
+    #                     field_for_probing = raw_field  # 回退
+    #
+    #                 logger.debug(
+    #                     f"task_id:[{task.id}] Detected complex function. Query: {incremental_field_for_query}, ProbeField: {field_for_probing}")
+    #
+    #             else:
+    #                 # 简单字段: updated_time
+    #                 incremental_field_for_query = f"`{raw_field}`"
+    #                 field_for_probing = raw_field.replace('`', '')
+    #                 is_complex_field = False
+    #                 logger.debug(
+    #                     f"task_id:[{task.id}] Detected simple field. Query: {incremental_field_for_query}, ProbeField: {field_for_probing}")
+    #
+    #             # 2. 检查探测字段 (field_for_probing) 的类型
+    #             inspector = inspect(dynamic_engine)
+    #             col_info = None
+    #             try:
+    #                 columns = inspector.get_columns(task.table_name)
+    #                 # 使用 field_for_probing 查找列信息
+    #                 col_info = next((col for col in columns if col['name'] == field_for_probing), None)
+    #             except NoSuchTableError:
+    #                 raise ValueError(f"task_id:[{task.id}] Incremental field's table '{task.table_name}' not found.")
+    #
+    #             # 如果找不到字段
+    #             if not col_info:
+    #                 log_sync_error(task_config=task,
+    #                                extra_info=f"task_id:[{task.id}] Incremental field (ProbeField) '{field_for_probing}' not found in table '{task.table_name}'.")
+    #                 raise ValueError(
+    #                     f"task_id:[{task.id}] Incremental field (ProbeField) '{field_for_probing}' not found in table '{task.table_name}'.")
+    #
+    #             col_type_name = str(col_info['type']).upper()
+    #
+    #             last_sync_time_for_query = None
+    #
+    #             # 3. 如果是 DATE 类型，总是截断
+    #             if col_type_name == 'DATE':
+    #                 last_sync_time_for_query = last_sync_time.replace(hour=0, minute=0, second=0, microsecond=0)
+    #                 logger.debug(
+    #                     f"task_id:[{task.id}] Detected DATE type. Querying >= {last_sync_time_for_query} (Truncated)")
+    #
+    #             # 4. 如果是 DATETIME，执行数据探测
+    #             elif col_type_name.startswith('DATETIME'):
+    #                 logger.debug(f"task_id:[{task.id}] Detected DATETIME type. Probing data ...")
+    #                 is_fake_datetime = False
+    #
+    #                 # 探测查询，限制100条
+    #                 probe_query = text(
+    #                     f"SELECT `{field_for_probing}` FROM `{task.table_name}` "
+    #                     f"WHERE `{field_for_probing}` IS NOT NULL LIMIT 100"
+    #                 )
+    #                 probe_results = source_session.execute(probe_query).fetchall()
+    #
+    #                 # 没有数据，无法判断。为安全起见，使用截断（防止丢失数据）
+    #                 if not probe_results:
+    #                     logger.debug(f"task_id:[{task.id}] No data found for probing.")
+    #                     is_fake_datetime = True
+    #                 else:
+    #                     min_time = time_obj(0, 0, 0)
+    #                     all_are_midnight = True
+    #                     for row in probe_results:
+    #                         dt_val = row[0]
+    #                         if dt_val is not None and dt_val.time() != min_time:
+    #                             # logger.debug(f"task_id:[{task.id}] Detected DATETIME type is yyyy-MM-dd HH:mm:ss.")
+    #                             all_are_midnight = False
+    #                             break
+    #                     is_fake_datetime = all_are_midnight
+    #
+    #                 if is_fake_datetime:
+    #                     logger.debug(
+    #                         f"task_id:[{task.id}] Probe confirms yyyy-MM-dd 00:00:00 DATETIME format. Using truncated timestamp.")
+    #                     last_sync_time_for_query = last_sync_time.replace(hour=0, minute=0, second=0, microsecond=0)
+    #                 else:
+    #                     logger.debug(
+    #                         f"task_id:[{task.id}] Probe found yyyy-MM-dd HH:mm:ss DATETIME format. Using exact timestamp.")
+    #                     last_sync_time_for_query = last_sync_time
+    #             else:
+    #                 # 3. 如果是 TIMESTAMP 或其他类型，使用精确时间
+    #                 last_sync_time_for_query = last_sync_time
+    #                 logger.debug(
+    #                     f"task_id:[{task.id}] Detected {col_type_name} type. Querying >= {last_sync_time_for_query}")
+    #
+    #             # 6. 获取源数据 (带 SQL 过滤)
+    #             base_query = (
+    #                 f"SELECT * FROM `{task.table_name}` "
+    #                 f"WHERE {incremental_field_for_query} >= :last_sync_time"
+    #             )
+    #             # 使用动态确定的时间戳
+    #             params = {"last_sync_time": last_sync_time_for_query}
+    #             if task.source_filter_sql:
+    #                 base_query += f" AND ({task.source_filter_sql})"
+    #
+    #             # --- 2. 性能优化: 流式查询 ---
+    #             # 移除: rows = source_session.execute(text(base_query), params).mappings().all()
+    #
+    #             # if not rows:
+    #             #     logger.info(f"task_id:[{task.id}] No new data found since {last_sync_time_for_query}.")
+    #             #     self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
+    #             #     return
+    #
+    #             # 1. 不要使用 .all()，而是获取结果迭代器
+    #             # 2. 使用 stream_results=True 启用服务器端游标，防止数据库连接因长时间处理而超时
+    #             # sqlalchemy < 2 版本
+    #             # result_stream = source_session.execution_options(stream_results=True).execute(text(base_query), params)
+    #             # sqlalchemy >= 2 版本
+    #             result_stream = source_session.connection().execution_options(stream_results=True).execute(
+    #                 text(base_query), params)
+    #
+    #             # 标记是否处理了任何行
+    #             has_processed_rows = False
+    #             count_new, count_updated = 0, 0
+    #
+    #             # 6. 遍历新增/更新
+    #             # for row in rows:
+    #             # 直接遍历迭代器，这会从数据库中逐行（或按小批量）获取数据
+    #             for row in result_stream.mappings():
+    #                 has_processed_rows = True  # 标记已处理
+    #                 row_dict = dict(row)
+    #                 try:
+    #                     self._get_pk_fields_and_values(task, row_dict)
+    #                 except ValueError as e:
+    #                     log_sync_error(task_config=task, error=e,
+    #                                    extra_info=f"task_id:[{task.id}] Row missing PK. Skipping.",
+    #                                    payload=row_dict)
+    #                     continue
+    #
+    #                 data_payload = self._transform_row_to_jdy(row_dict, payload_map)
+    #                 if not data_payload:
+    #                     log_sync_error(task_config=task,
+    #                                    payload=row_dict,
+    #                                    extra_info=f"task_id:[{task.id}] Row missing required fields. Skipping.")
+    #                     continue
+    #
+    #                 # 传入 row_dict 以进行复合主键去重
+    #                 jdy_id = row_dict.get('_id') or self._find_jdy_id_by_pk(
+    #                     task, row_dict,
+    #                     data_api_query, data_api_delete, alias_map
+    #                 )
+    #                 trans_id = str(uuid.uuid4())
+    #                 if jdy_id:
+    #                     # 更新
+    #                     update_response = data_api_update.update_single_data(
+    #                         task.app_id, task.entry_id, jdy_id,
+    #                         data_payload, transaction_id=trans_id
+    #                     )
+    #                     update_jdy_id = update_response.get('data', {}).get('_id')
+    #
+    #                     if not update_jdy_id:
+    #                         log_sync_error(task_config=task,
+    #                                        payload=data_payload,
+    #                                        error=update_response,
+    #                                        extra_info=f"task_id:[{task.id}] Failed to update data.")
+    #                     else:
+    #                         count_updated += 1
+    #                         logger.debug(f"task_id:[{task.id}] Updated data with _id: {jdy_id}.")
+    #
+    #                 else:
+    #                     # 新增
+    #                     create_response = data_api_create.create_single_data(
+    #                         task.app_id, task.entry_id,
+    #                         data_payload, transaction_id=trans_id
+    #                     )
+    #                     new_jdy_id = create_response.get('data', {}).get('_id')
+    #                     if not new_jdy_id:
+    #                         log_sync_error(task_config=task,
+    #                                        payload=data_payload,
+    #                                        error=create_response,
+    #                                        extra_info=f"task_id:[{task.id}] Failed to create data.")
+    #                     else:
+    #                         count_new += 1
+    #                         logger.debug(f"task_id:[{task.id}] Created data with _id: {new_jdy_id}.")
+    #                         # 是否需要回写，有待商榷，实际可不用回写
+    #                         # # 传入 row_dict 以进行复合主键回写
+    #                         # self._writeback_id_to_source(source_session, task, new_jdy_id, row_dict)
+    #
+    #             # 检查是否因为没有数据而退出循环
+    #             if not has_processed_rows:
+    #                 logger.info(f"task_id:[{task.id}] No new data found since {last_sync_time_for_query}.")
+    #                 self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
+    #                 return
+    #
+    #         logger.info(f"task_id:[{task.id}] INCREMENTAL sync completed. New: {count_new}, Updated: {count_updated}.")
+    #         self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
+    #
+    #     except Exception as e:
+    #         config_session.rollback()
+    #         log_sync_error(task_config=task, error=e, extra_info=f"task_id:[{task.id}] INCREMENTAL failed.")
+    #         self._update_task_status(config_session, task, status='error')
 
     @retry()
     def run_incremental(self, config_session: Session, task: SyncTask):

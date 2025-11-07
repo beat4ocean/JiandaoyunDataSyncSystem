@@ -241,7 +241,7 @@ class FieldMappingService:
         """
         app_id = task_config.app_id
         entry_id = task_config.entry_id
-        task_id = task_config.id  # (新增) 使用 task_id
+        task_id = task_config.id  # 使用 task_id
 
         if not all([app_id, entry_id]):
             logger.error(
