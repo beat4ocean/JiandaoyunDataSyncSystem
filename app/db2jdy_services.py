@@ -53,8 +53,8 @@ class FieldMappingService:
                 key, value = m.label, m.widget_name
             else:
                 # 如果不是，使用 m.widget_alias 作为 表字段名
-                # key, value = m.widget_alias, m.widget_alias
-                key, value = m.widget_alias, m.widget_name
+                key, value = m.widget_alias, m.widget_alias
+                # key, value = m.widget_alias, m.widget_name
 
             result[key] = value
 
@@ -78,6 +78,7 @@ class FieldMappingService:
             else:
                 # 如果不是，必须使用 m.widget_alias
                 key, value = m.widget_alias, m.widget_alias
+                # key, value = m.widget_alias, m.widget_name
 
             result[key] = value
 
