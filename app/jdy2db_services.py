@@ -1337,7 +1337,7 @@ class Jdy2DbSyncService:
                                                 f"task_id:[{task_id}] Will add column '{col_name}' with type '{type_string}'")
                                             connection.execute(
                                                 text(
-                                                    f"ALTER TABLE `{table.name}` ADD COLUMN `{col_name}` {type_string} COLLATE utf8mb4_general_ci COMMENT :comment"),
+                                                    f"ALTER TABLE `{table.name}` ADD COLUMN `{col_name}` {type_string} COMMENT :comment"),
                                                 {'comment': col_info['comment']}
                                             )
                                         except Exception as e:
@@ -1594,7 +1594,7 @@ class Jdy2DbSyncService:
                                 type_string = sql_type.compile(dialect=engine.dialect)
                                 connection.execute(
                                     text(
-                                        f"ALTER TABLE `{table_name}` ADD COLUMN `{col_name}` {type_string} COLLATE utf8mb4_general_ci COMMENT :comment"),
+                                        f"ALTER TABLE `{table_name}` ADD COLUMN `{col_name}` {type_string} COMMENT :comment"),
                                     {'comment': comment}
                                 )
                                 ddl_executed = True
@@ -1606,7 +1606,7 @@ class Jdy2DbSyncService:
                             for old_name, new_name, sql_type, comment in cols_to_rename:
                                 type_string = sql_type.compile(dialect=engine.dialect)
                                 connection.execute(text(
-                                    f"ALTER TABLE `{table_name}` CHANGE COLUMN `{old_name}` `{new_name}` {type_string} COLLATE utf8mb4_general_ci COMMENT :comment"),
+                                    f"ALTER TABLE `{table_name}` CHANGE COLUMN `{old_name}` `{new_name}` {type_string} COMMENT :comment"),
                                     {'comment': comment}
                                 )
                                 ddl_executed = True
@@ -1618,7 +1618,7 @@ class Jdy2DbSyncService:
                             for col_name, sql_type, comment in cols_to_modify:
                                 type_string = sql_type.compile(dialect=engine.dialect)
                                 connection.execute(text(
-                                    f"ALTER TABLE `{table_name}` MODIFY COLUMN `{col_name}` {type_string} COLLATE utf8mb4_general_ci COMMENT :comment"),
+                                    f"ALTER TABLE `{table_name}` MODIFY COLUMN `{col_name}` {type_string} COMMENT :comment"),
                                     {'comment': comment}
                                 )
                                 ddl_executed = True
