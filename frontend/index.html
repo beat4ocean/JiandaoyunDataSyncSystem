@@ -627,7 +627,7 @@
                   </el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="操作" width="300" fixed="right">
+              <el-table-column label="操作" width="200" fixed="right">
                 <template #default="scope">
                   <el-button size="small" @click="openDialog(scope.row)" :icon="ElementPlusIcons.Edit">编辑</el-button>
                   <el-button size="small" type="danger" @click="deleteItem(scope.row.id)"
@@ -884,7 +884,7 @@
                   </el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="操作" width="300" fixed="right">
+              <el-table-column label="操作" width="200" fixed="right">
                 <template #default="scope">
                   <el-button size="small" @click="openDialog(scope.row)" :icon="ElementPlusIcons.Edit">编辑</el-button>
                   <el-button size="small" type="danger" @click="deleteItem(scope.row.id)"
@@ -1086,7 +1086,7 @@
                 <template #default="scope"> {{ scope.row.description ? scope.row.description : '' }}
                 </template>
               </el-table-column>
-              <el-table-column label="操作" width="300" fixed="right">
+              <el-table-column label="操作" width="200" fixed="right">
                 <template #default="scope">
                   <el-button size="small" @click="openDialog(scope.row)" :icon="ElementPlusIcons.Edit">编辑</el-button>
                   <el-button size="small" type="danger" @click="deleteItem(scope.row.id)"
@@ -1163,8 +1163,8 @@
               <el-table-column prop="id" label="ID" width="60"></el-table-column>
               <el-table-column v-if="isSuperuser" prop="department_name" label="所属部门" width="180"
                                sortable></el-table-column>
-              <el-table-column prop="task_name" label="任务名称" width="150" sortable></el-table-column>
-              <el-table-column prop="db_show_name" label="源数据库" width="150" sortable>
+              <el-table-column prop="task_name" label="任务名称" sortable></el-table-column>
+              <el-table-column prop="db_show_name" label="源数据库" sortable>
                 <template #default="scope">
                   <el-tag>{{ scope.row.db_show_name || 'N/A' }}</el-tag>
                 </template>
@@ -1187,7 +1187,7 @@
               <el-table-column prop="last_sync_time" label="上次同步时间" width="170">
                 <template #default="scope">{{ formatDateTime(scope.row.last_sync_time) }}</template>
               </el-table-column>
-              <el-table-column label="操作" width="300" fixed="right">
+              <el-table-column label="操作" width="200" fixed="right">
                 <template #default="scope">
                   <el-button size="small" @click="openDialog(scope.row)" :icon="ElementPlusIcons.Edit">编辑</el-button>
                   <el-button size="small" type="danger" @click="deleteItem(scope.row.id)"
@@ -1525,15 +1525,15 @@
               <el-table-column prop="id" label="ID" width="50"></el-table-column>
               <el-table-column v-if="isSuperuser" prop="department_name" label="所属部门" width="150"
                                sortable></el-table-column>
-              <el-table-column prop="task_name" label="任务名称" sortable width="150"></el-table-column>
-              <el-table-column prop="db_show_name" label="目标数据库" width="150" sortable>
+              <el-table-column prop="task_name" label="任务名称" sortable></el-table-column>
+              <el-table-column prop="db_show_name" label="目标数据库" sortable>
                 <template #default="scope">
                   <el-tag type="success">{{ scope.row.db_show_name || 'N/A' }}</el-tag>
                 </template>
               </el-table-column>
-              <el-table-column prop="table_name" label="目标表名 (自动)" width="150" sortable></el-table-column>
-              <el-table-column prop="app_id" label="App ID (自动)" width="150"></el-table-column>
-              <el-table-column prop="entry_id" label="Entry ID (自动)" width="150"></el-table-column>
+              <el-table-column prop="table_name" label="目标表名 (自动)" sortable></el-table-column>
+              <el-table-column prop="app_id" label="App ID (自动)" width="250"></el-table-column>
+              <el-table-column prop="entry_id" label="Entry ID (自动)" width="250"></el-table-column>
               <el-table-column prop="daily_sync_type" label="全量拉取类型" width="120">
                 <template #default="scope">{{ scope.row.daily_sync_type || 'N/A' }}</template>
               </el-table-column>
@@ -1922,16 +1922,16 @@
                   </div>
                 </template>
               </el-table-column>
-              <el-table-column prop="id" label="ID" width="70"></el-table-column>
-              <el-table-column prop="timestamp" label="时间" width="170" sortable>
+              <el-table-column prop="id" label="ID" min-width="70"></el-table-column>
+              <el-table-column prop="timestamp" label="时间" min-width="170" sortable>
                 <template #default="scope">{{ formatDateTime(scope.row.timestamp) }}</template>
               </el-table-column>
-              <el-table-column prop="department_name" label="所属部门" width="120" v-if="isSuperuser"
+              <el-table-column prop="department_name" label="所属部门" min-width="120" v-if="isSuperuser"
                                sortable></el-table-column>
-              <el-table-column prop="task_id" label="任务ID" width="100" sortable></el-table-column>
-              <el-table-column prop="table_name" label="表名" width="150" sortable></el-table-column>
-              <el-table-column prop="app_id" label="App ID" width="120"></el-table-column>
-              <el-table-column prop="entry_id" label="Entry ID" width="120"></el-table-column>
+              <el-table-column prop="task_id" label="任务ID" min-width="100" sortable></el-table-column>
+              <el-table-column prop="table_name" label="表名" min-width="150" sortable></el-table-column>
+              <el-table-column prop="app_id" label="App ID" min-width="200"></el-table-column>
+              <el-table-column prop="entry_id" label="Entry ID" min-width="200"></el-table-column>
               <el-table-column prop="error_message" label="错误信息" min-width="250">
                 <template #default="scope">
                   <div style="white-space: pre-wrap;">{{ scope.row.error_message }}</div>
@@ -2029,16 +2029,16 @@
                   </div>
                 </template>
               </el-table-column>
-              <el-table-column prop="id" label="ID" width="70"></el-table-column>
-              <el-table-column prop="timestamp" label="时间" width="170" sortable>
+              <el-table-column prop="id" label="ID" min-width="70"></el-table-column>
+              <el-table-column prop="timestamp" label="时间" min-width="170" sortable>
                 <template #default="scope">{{ formatDateTime(scope.row.timestamp) }}</template>
               </el-table-column>
-              <el-table-column prop="department_name" label="所属部门" width="120" v-if="isSuperuser"
+              <el-table-column prop="department_name" label="所属部门" min-width="120" v-if="isSuperuser"
                                sortable></el-table-column>
-              <el-table-column prop="task_id" label="任务ID" width="100" sortable></el-table-column>
-              <el-table-column prop="table_name" label="表名" width="150" sortable></el-table-column>
-              <el-table-column prop="app_id" label="App ID" width="120"></el-table-column>
-              <el-table-column prop="entry_id" label="Entry ID" width="120"></el-table-column>
+              <el-table-column prop="task_id" label="任务ID" min-width="100" sortable></el-table-column>
+              <el-table-column prop="table_name" label="表名" min-width="150" sortable></el-table-column>
+              <el-table-column prop="app_id" label="App ID" min-width="120"></el-table-column>
+              <el-table-column prop="entry_id" label="Entry ID" min-width="120"></el-table-column>
               <el-table-column prop="error_message" label="错误信息" min-width="250">
                 <template #default="scope">
                   <div style="white-space: pre-wrap;">{{ scope.row.error_message }}</div>
