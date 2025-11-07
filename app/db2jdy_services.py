@@ -1085,11 +1085,22 @@ class Db2JdySyncService:
                         self._update_task_status(config_session, task, status='error')
                     return  # 退出线程
 
-            # 3. 在线程启动时创建一次性的 ConfigSession 来更新状态 (如果上面没运行)
+            # 3. 在线程启动时创建一次性的 ConfigSession 来更新状态
             else:  # 仅在非首次运行时
                 with ConfigSession() as session:
-                    self._update_task_status(session, task, status='running')
-                    session.refresh(task)  # 确保 task 对象是最新的
+                    # 'task' 对象是从另一个会话传入的, 必须从此会话中重新获取
+                    # sqlalchemy.exc.InvalidRequestError: Instance '<SyncTask ...>' is not persistent within this Session
+                    session_task = session.query(SyncTask).get(task.id)
+
+                    if not session_task:
+                        logger.error(f"[{thread_name}] Task {task.id} not found in DB. Stopping listener.")
+                        return
+
+                    self._update_task_status(session, session_task, status='running')
+                    # session.refresh(session_task) # 不再需要, .get() 已经获取了最新数据
+
+                    # 确保后续代码(如果在此 try 块中)使用此会话中的 task 实例
+                    task = session_task
 
             # 4. 独立创建会话和映射 (在循环外)
             # Binlog 线程需要自己的会话
