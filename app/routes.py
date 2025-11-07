@@ -529,7 +529,7 @@ def add_sync_task():
             # (db2jdy 专属字段)
             new_task.app_id = data.get('app_id')  # db2jdy 必须
             new_task.entry_id = data.get('entry_id')  # db2jdy 必须
-            new_task.business_keys = data.get('business_keys')  # db2jdy 必须 (非 FULL_REPLACE)
+            new_task.business_keys = data.get('business_keys')  # db2jdy 必须 (非 FULL_SYNC)
             new_task.sync_mode = data.get('sync_mode', 'INCREMENTAL')
             new_task.incremental_field = data.get('incremental_field')
             new_task.incremental_interval = data.get('incremental_interval')

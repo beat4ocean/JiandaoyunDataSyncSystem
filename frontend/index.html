@@ -1256,7 +1256,7 @@
                     <el-form-item label="同步模式" prop="sync_mode">
                       <el-select v-model="currentItem.sync_mode" placeholder="选择同步模式">
                         <el-option label="INCREMENTAL (增量)" value="INCREMENTAL"></el-option>
-                        <el-option label="FULL_REPLACE (全量覆盖)" value="FULL_REPLACE"></el-option>
+                        <el-option label="FULL_SYNC (全量)" value="FULL_SYNC"></el-option>
                         <el-option label="BINLOG (实时)" value="BINLOG"></el-option>
                       </el-select>
                     </el-form-item>
@@ -1302,7 +1302,7 @@
                   </el-row>
                 </template>
 
-                <template v-if="currentItem.sync_mode === 'FULL_REPLACE'">
+                <template v-if="currentItem.sync_mode === 'FULL_SYNC'">
                   <el-row :gutter="20">
                     <el-col :span="12">
                       <el-form-item label="每日同步时间" prop="full_replace_time">
@@ -1314,7 +1314,7 @@
                   </el-row>
                 </template>
 
-                <template v-if="currentItem.sync_mode === 'INCREMENTAL' || currentItem.sync_mode === 'FULL_REPLACE'">
+                <template v-if="currentItem.sync_mode === 'INCREMENTAL' || currentItem.sync_mode === 'FULL_SYNC'">
                   <el-form-item label="SQL 过滤条件 (选填)" prop="source_filter_sql">
                     <el-input type="textarea" v-model="currentItem.source_filter_sql"
                               placeholder="e.g., status = 'approved' AND amount > 1000"></el-input>
@@ -1385,17 +1385,17 @@
 
             // 动态验证规则
             const validatePkField = (rule, value, callback) => {
-                if (crud.currentItem.sync_mode !== 'FULL_REPLACE' && !value) {
+                if (crud.currentItem.sync_mode !== 'FULL_SYNC' && !value) {
                     callback(new Error('请输入源表主键'));
                 } else {
                     callback();
                 }
             };
 
-            // 规则: FULL_REPLACE 模式需要指定 全量同步时间
+            // 规则: FULL_SYNC 模式需要指定 全量同步时间
             const validateFullReplaceTime = (rule, value, callback) => {
                 // 注意: 验证器是为 'full_replace_time' 注册的，但检查 'full_replace_time_temp'
-                if (crud.currentItem.sync_mode === 'FULL_REPLACE' && !crud.currentItem.full_replace_time_temp) {
+                if (crud.currentItem.sync_mode === 'FULL_SYNC' && !crud.currentItem.full_replace_time_temp) {
                     callback(new Error('请选择每日同步时间'));
                 } else {
                     callback();

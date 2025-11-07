@@ -699,13 +699,13 @@ class Db2JdySyncService:
             self._update_task_status(config_session, task, status='error')
             return
 
-        # 视图支持全量覆盖
+        # 视图支持全量
         # if self._is_view(task):
         #     log_sync_error(task_config=task,
-        #                    extra_info=f"task_id:[{task.id}] FULL_REPLACE mode is not allowed for VIEWS. Skipping task.")
+        #                    extra_info=f"task_id:[{task.id}] FULL_SYNC mode is not allowed for VIEWS. Skipping task.")
         #     return
 
-        logger.info(f"task_id:[{task.id}] Running FULL_REPLACE sync (Scheduled)...")
+        logger.info(f"task_id:[{task.id}] Running FULL_SYNC sync (Scheduled)...")
         self._update_task_status(config_session, task, status='running')
 
         try:
@@ -1053,7 +1053,7 @@ class Db2JdySyncService:
 
             # 1. 检查是否需要首次全量同步
             if task.is_full_replace_first:
-                logger.info(f"task_id:[{task.id}] First run: Executing initial full replace...")
+                logger.info(f"task_id:[{task.id}] First run: Executing initial FULL SYNC...")
                 try:
                     # 调用全量同步
                     self._run_full_sync(config_session, task, delete_first=False)
@@ -1420,7 +1420,7 @@ class Db2JdySyncService:
 
                 # 3e. 检查是否需要首次全量同步
                 if session_task.is_full_replace_first:
-                    logger.info(f"[{thread_name}] First run: Executing initial full replace...")
+                    logger.info(f"[{thread_name}] First run: Executing initial FULL SYNC...")
                     try:
                         # _run_full_sync 使用传入的会话
                         self._run_full_sync(config_session, session_task, delete_first=False)
