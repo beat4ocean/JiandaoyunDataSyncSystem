@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.config import Config
 from app.database import get_dynamic_engine, get_dynamic_session
 from app.jdy_api import FormApi, DataApi
-from app.models import ConfigSession, SyncTask, FormFieldMapping
+from app.models import ConfigSession, SyncTask, FormFieldMapping, Department
 from app.utils import json_serializer, TZ_UTC_8, retry, log_sync_error
 
 # 配置日志
@@ -1010,134 +1010,175 @@ class Db2JdySyncService:
         运行一个长连接的 Binlog 监听器
         (独立创建会话, 事务 ID, 去重, 复合主键，支持首次全量同步)
         """
-        # --- 检查任务类型 ---
-        if task.sync_type != 'db2jdy':
-            logger.error(f"task_id:[{task.id}] run_binlog_listener 失败：任务类型不是 'db2jdy'。")
-            # 状态将在 run_binlog_listener_in_thread 的 finally 块中被设置为 error
+
+        # 1. 尽快安全地获取 task_id
+        # 'task' 对象是从另一个线程传入的, 处于游离状态。
+        # 访问除 .id 之外的任何属性都可能导致 DetachedInstanceError。
+        try:
+            task_id_safe = task.id
+        except Exception as e:
+            # 如果连 task.id 都无法访问, 记录日志并退出
+            logger.error(f"[BinlogListener-??] CRITICAL: Failed to get task.id from initial task object: {e}")
             return
 
-        if self._is_view(task):
-            log_sync_error(task_config=task,
-                           extra_info=f"task_id:[{task.id}] BINLOG mode is not allowed for VIEWS. Stopping listener.")
-            return
-
-        thread_name = f"BinlogListener-{task.id}"
+        thread_name = f"BinlogListener-{task_id_safe}"
         current_thread().name = thread_name
         logger.info(f"[{thread_name}] Starting...")
 
-        if not task.department or not task.department.jdy_key_info or not task.department.jdy_key_info.api_key:
-            log_sync_error(
-                task_config=task,
-                error=ValueError(f"Task {task.id} missing department or API key for BINLOG."),
-                extra_info=f"task_id:[{task.id}] BINLOG listener stopped."
-            )
-            # 状态将在 run_binlog_listener_in_thread 的 finally 块中被设置为 error
+        # 检查任务类型
+        if task.sync_type != 'db2jdy':
+            logger.error(f"task_id:[{task_id_safe}] run_binlog_listener 失败：任务类型不是 'db2jdy'。")
             return
-        api_key = task.department.jdy_key_info.api_key
 
-        # 必须加载 database 才能获取连接信息
-        if not task.database:
-            with ConfigSession() as config_session:
-                task = config_session.query(SyncTask).options(
-                    joinedload(SyncTask.database)
-                ).get(task.id)
-                if not task.database:
-                    log_sync_error(task_config=task,
-                                   error=ValueError(f"Task {task.id} missing database link."),
-                                   extra_info=f"task_id:[{task.id}] BINLOG listener stopped.")
-                    return
-
-        db_info = task.database
-
-        # 动态构建 Binlog 设置
-        dynamic_binlog_settings = {
-            "host": db_info.db_host,
-            "port": db_info.db_port,
-            "user": db_info.db_user,
-            "passwd": db_info.db_password  # (注意) quote_plus 是用于 URL的, 这里用原始密码
-        }
-
-        data_api_query = DataApi(api_key, Config.JDY_API_BASE_URL, qps=30)
-        data_api_delete = DataApi(api_key, Config.JDY_API_BASE_URL, qps=10)  # 用于去重和删除
-        data_api_create = DataApi(api_key, Config.JDY_API_BASE_URL, qps=20)
-        data_api_update = DataApi(api_key, Config.JDY_API_BASE_URL, qps=20)
+        # 2. 定义所有需要的变量, 它们将在下面的 'with' 块中被填充
+        api_key = None
+        payload_map = None
+        alias_map = None
+        dynamic_binlog_settings = {}
+        server_id = 100 + task_id_safe
+        table_name = None
+        db_name = None
+        log_file = None
+        log_pos = None
+        last_sync_time = None
+        app_id = None
+        entry_id = None
 
         stream = None
+
         try:
-            # 2. 检查是否需要首次全量同步 (在启动监听器之前)
-            if task.is_full_replace_first:
-                logger.info(f"[{thread_name}] First run: Executing initial full replace...")
-                try:
-                    with ConfigSession() as config_session:
-                        self._run_full_sync(config_session, task, delete_first=True)
+            # 3. 创建一个 *单一的* 会话来获取所有需要的配置
+            # 这样可以确保所有 SQLAlchemy 对象在关闭会话之前
+            # 其所有属性都被访问并存储在局部变量中
+            with ConfigSession() as config_session:
+
+                # 3a. 从新会话中获取 'live' 的 task 实例
+                session_task = config_session.query(SyncTask).options(
+                    joinedload(SyncTask.department).joinedload(Department.jdy_key_info),
+                    joinedload(SyncTask.database)
+                ).get(task_id_safe)
+
+                if not session_task:
+                    # 使用原始的 'task' 对象进行最后一次日志记录
+                    log_sync_error(task_config=task, extra_info=f"[{thread_name}] Task not found in DB. Stopping.")
+                    return  # 致命错误
+
+                if self._is_view(session_task):
+                    log_sync_error(task_config=session_task,
+                                   extra_info=f"task_id:[{task_id_safe}] BINLOG mode is not allowed for VIEWS. Stopping listener.")
+                    return
+
+                # 3b. 提取 API 密钥
+                if not session_task.department or not session_task.department.jdy_key_info or not session_task.department.jdy_key_info.api_key:
+                    log_sync_error(
+                        task_config=session_task,
+                        error=ValueError(f"Task {task_id_safe} missing department or API key for BINLOG."),
+                        extra_info=f"task_id:[{task_id_safe}] BINLOG listener stopped."
+                    )
+                    return
+                api_key = session_task.department.jdy_key_info.api_key  # 存储为局部变量
+
+                # 3c. 提取数据库信息
+                if not session_task.database:
+                    log_sync_error(task_config=session_task,
+                                   error=ValueError(f"Task {task_id_safe} missing database link."),
+                                   extra_info=f"task_id:[{task_id_safe}] BINLOG listener stopped.")
+                    return
+
+                # 3d. 提取 Binlog 动态设置 (标量)
+                dynamic_binlog_settings = {
+                    "host": session_task.database.db_host,
+                    "port": session_task.database.db_port,
+                    "user": session_task.database.db_user,
+                    "passwd": session_task.database.db_password
+                }
+                table_name = session_task.table_name  # 存储为局部变量
+                db_name = session_task.database.db_name  # 存储为局部变量
+
+                # 3e. 检查是否需要首次全量同步
+                if session_task.is_full_replace_first:
+                    logger.info(f"[{thread_name}] First run: Executing initial full replace...")
+                    try:
+                        # _run_full_sync 使用传入的会话
+                        self._run_full_sync(config_session, session_task, delete_first=True)
 
                         # 成功后, 更新状态
-                        self._update_task_status(config_session, task,
-                                                 status='running',  # 保持 running, 因为要继续启动 binlog
+                        self._update_task_status(config_session, session_task,
+                                                 status='running',  # 保持 running
                                                  last_sync_time=datetime.now(TZ_UTC_8),
                                                  is_full_replace_first=False)
                         logger.info(f"[{thread_name}] Initial full sync complete. Proceeding to binlog...")
-                except Exception as e:
-                    # 首次全量同步失败, 记录日志, 将任务设为 error 并退出线程
-                    log_sync_error(task_config=task, error=e,
-                                   extra_info=f"[{thread_name}] Initial full sync failed. Stopping binlog listener.")
-                    with ConfigSession() as config_session:
-                        self._update_task_status(config_session, task, status='error')
-                    return  # 退出线程
+                    except Exception as e:
+                        log_sync_error(task_config=session_task, error=e,
+                                       extra_info=f"[{thread_name}] Initial full sync failed. Stopping binlog listener.")
+                        # 确保错误状态被提交
+                        self._update_task_status(config_session, session_task, status='error')
+                        return  # 退出线程
+                else:
+                    # 仅在非首次运行时更新状态
+                    self._update_task_status(config_session, session_task, status='running')
 
-            # 3. 在线程启动时创建一次性的 ConfigSession 来更新状态
-            else:  # 仅在非首次运行时
-                with ConfigSession() as session:
-                    # 'task' 对象是从另一个会话传入的, 必须从此会话中重新获取
-                    # sqlalchemy.exc.InvalidRequestError: Instance '<SyncTask ...>' is not persistent within this Session
-                    session_task = session.query(SyncTask).get(task.id)
+                # 3f. 提取剩余的标量值
+                log_file = session_task.last_binlog_file
+                log_pos = session_task.last_binlog_pos
+                last_sync_time = session_task.last_sync_time
+                app_id = session_task.app_id
+                entry_id = session_task.entry_id
 
-                    if not session_task:
-                        logger.error(f"[{thread_name}] Task {task.id} not found in DB. Stopping listener.")
-                        return
-
-                    self._update_task_status(session, session_task, status='running')
-                    # session.refresh(session_task) # 不再需要, .get() 已经获取了最新数据
-
-                    # 确保后续代码(如果在此 try 块中)使用此会话中的 task 实例
-                    task = session_task
-
-            # 4. 独立创建会话和映射 (在循环外)
-            # Binlog 线程需要自己的会话
-            with ConfigSession() as config_session:
+                # 3g. 提取映射
                 mapping_service = FieldMappingService()
-                payload_map = mapping_service.get_payload_mapping(config_session, task.id)
-                alias_map = mapping_service.get_alias_mapping(config_session, task.id)
+                payload_map = mapping_service.get_payload_mapping(config_session, task_id_safe)
+                alias_map = mapping_service.get_alias_mapping(config_session, task_id_safe)
 
+            # --- config_session 在此结束 ---
+            # 'session_task' 实例现在已分离, 但我们已将所有
+            # 需要的值存储在局部变量中 (api_key, payload_map, table_name 等)
+
+            # 4. 检查映射
             if not payload_map or not alias_map:
                 raise ValueError(f"[{thread_name}] Field mapping is empty. Stopping.")
 
+            # 5. 实例化 API (在会话外)
+            data_api_query = DataApi(api_key, Config.JDY_API_BASE_URL, qps=30)
+            data_api_delete = DataApi(api_key, Config.JDY_API_BASE_URL, qps=10)
+            data_api_create = DataApi(api_key, Config.JDY_API_BASE_URL, qps=20)
+            data_api_update = DataApi(api_key, Config.JDY_API_BASE_URL, qps=20)
+
+            # 6. 实例化 Binlog 读取器 (在会话外, 使用局部变量)
             stream = BinLogStreamReader(
                 connection_settings=dynamic_binlog_settings,
-                server_id=100 + task.id,  # 唯一的 server_id
+                server_id=server_id,
                 only_events=[WriteRowsEvent, UpdateRowsEvent, DeleteRowsEvent],
-                only_tables=[task.table_name],
-                only_schemas=[db_info.db_name],
-                log_file=task.last_binlog_file,
-                log_pos=task.last_binlog_pos,
+                only_tables=[table_name],
+                only_schemas=[db_name],
+                log_file=log_file,
+                log_pos=log_pos,
                 resume_stream=True,
                 blocking=True,
-                skip_to_timestamp=task.last_sync_time.timestamp() if task.last_sync_time else None
+                skip_to_timestamp=last_sync_time.timestamp() if last_sync_time else None
             )
 
             logger.info(f"[{thread_name}] Listening for binlog events...")
 
+            # 7. 开始循环 (在循环内部使用短暂的会话)
             for binlog_event in stream:
                 log_file = stream.log_file
                 log_pos = stream.log_pos
                 try:
-                    # 5. 在循环内部为 *每个事件* 创建短暂的会话
-                    # 动态创建 source_session
-                    with ConfigSession() as config_session, get_dynamic_session(task) as source_session:
-                        current_task_state = config_session.query(SyncTask).get(task.id)
+                    # 在循环内部为 *每个事件* 创建短暂的会话
+                    # 'task' 在这里是原始的游离对象, 我们只使用它来打开 get_dynamic_session
+                    # 更好的做法是重构 get_dynamic_session 以接受 task_id
+                    # 但现在, 我们将在循环会话中获取 'live' 的 task
+                    with ConfigSession() as loop_session, get_dynamic_session(task) as source_session:
+
+                        # 获取任务的当前状态 (用于检查 .is_active)
+                        current_task_state = loop_session.query(SyncTask).get(task_id_safe)
                         if not current_task_state or not current_task_state.is_active:
                             logger.info(f"[{thread_name}] Task disabled. Stopping listener.")
                             break  # 退出 for 循环
+
+                        # 将 'live' task 对象用于需要它的辅助方法
+                        task_in_loop = current_task_state
 
                         for row in binlog_event.rows:
                             trans_id = str(uuid.uuid4())  # 每个 row 操作都是一个事务
@@ -1146,31 +1187,27 @@ class Db2JdySyncService:
                                 data_payload = self._transform_row_to_jdy(row['values'], payload_map)
 
                                 if not data_payload:
-                                    log_sync_error(task_config=task,
+                                    log_sync_error(task_config=task_in_loop,
                                                    payload=row['values'],
-                                                   extra_info=f"task_id:[{task.id}] Row missing required fields. Skipping.")
+                                                   extra_info=f"task_id:[{task_id_safe}] Row missing required fields. Skipping.")
                                     continue
 
                                 create_response = data_api_create.create_single_data(
-                                    task.app_id, task.entry_id,
+                                    app_id, entry_id,  # 使用局部变量
                                     data_payload, transaction_id=trans_id
                                 )
                                 new_jdy_id = create_response.get('data', {}).get('_id')
                                 if not new_jdy_id:
-                                    log_sync_error(task_config=task,
+                                    log_sync_error(task_config=task_in_loop,
                                                    payload=data_payload,
                                                    error=create_response,
                                                    extra_info=f"[{thread_name}] Failed to create data.")
                                 else:
-                                    logger.debug(f"task_id:[{task.id}] Created data with _id: {new_jdy_id}")
-                                    # binlog 模式不需要回写_id, 会导致binlog被重复激发
-                                    # # 传入 row['values']
-                                    # self._writeback_id_to_source(source_session, task, new_jdy_id, row['values'])
+                                    logger.debug(f"task_id:[{task_id_safe}] Created data with _id: {new_jdy_id}")
 
                             elif isinstance(binlog_event, UpdateRowsEvent):
-                                # 传入 row['after_values']
                                 jdy_id = row['after_values'].get('_id') or self._find_jdy_id_by_pk(
-                                    task, row['after_values'],
+                                    task_in_loop, row['after_values'],  # 使用 task_in_loop
                                     data_api_query, data_api_delete, alias_map
                                 )
 
@@ -1178,107 +1215,115 @@ class Db2JdySyncService:
                                     data_payload = self._transform_row_to_jdy(row['after_values'], payload_map)
 
                                     if not data_payload:
-                                        log_sync_error(task_config=task,
+                                        log_sync_error(task_config=task_in_loop,
                                                        payload=row['after_values'],
-                                                       extra_info=f"task_id:[{task.id}] Row missing required fields. Skipping.")
+                                                       extra_info=f"task_id:[{task_id_safe}] Row missing required fields. Skipping.")
                                         continue
 
                                     update_response = data_api_update.update_single_data(
-                                        task.app_id, task.entry_id, jdy_id,
+                                        app_id, entry_id, jdy_id,  # 使用局部变量
                                         data_payload, transaction_id=trans_id
                                     )
                                     update_jdy_id = update_response.get('data', {}).get('_id')
                                     if not update_jdy_id:
-                                        log_sync_error(task_config=task,
+                                        log_sync_error(task_config=task_in_loop,
                                                        payload=data_payload,
                                                        error=update_response,
-                                                       extra_info=f"task_id:[{task.id}] Failed to update data.")
+                                                       extra_info=f"task_id:[{task_id_safe}] Failed to update data.")
                                     else:
-                                        logger.debug(f"task_id:[{task.id}] Updated data with _id: {update_jdy_id}")
+                                        logger.debug(f"task_id:[{task_id_safe}] Updated data with _id: {update_jdy_id}")
 
                                 else:
-                                    # log_sync_error(task_config=task,
-                                    #                extra_info=f"[{thread_name}] Update event skipped: Jdy ID not found.",
-                                    #                payload=row['after_values'])
                                     # 简道云中没有，则新增
                                     data_payload = self._transform_row_to_jdy(row['after_values'], payload_map)
                                     if not data_payload:
-                                        log_sync_error(task_config=task,
+                                        log_sync_error(task_config=task_in_loop,
                                                        payload=row['after_values'],
-                                                       extra_info=f"task_id:[{task.id}] Row missing required fields. Skipping.")
+                                                       extra_info=f"task_id:[{task_id_safe}] Row missing required fields. Skipping.")
                                         continue
 
                                     create_response = data_api_create.create_single_data(
-                                        task.app_id, task.entry_id,
+                                        app_id, entry_id,  # 使用局部变量
                                         data_payload, transaction_id=trans_id
                                     )
                                     new_jdy_id = create_response.get('data', {}).get('_id')
                                     if not new_jdy_id:
-                                        log_sync_error(task_config=task,
+                                        log_sync_error(task_config=task_in_loop,
                                                        payload=data_payload,
                                                        error=create_response,
                                                        extra_info=f"[{thread_name}] Failed to create data.")
                                     else:
                                         logger.debug(
-                                            f"task_id:[{task.id}] Update event: Jdy ID not found, Created data with _id: {new_jdy_id}")
+                                            f"task_id:[{task_id_safe}] Update event: Jdy ID not found, Created data with _id: {new_jdy_id}")
 
                             elif isinstance(binlog_event, DeleteRowsEvent):
-                                # 传入 row['values']
                                 jdy_id = row['values'].get('_id') or self._find_jdy_id_by_pk(
-                                    task, row['values'],
+                                    task_in_loop, row['values'],  # 使用 task_in_loop
                                     data_api_query, data_api_delete, alias_map
                                 )
 
                                 if jdy_id:
-                                    # Delete single 没有 transaction_id
-                                    delete_response = data_api_delete.delete_single_data(task.app_id,
-                                                                                         task.entry_id, jdy_id)
+                                    delete_response = data_api_delete.delete_single_data(
+                                        app_id, entry_id, jdy_id  # 使用局部变量
+                                    )
                                     success = delete_response.get('status')
                                     if not success:
-                                        log_sync_error(task_config=task,
+                                        log_sync_error(task_config=task_in_loop,
                                                        payload=row['values'],
                                                        error=delete_response,
                                                        extra_info=f"[{thread_name}] Failed to delete data.")
                                     else:
-                                        logger.debug(f"task_id:[{task.id}] Deleted data with _id: {jdy_id}")
+                                        logger.debug(f"task_id:[{task_id_safe}] Deleted data with _id: {jdy_id}")
                                 else:
-                                    log_sync_error(task_config=task,
+                                    log_sync_error(task_config=task_in_loop,
                                                    extra_info=f"[{thread_name}] Delete event skipped: Jdy ID not found.",
                                                    payload=row['values'])
 
-                        # 6. 事件处理完成后, 在会话内更新位置
-                        self._update_task_status(config_session, task, 'running', log_file, log_pos)
+                        # 8. 事件处理完成后, 在会话内更新位置
+                        self._update_task_status(loop_session, task_in_loop, 'running', log_file, log_pos)
 
                 except (requests.exceptions.RequestException, requests.exceptions.HTTPError) as api_err:
-                    # API 错误 (例如 404, 500, QPS), 记录日志但不停止监听器
-                    log_sync_error(task_config=task, error=api_err,
-                                   extra_info=f"[{thread_name}] API error during binlog event processing (will retry).")
+                    # API 错误, 记录日志但不停止监听器
+                    # 在 except 块中创建一个新会话来获取 'live' 的 task 对象进行日志记录
+                    with ConfigSession() as error_session:
+                        error_task = error_session.query(SyncTask).get(task_id_safe)
+                        log_sync_error(task_config=error_task or task, error=api_err,
+                                       extra_info=f"[{thread_name}] API error during binlog event processing (will retry).")
                     time.sleep(10)  # 发生 API 错误时暂停
                 except OperationalError as db_err:
-                    # 数据库连接错误 (例如 'gone away'), 记录日志但不停止监听器
-                    log_sync_error(task_config=task, error=db_err,
-                                   extra_info=f"[{thread_name}] DB OperationalError (will retry).")
+                    # 数据库连接错误, 记录日志但不停止监听器
+                    with ConfigSession() as error_session:
+                        error_task = error_session.query(SyncTask).get(task_id_safe)
+                        log_sync_error(task_config=error_task or task, error=db_err,
+                                       extra_info=f"[{thread_name}] DB OperationalError (will retry).")
                     time.sleep(10)  # 发生 DB 错误时暂停
                 except Exception as event_err:
-                    # 其他事件处理错误 (例如数据转换失败), 记录日志并跳过此事件
-                    log_sync_error(task_config=task, error=event_err,
-                                   extra_info=f"[{thread_name}] Error processing binlog event (skipping).")
-                    # 仍然在会话内更新位置, 以跳过错误事件
+                    # 其他事件处理错误, 记录日志并跳过此事件
                     with ConfigSession() as error_session:
-                        self._update_task_status(error_session, task, 'running', log_file, log_pos)
+                        error_task = error_session.query(SyncTask).get(task_id_safe)
+                        log_sync_error(task_config=error_task or task, error=event_err,
+                                       extra_info=f"[{thread_name}] Error processing binlog event (skipping).")
+                        # 仍然在会话内更新位置, 以跳过错误事件
+                        if error_task:
+                            self._update_task_status(error_session, error_task, 'running', log_file, log_pos)
 
 
         except Exception as e:
             # 这是启动监听器时的严重错误 (例如连接失败)
-            log_sync_error(task_config=task, error=e, extra_info=f"[{thread_name}] CRITICAL error. Listener stopped.")
-            with ConfigSession() as session:
-                self._update_task_status(session, task, status='error')
+            with ConfigSession() as error_session:
+                # 尝试获取 'live' 的 task 对象进行日志记录
+                error_task = error_session.query(SyncTask).get(task_id_safe)
+                log_sync_error(task_config=error_task or task, error=e,
+                               extra_info=f"[{thread_name}] CRITICAL error. Listener stopped.")
+                # 确保状态被更新
+                if error_task:
+                    self._update_task_status(error_session, error_task, status='error')
 
         finally:
             if stream:
                 stream.close()
             logger.warning(f"[{thread_name}] Listener shut down.")
             with ConfigSession() as session:
-                task_status = session.query(SyncTask).get(task.id)
+                task_status = session.query(SyncTask).get(task_id_safe)
                 if task_status and task_status.sync_status == 'running':
-                    self._update_task_status(session, task, status='idle')  # 正常关闭
+                    self._update_task_status(session, task_status, status='idle')  # 正常关闭
