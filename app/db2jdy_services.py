@@ -36,6 +36,54 @@ class FieldMappingService:
     处理字段映射的缓存和更新
     """
 
+    # @retry()
+    # def get_payload_mapping(self, config_session: Session, task_id: int) -> dict:
+    #     """
+    #     获取用于构建 API *payload* 的映射。
+    #     返回: { 'widget_alias': 'jdy_widget_name' }
+    #            (e.g., { 'name': '_widget_123' })
+    #     """
+    #     mappings = config_session.query(FormFieldMapping).filter_by(task_id=task_id).all()
+    #
+    #     result = {}
+    #     for m in mappings:
+    #         # 判断 widget_alias 是否是 _widget_数字 的格式
+    #         if m.widget_alias and m.widget_alias.startswith('_widget_'):
+    #             # 如果是 _widget_数字 格式，使用 m.label 作为 表字段名
+    #             key, value = m.label, m.widget_name
+    #         else:
+    #             # 如果不是，使用 m.widget_alias 作为 表字段名
+    #             key, value = m.widget_alias, m.widget_alias
+    #             # key, value = m.widget_alias, m.widget_name
+    #
+    #         result[key] = value
+    #
+    #     return result
+    #
+    # @retry()
+    # def get_alias_mapping(self, config_session: Session, task_id: int) -> dict:
+    #     """
+    #     获取用于 API *查询过滤* 的映射。
+    #     返回: { 'mysql_column_name': 'jdy_widget_alias' }
+    #            (e.g., { 'name': 'name' })
+    #     """
+    #     mappings = config_session.query(FormFieldMapping).filter_by(task_id=task_id).all()
+    #
+    #     result = {}
+    #     for m in mappings:
+    #         # 判断 widget_alias 是否是 _widget_数字 的格式
+    #         if m.widget_alias and m.widget_alias.startswith('_widget_'):
+    #             # 如果是 _widget_数字 格式，使用 m.label
+    #             key, value = m.label, m.widget_name
+    #         else:
+    #             # 如果不是，必须使用 m.widget_alias
+    #             key, value = m.widget_alias, m.widget_alias
+    #             # key, value = m.widget_alias, m.widget_name
+    #
+    #         result[key] = value
+    #
+    #     return result
+
     @retry()
     def get_payload_mapping(self, config_session: Session, task_id: int) -> dict:
         """
@@ -47,14 +95,13 @@ class FieldMappingService:
 
         result = {}
         for m in mappings:
-            # 判断 widget_alias 是否是 _widget_数字 的格式
-            if m.widget_alias and m.widget_alias.startswith('_widget_'):
-                # 如果是 _widget_数字 格式，使用 m.label 作为 表字段名
-                key, value = m.label, m.widget_name
+            # 判断用户是否没有设置字段别名
+            if m.widget_alias and m.widget_name and m.widget_alias == m.widget_name:
+                # 如没有设置，则使用 m.label 作为 表字段名
+                key, value = m.label, m.widget_alias
             else:
-                # 如果不是，使用 m.widget_alias 作为 表字段名
-                # key, value = m.widget_alias, m.widget_alias
-                key, value = m.widget_alias, m.widget_name
+                # 如设置了，使用 m.widget_alias 作为 表字段名
+                key, value = m.widget_alias, m.widget_alias
 
             result[key] = value
 
@@ -71,14 +118,13 @@ class FieldMappingService:
 
         result = {}
         for m in mappings:
-            # 判断 widget_alias 是否是 _widget_数字 的格式
-            if m.widget_alias and m.widget_alias.startswith('_widget_'):
-                # 如果是 _widget_数字 格式，使用 m.label
-                key, value = m.label, m.widget_name
+            # 判断用户是否没有设置字段别名
+            if m.widget_alias and m.widget_name and m.widget_alias == m.widget_name:
+                # 如没有设置，则使用 m.label 作为 表字段名
+                key, value = m.label, m.widget_alias
             else:
-                # 如果不是，必须使用 m.widget_alias
+                # 如设置了，使用 m.widget_alias 作为 表字段名
                 key, value = m.widget_alias, m.widget_alias
-                # key, value = m.widget_alias, m.widget_name
 
             result[key] = value
 
