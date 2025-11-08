@@ -1305,7 +1305,7 @@
                         <el-switch v-model="currentItem.is_full_sync_first"></el-switch>
                       </el-form-item>
                     </el-col>
-                    <el-col :span="12">
+                    <el-col :span="12" v-if="currentItem.is_full_sync_first">
                       <el-form-item label="⚠️首次全量同步时，执行清空目标表操作">
                         <el-switch v-model="currentItem.is_delete_first"></el-switch>
                       </el-form-item>
@@ -1696,7 +1696,7 @@
                       <el-switch v-model="currentItem.is_full_sync_first"></el-switch>
                     </el-form-item>
                   </el-col>
-                  <el-col :span="12">
+                  <el-col :span="12" v-if="currentItem.is_full_sync_first">
                     <el-form-item label="⚠️首次全量同步时，执行清空目标表操作">
                       <el-switch v-model="currentItem.is_delete_first"></el-switch>
                     </el-form-item>
