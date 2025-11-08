@@ -101,10 +101,11 @@ def create_first_admin():
     session = ConfigSession()
     try:
         # 1. 检查/创建默认部门
-        default_dept = session.query(Department).filter_by(department_name="default_admin_dept").first()
+        default_dept = session.query(Department).filter_by(department_name="default").first()
         if not default_dept:
             default_dept = Department(
-                department_name="default_admin_dept",
+                department_name="default",
+                department_full_name="超级管理员默认部门",
                 is_active=True
             )
             session.add(default_dept)
