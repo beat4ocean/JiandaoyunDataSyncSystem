@@ -47,14 +47,13 @@ class FieldMappingService:
 
         result = {}
         for m in mappings:
-            # 判断 widget_alias 是否是 _widget_数字 的格式
-            if m.widget_alias and m.widget_alias.startswith('_widget_'):
-                # 如果是 _widget_数字 格式，使用 m.label 作为 表字段名
-                key, value = m.label, m.widget_name
+            # 判断 是否存在widget_alias
+            if m.widget_alias and m.widget_name and m.widget_alias == m.widget_name:
+                # 如是，则使用 m.label 作为 表字段名
+                key, value = m.label, m.widget_alias
             else:
                 # 如果不是，使用 m.widget_alias 作为 表字段名
                 key, value = m.widget_alias, m.widget_alias
-                # key, value = m.widget_alias, m.widget_name
 
             result[key] = value
 
@@ -71,14 +70,13 @@ class FieldMappingService:
 
         result = {}
         for m in mappings:
-            # 判断 widget_alias 是否是 _widget_数字 的格式
-            if m.widget_alias and m.widget_alias.startswith('_widget_'):
-                # 如果是 _widget_数字 格式，使用 m.label
-                key, value = m.label, m.widget_name
+            # 判断 是否存在widget_alias
+            if m.widget_alias and m.widget_name and m.widget_alias == m.widget_name:
+                # 如是，则使用 m.label 作为 表字段名
+                key, value = m.label, m.widget_alias
             else:
-                # 如果不是，必须使用 m.widget_alias
+                # 如果不是，使用 m.widget_alias 作为 表字段名
                 key, value = m.widget_alias, m.widget_alias
-                # key, value = m.widget_alias, m.widget_name
 
             result[key] = value
 
