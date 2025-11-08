@@ -35,7 +35,7 @@ class Department(ConfigBase):
     # 用于前端展示
     department_name = Column(String(100), nullable=False, unique=True,
                              comment="关联的租户部门简称(英文), e.g., 'sft_dept'")
-    department_full_name = Column(String(255), nullable=False, unique=True, comment="部门全称, e.g., '软件部门'")
+    department_full_name = Column(String(255), nullable=True, comment="部门全称, e.g., '软件部门'")
 
     is_active = Column(Boolean, default=True, comment="是否激活")
 
