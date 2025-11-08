@@ -513,7 +513,7 @@ class Db2JdySyncService:
             self,
             config_session: Session,
             task: SyncTask,
-            status: str,
+            sync_status: str,
             binlog_file: str = None,
             binlog_pos: int = None,
             last_sync_time: datetime = None,
@@ -524,7 +524,7 @@ class Db2JdySyncService:
         安全地更新任务状态 (使用传入的会话)
         """
         try:
-            task.sync_status = status
+            task.sync_status = sync_status
             if binlog_file:
                 task.last_binlog_file = binlog_file
             if binlog_pos:
@@ -539,7 +539,7 @@ class Db2JdySyncService:
             config_session.commit()
         except Exception as e:
             config_session.rollback()
-            logger.info(f"task_id:[{task.id}] CRITICAL: Failed to update task status to {status}: {e}")
+            logger.info(f"task_id:[{task.id}] CRITICAL: Failed to update task status to {sync_status}: {e}")
 
     # --- 公共同步方法 ---
     # --- 清空简道云表单数据方法
@@ -574,6 +574,8 @@ class Db2JdySyncService:
 
             # 2. 仅在 delete_first=True 时删除
             logger.info(f"task_id:[{task.id}] Deleting all data from Jdy...")
+            # self._update_task_status(config_session, task, sync_status="running", last_sync_time=datetime.now(TZ_UTC_8))
+
             data_id = None
             while True:
                 response = data_api_query.query_list_data(
@@ -600,7 +602,7 @@ class Db2JdySyncService:
             logger.info(f"task_id:[{task.id}] Jdy data deleted ({total_deleted} items). Fetching from source DB...")
 
         except Exception as e:
-            # 不更新状态, 只记录日志, 抛出异常
+            # self._update_task_status(config_session, task, sync_status="failed", last_sync_time=datetime.now(TZ_UTC_8))
             log_sync_error(task_config=task, error=e, extra_info=f"task_id:[{task.id}] _truncate_jdy_form failed.")
             raise e  # 抛出异常, 让调用者处理状态
 
@@ -707,10 +709,8 @@ class Db2JdySyncService:
                 log_sync_error(task_config=task,
                                extra_info=f"task_id:[{task.id}] FINAL COUNT MISMATCH. Source: {total_source_rows}, Created: {total_created}.")
 
-            # 更新时间, 但不更新状态 (由调用者更新)
-            self._update_task_status(config_session, task,
-                                     status=task.sync_status,  # 保持状态不变
-                                     last_sync_time=datetime.now(TZ_UTC_8))
+            # self._update_task_status(config_session, task, sync_status=task.sync_status,
+            #                          last_sync_time=datetime.now(TZ_UTC_8))
 
         except Exception as e:
             # 不更新状态, 只记录日志, 抛出异常
@@ -727,11 +727,11 @@ class Db2JdySyncService:
         # --- 检查任务类型 ---
         if task.sync_type != 'db2jdy':
             logger.error(f"task_id:[{task.id}] _insert_jdy_data_with_primary_key failed: Task type is not 'db2jdy'.")
-            self._update_task_status(config_session, task, status='error')
+            # self._update_task_status(config_session, task, sync_status='error')
             return
 
         logger.info(f"task_id:[{task.id}] Running _insert_jdy_data_with_primary_key sync...")
-        self._update_task_status(config_session, task, status='running')
+        # self._update_task_status(config_session, task, sync_status='running')
 
         if not task.department or not task.department.jdy_key_info or not task.department.jdy_key_info.api_key:
             log_sync_error(
@@ -739,7 +739,7 @@ class Db2JdySyncService:
                 error=ValueError(f"Task {task.id} missing department or API key for INCREMENTAL."),
                 extra_info=f"task_id:[{task.id}] INCREMENTAL failed."
             )
-            self._update_task_status(config_session, task, status='error')
+            # self._update_task_status(config_session, task, sync_status='error')
             return
         api_key = task.department.jdy_key_info.api_key
 
@@ -843,16 +843,16 @@ class Db2JdySyncService:
                 # 检查是否因为没有数据而退出循环
                 if not has_processed_rows:
                     logger.info(f"task_id:[{task.id}] No new data where {task.source_filter_sql}.")
-                    self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
+                    # self._update_task_status(config_session, task, sync_status='idle', last_sync_time=current_sync_time)
                     return
 
             logger.info(f"task_id:[{task.id}] INCREMENTAL sync completed. New: {count_new}, Updated: {count_updated}.")
-            self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
+            # self._update_task_status(config_session, task, sync_status='idle', last_sync_time=current_sync_time)
 
         except Exception as e:
             config_session.rollback()
             log_sync_error(task_config=task, error=e, extra_info=f"task_id:[{task.id}] INCREMENTAL failed.")
-            self._update_task_status(config_session, task, status='error')
+            # self._update_task_status(config_session, task, sync_status='error')
 
             # 重新引发异常，以通知 run_incremental 或 run_binlog_listener 任务失败
             # 这可以防止它们错误地更新 is_full_sync_first
@@ -867,14 +867,14 @@ class Db2JdySyncService:
         # --- 检查任务类型 ---
         if task.sync_type != 'db2jdy':
             logger.error(f"task_id:[{task.id}] run_full_replace failed: Task type is not 'db2jdy'.")
-            self._update_task_status(config_session, task, status='error')
+            self._update_task_status(config_session, task, sync_status='error')
             return
 
         if not task.is_active:
             logger.info(f"task_id:[{task.id}] run_full_replace is disabled: Task is not active.")
             return
 
-        logger.info(f"task_id:[{task.id}] Running FULL_SYNC sync (Scheduled)...")
+        logger.info(f"task_id:[{task.id}] Running FULL_SYNC sync...")
 
         try:
             # 如果首次清空数据
@@ -882,15 +882,18 @@ class Db2JdySyncService:
             if not task.last_sync_time:
                 if task.is_delete_first:
                     # 执行清空操作
-                    self._update_task_status(config_session, task, status='running',
+                    self._update_task_status(config_session, task, sync_status='running',
                                              last_sync_time=datetime.now(TZ_UTC_8))
                     self._truncate_jdy_data(config_session, task)
                     # 成功, 设置为空闲
-                    self._update_task_status(config_session, task, status='idle', last_sync_time=datetime.now(TZ_UTC_8),
-                                             is_full_sync_first=True, is_delete_first=False)
+                    self._update_task_status(config_session, task, sync_status='idle',
+                                             last_sync_time=datetime.now(TZ_UTC_8),
+                                             # 全量同步顾名思义，每次都是全量
+                                             # is_full_sync_first=False,
+                                             is_delete_first=False)
 
             # 执行全量同步
-            self._update_task_status(config_session, task, status='running', last_sync_time=datetime.now(TZ_UTC_8))
+            self._update_task_status(config_session, task, sync_status='running', last_sync_time=datetime.now(TZ_UTC_8))
             # 如果没有主键
             if not task.business_keys:
                 logger.info(
@@ -901,14 +904,14 @@ class Db2JdySyncService:
                 logger.info(
                     f"task_id:[{task.id}] Primary key found. Running _insert_jdy_data_with_primary_key sync...")
                 self._insert_jdy_data_with_primary_key(config_session, task)
-
-            self._update_task_status(config_session, task, status='idle', last_sync_time=datetime.now(TZ_UTC_8))
+            # 更新状态
+            self._update_task_status(config_session, task, sync_status='idle', last_sync_time=datetime.now(TZ_UTC_8))
 
         except Exception as e:
             config_session.rollback()
             logger.error(f"task_id:[{task.id}] FULL_SYNC failed.")
             log_sync_error(task_config=task, error=e, extra_info="task_id:[{task.id}] FULL_SYNC failed.")
-            self._update_task_status(config_session, task, status='error')
+            self._update_task_status(config_session, task, sync_status='error')
 
     @retry()
     def run_incremental(self, config_session: Session, task: SyncTask):
@@ -919,11 +922,11 @@ class Db2JdySyncService:
         # --- 检查任务类型 ---
         if task.sync_type != 'db2jdy':
             logger.error(f"task_id:[{task.id}] run_incremental failed: Task type is not 'db2jdy'.")
-            self._update_task_status(config_session, task, status='error')
+            self._update_task_status(config_session, task, sync_status='error')
             return
 
         logger.info(f"task_id:[{task.id}] Running INCREMENTAL sync...")
-        self._update_task_status(config_session, task, status='running')
+        # self._update_task_status(config_session, task, sync_status='running')
 
         if not task.department or not task.department.jdy_key_info or not task.department.jdy_key_info.api_key:
             log_sync_error(
@@ -931,7 +934,7 @@ class Db2JdySyncService:
                 error=ValueError(f"Task {task.id} missing department or API key for INCREMENTAL."),
                 extra_info=f"task_id:[{task.id}] INCREMENTAL failed."
             )
-            self._update_task_status(config_session, task, status='error')
+            self._update_task_status(config_session, task, sync_status='error')
             return
         api_key = task.department.jdy_key_info.api_key
 
@@ -950,20 +953,21 @@ class Db2JdySyncService:
                         # 双重确认
                         if task.is_delete_first:
                             # 执行清空操作
-                            self._update_task_status(config_session, task, status='running')
+                            self._update_task_status(config_session, task, sync_status='running',
+                                                     last_sync_time=datetime.now(TZ_UTC_8))
                             self._truncate_jdy_data(config_session, task)
                             # 成功后, 更新状态并退出
                             self._update_task_status(config_session, task,
-                                                     status='idle',
+                                                     sync_status='idle',
                                                      last_sync_time=datetime.now(TZ_UTC_8),
                                                      is_delete_first=False)
                         # 调用全量同步
-                        self._update_task_status(config_session, task, status='running',
+                        self._update_task_status(config_session, task, sync_status='running',
                                                  last_sync_time=datetime.now(TZ_UTC_8))
                         self._insert_jdy_data_with_primary_key(config_session, task)
                         # 成功后, 更新状态并退出
                         self._update_task_status(config_session, task,
-                                                 status='idle',
+                                                 sync_status='idle',
                                                  last_sync_time=datetime.now(TZ_UTC_8),
                                                  is_full_sync_first=False,
                                                  is_delete_first=False)
@@ -979,6 +983,7 @@ class Db2JdySyncService:
                         return  # 退出
 
             # 2. 正常增量逻辑
+            self._update_task_status(config_session, task, sync_status='running')
             current_sync_time = datetime.now(TZ_UTC_8)
 
             mapping_service = FieldMappingService()
@@ -1218,16 +1223,16 @@ class Db2JdySyncService:
                 # 检查是否因为没有数据而退出循环
                 if not has_processed_rows:
                     logger.info(f"task_id:[{task.id}] No new data found since {last_sync_time_for_query}.")
-                    self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
+                    # self._update_task_status(config_session, task, sync_status='idle', last_sync_time=current_sync_time)
                     return
 
             logger.info(f"task_id:[{task.id}] INCREMENTAL sync completed. New: {count_new}, Updated: {count_updated}.")
-            self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
+            self._update_task_status(config_session, task, sync_status='idle', last_sync_time=current_sync_time)
 
         except Exception as e:
             config_session.rollback()
             log_sync_error(task_config=task, error=e, extra_info=f"task_id:[{task.id}] INCREMENTAL failed.")
-            self._update_task_status(config_session, task, status='error')
+            self._update_task_status(config_session, task, sync_status='error')
 
     @retry()
     def run_binlog_listener(self, task: SyncTask):
@@ -1291,7 +1296,8 @@ class Db2JdySyncService:
                 if self._is_view(session_task):
                     log_sync_error(task_config=session_task,
                                    extra_info=f"task_id:[{task_id_safe}] BINLOG mode is not allowed for VIEWS. Stopping listener.")
-                    self._update_task_status(config_session, session_task, status='error')
+                    self._update_task_status(config_session, session_task, sync_status='error',
+                                             last_sync_time=datetime.now(TZ_UTC_8))
                     return
 
                 # 3b. 提取 API 密钥
@@ -1324,25 +1330,26 @@ class Db2JdySyncService:
                 # 3e. 检查是否需要首次全量同步
                 if not session_task.last_sync_time:
                     if session_task.is_full_sync_first:
-                        logger.info(f"task_id:[{task.id}] First run: Executing initial FULL SYNC...")
+                        logger.info(f"task_id:[{session_task.id}] First run: Executing initial FULL SYNC...")
                         try:
                             # 双重确认
                             if session_task.is_delete_first:
                                 # 执行清空操作
-                                self._update_task_status(config_session, session_task, status='running')
+                                self._update_task_status(config_session, session_task, sync_status='running',
+                                                         last_sync_time=datetime.now(TZ_UTC_8))
                                 self._truncate_jdy_data(config_session, session_task)
                                 # 成功后, 更新状态并退出
                                 self._update_task_status(config_session, session_task,
-                                                         status='idle',
+                                                         sync_status='idle',
                                                          last_sync_time=datetime.now(TZ_UTC_8),
                                                          is_delete_first=False)
                             # 调用全量同步
-                            self._update_task_status(config_session, task, status='running',
+                            self._update_task_status(config_session, session_task, sync_status='running',
                                                      last_sync_time=datetime.now(TZ_UTC_8))
                             self._insert_jdy_data_with_primary_key(config_session, session_task)
                             # 成功后, 更新状态并退出
-                            self._update_task_status(config_session, task,
-                                                     status='idle',
+                            self._update_task_status(config_session, session_task,
+                                                     sync_status='idle',
                                                      last_sync_time=datetime.now(TZ_UTC_8),
                                                      is_full_sync_first=False,
                                                      is_delete_first=False)
@@ -1358,7 +1365,7 @@ class Db2JdySyncService:
                             return  # 退出线程
                 else:
                     # 仅在非首次运行时更新状态
-                    self._update_task_status(config_session, session_task, status='running',
+                    self._update_task_status(config_session, session_task, sync_status='running',
                                              last_sync_time=datetime.now(TZ_UTC_8))
 
                 # 3f. 提取剩余的标量值
@@ -1389,13 +1396,13 @@ class Db2JdySyncService:
                             else:
                                 log_sync_error(task_config=session_task,
                                                extra_info=f"[{thread_name}] Failed to get master status (no result). Stopping listener.")
-                                self._update_task_status(config_session, session_task, status='error',
+                                self._update_task_status(config_session, session_task, sync_status='error',
                                                          last_sync_time=datetime.now(TZ_UTC_8))
                                 return  # 退出
                     except Exception as e:
                         log_sync_error(task_config=session_task, error=e,
                                        extra_info=f"[{thread_name}] Failed to get master status (exception). Stopping listener.")
-                        self._update_task_status(config_session, session_task, status='error',
+                        self._update_task_status(config_session, session_task, sync_status='error',
                                                  last_sync_time=datetime.now(TZ_UTC_8))
                         return  # 退出
 
@@ -1664,7 +1671,8 @@ class Db2JdySyncService:
                                extra_info=f"[{thread_name}] CRITICAL error. Listener stopped.")
                 # 确保状态被更新
                 if error_task:
-                    self._update_task_status(error_session, error_task, status='error')
+                    self._update_task_status(error_session, error_task, sync_status='error',
+                                             last_sync_time=datetime.now(TZ_UTC_8))
 
         finally:
             if stream:
@@ -1673,4 +1681,5 @@ class Db2JdySyncService:
             with ConfigSession() as session:
                 task_status = session.query(SyncTask).get(task_id_safe)
                 if task_status and task_status.sync_status == 'running':
-                    self._update_task_status(session, task_status, status='idle')  # 正常关闭
+                    self._update_task_status(session, task_status, sync_status='idle',
+                                             last_sync_time=datetime.now(TZ_UTC_8))  # 正常关闭
