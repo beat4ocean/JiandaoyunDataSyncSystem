@@ -37,10 +37,14 @@ def row_to_dict(row, include_relations=None):
     if not row:
         return None
 
+    # 确保 'password' (用户密码), 'db_password' (数据库密码), 'api_key' (简道云key), 和 'api_secret' (任务密钥) 不会被序列化
+    excluded_fields = {'password', 'db_password', 'api_key', 'api_secret'}
+
     # 1. 转换主表字段
     for column in row.__table__.columns:
-        # 不暴露密码哈希
-        if column.name == 'password':
+
+        # 不暴露密码哈希或任何敏感字段
+        if column.name in excluded_fields:
             continue
 
         value = getattr(row, column.name)
