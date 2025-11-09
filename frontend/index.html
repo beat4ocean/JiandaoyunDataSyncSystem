@@ -754,8 +754,17 @@
             <el-dialog v-model="resetPasswordDialogVisible" title="重置密码" width="400px" class="form-dialog">
               <el-form ref="resetFormRef" :model="resetPasswordData" :rules="resetPasswordRules" label-position="top">
                 <p>正在为用户 <strong>{{ currentItem.username }}</strong> 重置密码。</p>
+                <el-form-item label="旧密码" prop="old_password">
+                  <el-input type="password" v-model="resetPasswordData.old_password" placeholder="请输入旧密码"
+                            show-password></el-input>
+                </el-form-item>
                 <el-form-item label="新密码" prop="new_password">
                   <el-input type="password" v-model="resetPasswordData.new_password" placeholder="请输入新密码"
+                            show-password></el-input>
+                </el-form-item>
+                <el-form-item label="确认新密码" prop="confirm_new_password">
+                  <el-input type="password" v-model="resetPasswordData.confirm_new_password"
+                            placeholder="请再次输入新密码"
                             show-password></el-input>
                 </el-form-item>
               </el-form>
@@ -772,7 +781,13 @@
             const crud = useCrud('/users', '用户', defaultItem, 'id');
             const departments = ref([]);
             const resetPasswordDialogVisible = ref(false);
-            const resetPasswordData = reactive({new_password: ''});
+
+            // --- 初始化 resetPasswordData ---
+            const resetPasswordData = reactive({
+                old_password: '',
+                new_password: '',
+                confirm_new_password: ''
+            });
             const resetFormRef = ref(null);
 
             const formRules = computed(() => ({
@@ -780,9 +795,38 @@
                 password: [{required: !crud.isEdit.value, message: '请输入密码', trigger: 'blur'}],
                 department_id: [{required: true, message: '请选择部门', trigger: 'change'}],
             }));
-            const resetPasswordRules = {
-                new_password: [{required: true, message: '请输入新密码', trigger: 'blur'}],
+
+            // 自定义验证器：检查两次密码是否一致
+            const validateConfirmPassword = (rule, value, callback) => {
+                if (value === '') {
+                    callback(new Error('请再次输入新密码'));
+                } else if (value !== resetPasswordData.new_password) {
+                    callback(new Error('两次输入的新密码不一致'));
+                } else {
+                    callback();
+                }
             };
+
+            const resetPasswordRules = computed(() => ({
+                old_password: [{required: true, message: '请输入旧密码', trigger: 'blur'}],
+                new_password: [
+                    {required: true, message: '请输入新密码', trigger: 'blur'},
+                    // 当新密码输入框变化时，触发确认密码框的验证
+                    {
+                        validator: (rule, value, callback) => {
+                            if (resetPasswordData.confirm_new_password) {
+                                resetFormRef.value.validateField('confirm_new_password');
+                            }
+                            callback();
+                        }, trigger: 'blur'
+                    }
+                ],
+                confirm_new_password: [
+                    {required: true, message: '请再次输入新密码', trigger: 'blur'},
+                    {validator: validateConfirmPassword, trigger: 'blur'}
+                ],
+            }));
+            // --- 结束修改点 2 ---
 
             const fetchDepartments = async () => {
                 // ADDED: Only fetch depts if superuser
@@ -795,13 +839,17 @@
                 }
             };
 
+            // --- 清空所有字段 ---
             const openResetPassword = (user) => {
                 Object.assign(crud.currentItem, user); // 锁定当前用户
+                resetPasswordData.old_password = '';
                 resetPasswordData.new_password = '';
+                resetPasswordData.confirm_new_password = ''; // 清空确认密码
                 resetPasswordDialogVisible.value = true;
                 Vue.nextTick(() => resetFormRef.value?.clearValidate());
             };
 
+            // --- 提交时仅发送需要的数据 ---
             const submitResetPassword = async () => {
                 if (!resetFormRef.value) return;
                 try {
@@ -812,8 +860,13 @@
 
                 crud.loading.value = true;
                 try {
-                    // (假设 /api/users/<id>/reset-password 路由存在)
-                    await apiClient.patch(`/users/${crud.currentItem.id}/reset-password`, resetPasswordData);
+                    // 仅发送后端需要的 old_password 和 new_password
+                    const dataToSend = {
+                        old_password: resetPasswordData.old_password,
+                        new_password: resetPasswordData.new_password
+                    };
+
+                    await apiClient.patch(`/users/${crud.currentItem.id}/reset-password`, dataToSend);
                     ElMessage.success(`用户 ${crud.currentItem.username} 的密码重置成功！`);
                     resetPasswordDialogVisible.value = false;
                 } catch (error) {

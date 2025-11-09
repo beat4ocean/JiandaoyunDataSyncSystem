@@ -8,6 +8,7 @@ from urllib.parse import quote
 
 from flask import Blueprint, jsonify, request, g
 from flask_jwt_extended import jwt_required, current_user
+from passlib.hash import pbkdf2_sha256 as sha256
 from sqlalchemy import select, desc
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
@@ -1250,10 +1251,14 @@ def reset_user_password(user_id):
         return jsonify({"error": "权限不足：只能重置自己的密码。"}), 403
 
     data = request.get_json()
+    old_password = data.get('old_password')
     new_password = data.get('new_password')
 
+    if not old_password:
+        return jsonify({"error": "旧密码 为必填项"}), 400
+
     if not new_password:
-        return jsonify({"error": "new_password 为必填项"}), 400
+        return jsonify({"error": "新密码 为必填项"}), 400
 
     session = g.config_session
     try:
@@ -1264,6 +1269,10 @@ def reset_user_password(user_id):
         # 额外的权限检查
         if not current_user.is_superuser and user_to_update.id != current_user.id:
             return jsonify({"error": "权限不足。"}), 403
+
+        # 检查旧密码
+        if not user_to_update.check_password(old_password):
+            return jsonify({"error": "旧密码错误。"}), 400
 
         user_to_update.set_password(new_password)
         session.commit()
