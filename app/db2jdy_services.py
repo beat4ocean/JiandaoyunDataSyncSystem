@@ -340,18 +340,17 @@ class Db2JdySyncService:
     def _is_value_different(self, s_val, t_val):
         """
         比较两个值，对JSON字符串、时间和数字类型进行特殊处理。
-        - 核心逻辑：将源（MySQL，东八区）和目标（简道云，UTC）的时间都转换为
-          有时区的 datetime 对象进行比较，确保跨时区比较的准确性。
+        - 核心逻辑：将源（MySQL，东八区）和目标（简道云，UTC）的时间都转换为有时区的 datetime 对象进行比较，确保跨时区比较的准确性。
         - 优先尝试将值作为 Decimal 数字进行比较，以解决 '37.400' vs '37.4' 的问题。
         - 如果值可以被解析为JSON对象/数组，它们将被结构化地比较。
         - 否则，将执行字符串比较。
         如果它们不同，则返回True，否则返回False。
         """
         # --- 优雅地处理 None 值 ---
-        if s_val and (s_val.strip().lower() == 'none' or s_val.strip() == ""):
+        if s_val and (str(s_val).strip().lower() == 'none' or str(s_val).strip() == ""):
             s_val = None
 
-        if t_val and (t_val.strip().lower() == 'none' or t_val.strip() == ""):
+        if t_val and (str(t_val).strip().lower() == 'none' or str(t_val).strip() == ""):
             t_val = None
 
         # 场景1: 两者都为 None
@@ -364,37 +363,61 @@ class Db2JdySyncService:
         if s_val is not None and t_val is None:
             return True
 
-        # 场景3：值都存在
-        # --- 时间类型处理 ---
-        # 场景: 源(s_val)是来自MySQL的datetime/date对象(代表东八区时间),
-        #      目标(t_val)是来自简道云的UTC时间字符串(例如 '2025-01-03T14:26:59.000Z')
+        # --- (处理 朴素类型时间) 检查是否两者都是 *朴素* 时间字符串 ---
+        if isinstance(s_val, str) and isinstance(t_val, str):
+            # 这个正则表达式 *只* 匹配没有时区'Z'或'+'的朴素字符串
+            # 它匹配 "YYYY-MM-DD HH:MM:SS" 或 "YYYY-MM-DDTHH:MM:SS" (可选毫秒)
+            # 它 *不* 匹配 "YYYY-MM-DDTHH:MM:SSZ"
+            naive_pattern = r'^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})(?:\.\d+)?$'
+
+            s_match = re.match(naive_pattern, s_val.strip())
+            t_match = re.match(naive_pattern, t_val.strip())
+
+            # 仅当 *两者都* 是朴素字符串时，才进行字面比较
+            if s_match and t_match:
+                # 规范化 T 和 空格，并比较到秒
+                s_norm = f"{s_match.group(1)} {s_match.group(2)}"
+                t_norm = f"{t_match.group(1)} {t_match.group(2)}"
+                return s_norm != t_norm
+
+            # 如果 s_match 或 t_match 为 False (例如，一个是朴素字符串, 另一个是带'Z'的ISO字符串), 则跳过, 回退到下面的语义比较。
+
+        # --- 场景 3.1: 语义时间比较 (处理 混合类型时间) ---
+        # 检查是否 *看起来像* 时间（无论是对象还是字符串, 无论是朴素还是带时区）
         is_source_datetime = isinstance(s_val, (date, datetime))
-        is_target_datetime_str = isinstance(t_val, str) and 'T' in t_val and t_val.endswith('Z')
+        if not is_source_datetime and isinstance(s_val, str):
+            # 匹配任何看起来像时间戳的字符串
+            pattern = r'^\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:?\d{2})?$'
+            if re.match(pattern, s_val.strip()):
+                is_source_datetime = True
 
-        if is_source_datetime and is_target_datetime_str:
+        is_target_datetime = isinstance(t_val, (date, datetime))
+        if not is_target_datetime and isinstance(t_val, str):
+            pattern = r'^\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:?\d{2})?$'
+            if re.match(pattern, t_val.strip()):
+                is_target_datetime = True
+
+        if is_source_datetime and is_target_datetime:
             try:
-                # 1. 将源 s_val (naive datetime) 本地化为东八区 (UTC+8)
-                source_aware = None
-                if isinstance(s_val, date) and not isinstance(s_val, datetime):
-                    # 如果是纯 date 对象, 视为东八区当天的开始
-                    source_aware = datetime.combine(s_val, time_obj.min).replace(tzinfo=TZ_UTC_8)
-                else:
-                    # 如果是 datetime 对象, 直接附加东八区时区
-                    source_aware = s_val.replace(tzinfo=TZ_UTC_8)
+                # json_serializer 会将两者都转换为 UTC 字符串 (例如 "2025-01-10T02:00:00Z")
+                source_aware = json_serializer(s_val)
+                target_aware = json_serializer(t_val)
 
-                # 2. 将目标 t_val (UTC string) 解析为 timezone-aware datetime 对象
-                # fromisoformat 可以正确处理以 'Z' 结尾的字符串
-                target_aware = datetime.fromisoformat(t_val.replace('Z', '+00:00'))
+                # 使用 re.sub 移除毫秒
+                # "2025-01-10T02:00:00.123Z" -> "2025-01-10T02:00:00Z"
+                # "2025-01-10T02:00:00Z"     -> "2025-01-10T02:00:00Z"
+                source_trunc = re.sub(r'\.\d+(Z)$', r'\1', source_aware)
+                target_trunc = re.sub(r'\.\d+(Z)$', r'\1', target_aware)
 
-                # 3. Python可以直接比较两个 "aware" datetime 对象。为确保稳健性，比较时忽略毫秒。
-                return source_aware.replace(microsecond=0) != target_aware.replace(microsecond=0)
+                return source_trunc != target_trunc
 
-            except (ValueError, TypeError) as e:
-                print(f"时间值比较时解析失败 (s_val: {s_val}, t_val: {t_val}), 将回退。错误: {e}")
-                # 如果解析或转换失败, 则退回到下面的常规比较
+            except Exception as e:
+                # 如果 json_serializer 转换失败 (例如格式错误), 则回退到下面的常规字符串比较
+                logger.warning(
+                    f"Semantic time comparison failed (Task ID: {self.task_id if hasattr(self, 'task_id') else 'N/A'}), falling back to string diff: {e}")
                 pass
 
-        # --- 数字类型处理 ---
+        # --- 场景 3.2: 数字类型处理 ---
         # 检查任一值是否为数字类型
         is_source_numeric = isinstance(s_val, (Decimal, int, float))
         # t_val 来自 JSON，所以不可能是 Decimal
@@ -416,7 +439,7 @@ class Db2JdySyncService:
                 # 则捕获异常并 pass，交由后续的字符串比较逻辑处理。
                 pass
 
-        # --- JSON类型处理 ---
+        # --- 场景 3.3: JSON类型处理 ---
         s_parsed, t_parsed = s_val, t_val
 
         # 尝试解析源值（如果它是看起来像JSON的字符串）
@@ -440,7 +463,7 @@ class Db2JdySyncService:
             t_normalized = json.dumps(t_parsed, sort_keys=True, ensure_ascii=False)
             return s_normalized != t_normalized
 
-        # --- 其他类型，回退到字符串比较 ---
+        # --- 场景 3.4: 其他类型，回退到字符串比较 ---
         # 优雅地处理None与空字符串
         s_str = str(s_val).strip() if s_val is not None else ""
         t_str = str(t_val).strip() if t_val is not None else ""
