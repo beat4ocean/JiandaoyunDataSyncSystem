@@ -364,7 +364,7 @@ class Db2JdySyncService:
             return True
 
         # --- (处理 朴素类型时间) 检查是否两者都是 *朴素* 时间字符串 ---
-        if isinstance(s_val, str) and isinstance(t_val, str):
+        if len(s_val) >= 19 and isinstance(s_val, str) and len(t_val) >= 19 and isinstance(t_val, str):
             # 这个正则表达式 *只* 匹配没有时区'Z'或'+'的朴素字符串
             # 它匹配 "YYYY-MM-DD HH:MM:SS" 或 "YYYY-MM-DDTHH:MM:SS" (可选毫秒)
             # 它 *不* 匹配 "YYYY-MM-DDTHH:MM:SSZ"
@@ -385,14 +385,14 @@ class Db2JdySyncService:
         # --- 场景 3.1: 语义时间比较 (处理 混合类型时间) ---
         # 检查是否 *看起来像* 时间（无论是对象还是字符串, 无论是朴素还是带时区）
         is_source_datetime = isinstance(s_val, (date, datetime))
-        if not is_source_datetime and isinstance(s_val, str):
+        if not is_source_datetime and len(s_val) >= 19 and isinstance(s_val, str):
             # 匹配任何看起来像时间戳的字符串
             pattern = r'^\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:?\d{2})?$'
             if re.match(pattern, s_val.strip()):
                 is_source_datetime = True
 
         is_target_datetime = isinstance(t_val, (date, datetime))
-        if not is_target_datetime and isinstance(t_val, str):
+        if not is_target_datetime and len(t_val) >= 19 and isinstance(t_val, str):
             pattern = r'^\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:?\d{2})?$'
             if re.match(pattern, t_val.strip()):
                 is_target_datetime = True
@@ -548,7 +548,7 @@ class Db2JdySyncService:
             alias_map: dict
     ) -> dict | None:
         """
-        通过主键 (PK) 在简道云中查找对应的 _id
+        通过主键 (PK) 在简道云中查找对应的 *data*
         """
 
         filter_payload = {}
@@ -586,7 +586,7 @@ class Db2JdySyncService:
                 app_id=task.app_id,
                 entry_id=task.entry_id,
                 limit=100,  # 查找所有重复项 (最多100个)
-                fields=["_id"],
+                # 移除 fields=["_id"], 以获取所有字段
                 filter=filter_payload
             )
 
@@ -626,18 +626,18 @@ class Db2JdySyncService:
                         extra_info=f"task_id:[{task.id}] Failed to delete duplicate entries for PK {log_pk_str}."
                     )
 
-                return id_to_keep  # 返回保留的 ID
+                return jdy_data[0]  # 返回保留的 *data*
 
             # 5. 正常情况
             # return jdy_data[0].get('_id')  # 只有一个, 正常返回
-            return jdy_data[0]  # 只有一个, 正常返回
+            return jdy_data[0]  # 只有一个, 正常返回 *data*
 
         except Exception as e:  # 捕获包括 ValueError
             log_sync_error(
                 task_config=task,
                 payload=filter_payload,
                 error=e,
-                extra_info=f"task_id:[{task.id}] V5 API error finding Jdy _id by PK. Details: {log_pk_str}"
+                extra_info=f"task_id:[{task.id}] V5 API error finding Jdy data by PK. Details: {log_pk_str}"
             )
             return None
 
@@ -980,22 +980,41 @@ class Db2JdySyncService:
                                        extra_info=f"task_id:[{task.id}] Row missing required fields. Skipping.")
                         continue
 
-                    # 传入 row_dict 以进行复合主键去重
-                    jdy_id = row_dict.get('_id') or self._find_jdy_data_by_pk(
-                        task, row_dict,
-                        data_api_query, data_api_delete, alias_map
-                    ).get('_id')
-                    trans_id = str(uuid.uuid4())
+                    # --- 优化API调用 ---
+                    jdy_data_found = None
+                    jdy_id_from_row = row_dict.get('_id')
 
-                    if jdy_id:
-                        # 1. 获取简道云的当前数据用于比较
+                    if jdy_id_from_row:
+                        # 我们有 ID, 但仍然需要数据进行比较
                         try:
-                            jdy_data_response = data_api_query.get_single_data(task.app_id, task.entry_id, jdy_id)
-                            t_data = jdy_data_response.get('data', {})  # 目标 (Target) 数据
+                            jdy_data_response = data_api_query.get_single_data(task.app_id, task.entry_id,
+                                                                               jdy_id_from_row)
+                            jdy_data_found = jdy_data_response.get('data', {})
+                            if not jdy_data_found:
+                                logger.warning(
+                                    f"task_id:[{task.id}] _id {jdy_id_from_row} from row was not found in JDY. Will attempt PK search.")
+                                # (如果找不到, jdy_data_found 保持为 None 或 {}, 下面会触发 PK 搜索)
+                                # (为了安全, 强制触发PK搜索)
+                                jdy_data_found = None
                         except Exception as fetch_err:
                             log_sync_error(task_config=task, error=fetch_err,
-                                           extra_info=f"task_id:[{task.id}] Failed to fetch JDY data {jdy_id} for comparison (Full Sync). Skipping update.")
-                            continue  # 跳过此行
+                                           extra_info=f"task_id:[{task.id}] Failed to fetch JDY data {jdy_id_from_row} (from row _id) for comparison. Will attempt PK search.")
+                            jdy_data_found = None  # 查找失败, 触发PK搜索
+
+                    if not jdy_data_found:
+                        # 我们没有 ID, 或者 row _id 无效, 通过 PK 查找数据
+                        jdy_data_found = self._find_jdy_data_by_pk(
+                            task, row_dict,
+                            data_api_query, data_api_delete, alias_map
+                        )
+
+                    trans_id = str(uuid.uuid4())
+
+                    if jdy_data_found:
+                        # --- 数据比较逻辑 ---
+
+                        jdy_id = jdy_data_found.get('_id')
+                        t_data = jdy_data_found
 
                         # 2. 比较
                         payload_has_changes = False
@@ -1026,7 +1045,7 @@ class Db2JdySyncService:
                         if not payload_has_changes:
                             # logger.debug(f"task_id:[{task.id}] Skipping update for {jdy_id} (Full Sync), no changes found.")
                             count_skipped += 1
-                            continue  # (新) 跳到下一行, 不执行更新
+                            continue  # 跳到下一行, 不执行更新
 
                         # 更新
                         logger.debug(
@@ -1067,7 +1086,10 @@ class Db2JdySyncService:
 
                 # 检查是否因为没有数据而退出循环
                 if not has_processed_rows:
-                    logger.info(f"task_id:[{task.id}] No new data where {task.source_filter_sql}.")
+                    if task.source_filter_sql:
+                        logger.info(f"task_id:[{task.id}] No data found WHERE {task.source_filter_sql}.")
+                    else:
+                        logger.info(f"task_id:[{task.id}] No data found.")
                     # self._update_task_status(config_session, task, sync_status='idle', last_sync_time=current_sync_time)
                     return
 
@@ -1149,7 +1171,7 @@ class Db2JdySyncService:
         """
         执行增量同步 (Upsert)
         (接受会话, 事务 ID, 去重, 复合主键，支持首次全量同步 和 source_filter_sql)
-        (增加数据比较逻辑)
+        (增加数据比较逻辑, 优化API调用)
         """
         # --- 检查任务类型 ---
         if task.sync_type != 'db2jdy':
@@ -1410,24 +1432,37 @@ class Db2JdySyncService:
                                        extra_info=f"task_id:[{task.id}] Row missing required fields. Skipping.")
                         continue
 
-                    # 传入 row_dict 以进行复合主键去重
-                    jdy_id = row_dict.get('_id') or self._find_jdy_data_by_pk(
-                        task, row_dict,
-                        data_api_query, data_api_delete, alias_map
-                    ).get('_id')
+                    # --- 优化API调用 ---
+                    jdy_data_found = None
+                    jdy_id_from_row = row_dict.get('_id')
+
+                    if jdy_id_from_row:
+                        try:
+                            jdy_data_response = data_api_query.get_single_data(task.app_id, task.entry_id,
+                                                                               jdy_id_from_row)
+                            jdy_data_found = jdy_data_response.get('data', {})
+                            if not jdy_data_found:
+                                logger.warning(
+                                    f"task_id:[{task.id}] _id {jdy_id_from_row} from row was not found in JDY. Will attempt PK search.")
+                                jdy_data_found = None
+                        except Exception as fetch_err:
+                            log_sync_error(task_config=task, error=fetch_err,
+                                           extra_info=f"task_id:[{task.id}] Failed to fetch JDY data {jdy_id_from_row} (from row _id) for comparison. Will attempt PK search.")
+                            jdy_data_found = None
+
+                    if not jdy_data_found:
+                        jdy_data_found = self._find_jdy_data_by_pk(
+                            task, row_dict,
+                            data_api_query, data_api_delete, alias_map
+                        )
+
                     trans_id = str(uuid.uuid4())
 
-                    if jdy_id:
-                        # 1. 获取简道云的当前数据用于比较
-                        try:
-                            jdy_data_response = data_api_query.get_single_data(task.app_id, task.entry_id, jdy_id)
-                            t_data = jdy_data_response.get('data', {})  # 目标 (Target) 数据
-                        except Exception as fetch_err:
-                            logger.error(
-                                f"task_id:[{task.id}] Failed to fetch JDY data {jdy_id} for comparison (Incremental). Skipping update.")
-                            log_sync_error(task_config=task, error=fetch_err,
-                                           extra_info=f"task_id:[{task.id}] Failed to fetch JDY data {jdy_id} for comparison (Incremental). Skipping update.")
-                            continue  # 跳过此行
+                    if jdy_data_found:
+                        # --- 数据比较逻辑 ---
+
+                        jdy_id = jdy_data_found.get('_id')
+                        t_data = jdy_data_found  # 这就是优化点!
 
                         # 2. 比较
                         payload_has_changes = False
@@ -1455,7 +1490,7 @@ class Db2JdySyncService:
                             logger.debug(
                                 f"task_id:[{task.id}] Skipping update for {jdy_id} (Incremental), no changes found.")
                             count_skipped += 1
-                            continue  # (新) 跳到下一行, 不执行更新
+                            continue  # 跳到下一行, 不执行更新
 
                         # 更新
                         logger.debug(
@@ -1515,7 +1550,7 @@ class Db2JdySyncService:
         """
         运行一个长连接的 Binlog 监听器
         (独立创建会话, 事务 ID, 去重, 复合主键，支持首次全量同步)
-        (增加数据比较逻辑)
+        (增加数据比较逻辑, 优化API调用)
         """
 
         # 1. 尽快安全地获取 task_id
@@ -1775,11 +1810,29 @@ class Db2JdySyncService:
                             trans_id = str(uuid.uuid4())  # 每个 row 操作都是一个事务
 
                             if isinstance(binlog_event, WriteRowsEvent):
-                                # 1. 查找 ID, 使用 row['values']
-                                jdy_id = row['values'].get('_id') or self._find_jdy_data_by_pk(
-                                    task_in_loop, row['values'],
-                                    data_api_query, data_api_delete, alias_map
-                                ).get('_id')
+                                # --- 优化API调用 (Write Event) ---
+                                jdy_data_found = None
+                                jdy_id_from_row = row['values'].get('_id')
+
+                                if jdy_id_from_row:
+                                    try:
+                                        jdy_data_response = data_api_query.get_single_data(app_id, entry_id,
+                                                                                           jdy_id_from_row)
+                                        jdy_data_found = jdy_data_response.get('data', {})
+                                        if not jdy_data_found:
+                                            logger.warning(
+                                                f"[{thread_name}] _id {jdy_id_from_row} from row (Write) was not found in JDY. Will attempt PK search.")
+                                            jdy_data_found = None
+                                    except Exception as fetch_err:
+                                        log_sync_error(task_config=task_in_loop, error=fetch_err,
+                                                       extra_info=f"[{thread_name}] Failed to fetch JDY data {jdy_id_from_row} (from row _id, Write) for comparison. Will attempt PK search.")
+                                        jdy_data_found = None
+
+                                if not jdy_data_found:
+                                    jdy_data_found = self._find_jdy_data_by_pk(
+                                        task_in_loop, row['values'],
+                                        data_api_query, data_api_delete, alias_map
+                                    )
 
                                 # 2. 准备 payload, 使用 row['values']
                                 data_payload = self._transform_row_to_jdy(row['values'], payload_map)
@@ -1790,11 +1843,12 @@ class Db2JdySyncService:
                                                    extra_info=f"task_id:[{task_id_safe}] Row missing required fields. Skipping.")
                                     continue
 
-                                if jdy_id:
-                                    # 比较逻辑 (WriteEvent：DB 认为它不存在, 但 JDY 有)
+                                if jdy_data_found:
+                                    jdy_id = jdy_data_found.get('_id')
+                                    t_data = jdy_data_found  # 优化点
+
+                                    # 比较逻辑
                                     try:
-                                        jdy_data_response = data_api_query.get_single_data(app_id, entry_id, jdy_id)
-                                        t_data = jdy_data_response.get('data', {})
                                         payload_has_changes = False
                                         for mysql_col, jdy_alias in alias_map.items():
                                             # 简道云有该字段，但数据库没有该字段
@@ -1816,9 +1870,9 @@ class Db2JdySyncService:
                                             logger.debug(
                                                 f"[{thread_name}] Skipping update for {jdy_id} (WriteEvent), no changes found.")
                                             continue
-                                    except Exception as fetch_err:
-                                        log_sync_error(task_config=task_in_loop, error=fetch_err,
-                                                       extra_info=f"[{thread_name}] Failed to fetch JDY data {jdy_id} for comparison (WriteEvent). Skipping update.")
+                                    except Exception as e:
+                                        log_sync_error(task_config=task_in_loop, error=e,
+                                                       extra_info=f"[{thread_name}] Failed during comparison (WriteEvent). Skipping update.")
                                         continue
 
                                     # 结束
@@ -1855,12 +1909,30 @@ class Db2JdySyncService:
                                         logger.debug(
                                             f"task_id:[{task_id_safe}] Created data with _id: {new_jdy_id}")
 
-
                             elif isinstance(binlog_event, UpdateRowsEvent):
-                                jdy_id = row['after_values'].get('_id') or self._find_jdy_data_by_pk(
-                                    task_in_loop, row['after_values'],  # 使用 task_in_loop
-                                    data_api_query, data_api_delete, alias_map
-                                ).get('_id')
+                                # --- 优化API调用 (Update Event) ---
+                                jdy_data_found = None
+                                jdy_id_from_row = row['after_values'].get('_id')
+
+                                if jdy_id_from_row:
+                                    try:
+                                        jdy_data_response = data_api_query.get_single_data(app_id, entry_id,
+                                                                                           jdy_id_from_row)
+                                        jdy_data_found = jdy_data_response.get('data', {})
+                                        if not jdy_data_found:
+                                            logger.warning(
+                                                f"[{thread_name}] _id {jdy_id_from_row} from row (Update) was not found in JDY. Will attempt PK search.")
+                                            jdy_data_found = None
+                                    except Exception as fetch_err:
+                                        log_sync_error(task_config=task_in_loop, error=fetch_err,
+                                                       extra_info=f"[{thread_name}] Failed to fetch JDY data {jdy_id_from_row} (from row _id, Update) for comparison. Will attempt PK search.")
+                                        jdy_data_found = None
+
+                                if not jdy_data_found:
+                                    jdy_data_found = self._find_jdy_data_by_pk(
+                                        task_in_loop, row['after_values'],
+                                        data_api_query, data_api_delete, alias_map
+                                    )
 
                                 data_payload = self._transform_row_to_jdy(row['after_values'], payload_map)
                                 if not data_payload:
@@ -1869,15 +1941,10 @@ class Db2JdySyncService:
                                                    extra_info=f"task_id:[{task_id_safe}] Row missing required fields. Skipping.")
                                     continue
 
-                                if jdy_id:
+                                if jdy_data_found:
                                     # --- 数据比较逻辑 (Binlog Update) ---
-                                    try:
-                                        jdy_data_response = data_api_query.get_single_data(app_id, entry_id, jdy_id)
-                                        t_data = jdy_data_response.get('data', {})  # 目标 (Target) 数据
-                                    except Exception as fetch_err:
-                                        log_sync_error(task_config=task_in_loop, error=fetch_err,
-                                                       extra_info=f"[{thread_name}] Failed to fetch JDY data {jdy_id} for comparison (UpdateEvent). Skipping update.")
-                                        continue
+                                    jdy_id = jdy_data_found.get('_id')
+                                    t_data = jdy_data_found
 
                                     payload_has_changes = False
                                     for mysql_col, jdy_alias in alias_map.items():
@@ -1902,7 +1969,7 @@ class Db2JdySyncService:
                                     if not payload_has_changes:
                                         logger.debug(
                                             f"[{thread_name}] Skipping update for {jdy_id} (UpdateEvent), no changes found.")
-                                        continue  # (新) 跳到下一行, 不执行更新
+                                        continue  # 跳到下一行, 不执行更新
 
                                     logger.debug(
                                         f"task_id:[{task_id_safe}] UpdateEvent: ID {jdy_id} found. Updating...")
@@ -1937,10 +2004,16 @@ class Db2JdySyncService:
                                             f"task_id:[{task_id_safe}] Update event: Jdy ID not found, Created data with _id: {new_jdy_id}")
 
                             elif isinstance(binlog_event, DeleteRowsEvent):
-                                jdy_id = row['values'].get('_id') or self._find_jdy_data_by_pk(
-                                    task_in_loop, row['values'],  # 使用 task_in_loop
-                                    data_api_query, data_api_delete, alias_map
-                                ).get('_id')
+                                # --- 优化API调用 (Delete Event) ---
+                                jdy_id = row['values'].get('_id')
+                                if not jdy_id:
+                                    # ID not in row, find it by PK
+                                    jdy_data_found = self._find_jdy_data_by_pk(
+                                        task_in_loop, row['values'],
+                                        data_api_query, data_api_delete, alias_map
+                                    )
+                                    if jdy_data_found:
+                                        jdy_id = jdy_data_found.get('_id')
 
                                 if jdy_id:
                                     logger.debug(
