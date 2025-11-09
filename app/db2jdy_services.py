@@ -122,10 +122,10 @@ class FieldMappingService:
             # 判断用户是否没有设置字段别名
             if m.widget_alias and m.widget_name and m.widget_alias == m.widget_name:
                 # 如没有设置，则使用 m.label 作为 表字段名
-                key, value = m.label, m.widget_alias
+                key, value = m.label, (m.widget_alias, m.type)
             else:
                 # 如设置了，使用 m.widget_alias 作为 表字段名
-                key, value = m.widget_alias, m.widget_alias
+                key, value = m.widget_alias, (m.widget_alias, m.type)
 
             result[key] = value
 
@@ -340,8 +340,10 @@ class Db2JdySyncService:
     def _is_value_different(self, s_val, t_val):
         """
         比较两个值，对JSON字符串、时间和数字类型进行特殊处理。
-        - 核心逻辑：将源（MySQL，东八区）和目标（简道云，UTC）的时间都转换为有时区的 datetime 对象进行比较，确保跨时区比较的准确性。
-        - 优先尝试将值作为 Decimal 数字进行比较，以解决 '37.400' vs '37.4' 的问题。
+        核心逻辑：
+        - 优先：如果两个值都是“朴素”时间字符串 (yyyy-mm-dd hh:mm:ss)，则进行字面比较（截断毫秒）。
+        - 其次：如果两个值都像时间（str, datetime, date），则使用json_serializer (假设朴素时间为 UTC) 将它们都转换为 UTC 字符串 (带'Z')，然后比较（截断毫秒）。
+        - 优先尝试将值作为 Decimal 数字进行比较。
         - 如果值可以被解析为JSON对象/数组，它们将被结构化地比较。
         - 否则，将执行字符串比较。
         如果它们不同，则返回True，否则返回False。
@@ -363,53 +365,43 @@ class Db2JdySyncService:
         if s_val is not None and t_val is None:
             return True
 
-        # --- (处理 朴素类型时间) 检查是否两者都是 *朴素* 时间字符串 ---
-        if len(s_val) >= 19 and isinstance(s_val, str) and len(t_val) >= 19 and isinstance(t_val, str):
-            # 这个正则表达式 *只* 匹配没有时区'Z'或'+'的朴素字符串
-            # 它匹配 "YYYY-MM-DD HH:MM:SS" 或 "YYYY-MM-DDTHH:MM:SS" (可选毫秒)
-            # 它 *不* 匹配 "YYYY-MM-DDTHH:MM:SSZ"
-            naive_pattern = r'^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})(?:\.\d+)?$'
-
-            s_match = re.match(naive_pattern, s_val.strip())
-            t_match = re.match(naive_pattern, t_val.strip())
-
-            # 仅当 *两者都* 是朴素字符串时，才进行字面比较
-            if s_match and t_match:
-                # 规范化 T 和 空格，并比较到秒
-                s_norm = f"{s_match.group(1)} {s_match.group(2)}"
-                t_norm = f"{t_match.group(1)} {t_match.group(2)}"
-                return s_norm != t_norm
-
-            # 如果 s_match 或 t_match 为 False (例如，一个是朴素字符串, 另一个是带'Z'的ISO字符串), 则跳过, 回退到下面的语义比较。
-
-        # --- 场景 3.1: 语义时间比较 (处理 混合类型时间) ---
+        # --- 场景 3.1: 语义时间比较 ---
         # 检查是否 *看起来像* 时间（无论是对象还是字符串, 无论是朴素还是带时区）
         is_source_datetime = isinstance(s_val, (date, datetime))
-        if not is_source_datetime and len(s_val) >= 19 and isinstance(s_val, str):
-            # 匹配任何看起来像时间戳的字符串
-            pattern = r'^\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:?\d{2})?$'
+        if not is_source_datetime and isinstance(s_val, str):
+            # --- 匹配 YYYY-MM-DD 或 YYYY-MM-DD HH:MM... ---
+            # 匹配 "YYYY-MM-DD" 或 "YYYY-MM-DD HH:MM..." (时间部分可选)
+            pattern = r'^\d{4}-\d{2}-\d{2}([T\s]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:[Zz]|[+-]\d{2}:?\d{2})?)?$'
             if re.match(pattern, s_val.strip()):
                 is_source_datetime = True
 
         is_target_datetime = isinstance(t_val, (date, datetime))
-        if not is_target_datetime and len(t_val) >= 19 and isinstance(t_val, str):
-            pattern = r'^\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:?\d{2})?$'
+        if not is_target_datetime and isinstance(t_val, str):
+            # --- 匹配 YYYY-MM-DD 或 YYYY-MM-DD HH:MM... ---
+            pattern = r'^\d{4}-\d{2}-\d{2}([T\s]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:[Zz]|[+-]\d{2}:?\d{2})?)?$'
             if re.match(pattern, t_val.strip()):
                 is_target_datetime = True
 
         if is_source_datetime and is_target_datetime:
             try:
-                # json_serializer 会将两者都转换为 UTC 字符串 (例如 "2025-01-10T02:00:00Z")
+                # json_serializer 现在会处理 s_val (来自DB) 的时区本地化
+                # 无论 s_val 是 "2025-12-12" 还是 "2025-12-12 14:00" 还是 datetime 对象
                 source_aware = json_serializer(s_val)
                 target_aware = json_serializer(t_val)
 
                 # 使用 re.sub 移除毫秒
                 # "2025-01-10T02:00:00.123Z" -> "2025-01-10T02:00:00Z"
                 # "2025-01-10T02:00:00Z"     -> "2025-01-10T02:00:00Z"
-                # 同时处理 +00:00 的情况
-                source_trunc = re.sub(r'(\.\d+)(Z|(\+00:00))$', r'\2', source_aware)
-                target_trunc = re.sub(r'(\.\d+)(Z|(\+00:00))$', r'\2', target_aware)
+                # # 同时处理 +00:00 的情况
+                # source_trunc = re.sub(r'(\.\d+)(Z|(\+00:00))$', r'\2', source_aware)
+                # target_trunc = re.sub(r'(\.\d+)(Z|(\+00:00))$', r'\2', target_aware)
+                # 结果中没有+00:00了
+                source_trunc = re.sub(r'\.\d+(Z)$', r'\1', source_aware)
+                target_trunc = re.sub(r'\.\d+(Z)$', r'\1', target_aware)
 
+                # json_serializer 已经将 "2025-12-12" 和 "2025-12-12 00:00:00"
+                # 都标准化为 "2025-12-11T16:00:00Z"，
+                # 那么 source_trunc 和 target_trunc 就可以直接比较。
                 return source_trunc != target_trunc
 
             except Exception as e:
@@ -566,12 +558,21 @@ class Db2JdySyncService:
                 if field_name not in alias_map:
                     raise ValueError(f"task_id:[{task.id}] PK field '{field_name}' not in alias map.")
 
-                jdy_pk_field = alias_map[field_name]
+                jdy_pk_field, jdy_pk_type = alias_map[field_name]
                 pk_value = pk_values[i]
                 log_pk_values[field_name] = pk_value
 
+                # 字符串转换为int
+                if jdy_pk_type == 'number' and pk_value and isinstance(pk_value, str):
+                    try:
+                        pk_value = int(pk_value.strip())
+                    except Exception as e:
+                        logger.error(
+                            f"task_id:[{task.id}] PK field '{field_name}' cannot be converted to int: {pk_value}")
+
                 filter_conditions.append({
                     "field": jdy_pk_field,
+                    # "type": jdy_pk_type,
                     "method": "eq",
                     "value": [pk_value]  # 传入数组
                 })
@@ -1018,11 +1019,19 @@ class Db2JdySyncService:
 
                         # 2. 比较
                         payload_has_changes = False
-                        # alias_map 是 {'mysql_col_name': 'jdy_widget_alias'}
+                        # alias_map 是 {'mysql_col_name': ('jdy_widget_alias', 'type')}
                         # t_data 是 {'jdy_widget_alias': 'jdy_value'}
                         # row_dict 是 {'mysql_col_name': 'mysql_value'}
 
-                        for mysql_col, jdy_alias in alias_map.items():
+                        # 遍历 alias_map 的键 (mysql_col)
+                        for mysql_col in alias_map.keys():
+                            # 从 alias_map 获取元组
+                            alias_info = alias_map.get(mysql_col)
+                            if not alias_info:
+                                continue
+
+                            jdy_alias, jdy_type = alias_info
+
                             # 简道云有该字段，但数据没有该字段
                             if mysql_col not in row_dict:
                                 continue  # 源数据 (row_dict) 中没有此列 (例如视图或SQL过滤)
@@ -1462,11 +1471,20 @@ class Db2JdySyncService:
                         # --- 数据比较逻辑 ---
 
                         jdy_id = jdy_data_found.get('_id')
-                        t_data = jdy_data_found  # 这就是优化点!
+                        t_data = jdy_data_found
 
                         # 2. 比较
                         payload_has_changes = False
-                        for mysql_col, jdy_alias in alias_map.items():
+
+                        # 遍历 alias_map 的键 (mysql_col)
+                        for mysql_col in alias_map.keys():
+                            # 从 alias_map 获取元组
+                            alias_info = alias_map.get(mysql_col)
+                            if not alias_info:
+                                continue
+
+                            jdy_alias, jdy_type = alias_info
+
                             # 简道云有该字段，但数据没有该字段
                             if mysql_col not in row_dict:
                                 continue  # 源数据 (row_dict) 中没有此列 (例如视图或SQL过滤)
@@ -1850,7 +1868,16 @@ class Db2JdySyncService:
                                     # 比较逻辑
                                     try:
                                         payload_has_changes = False
-                                        for mysql_col, jdy_alias in alias_map.items():
+
+                                        # 遍历 alias_map 的键 (mysql_col)
+                                        for mysql_col in alias_map.keys():
+                                            # 从 alias_map 获取元组
+                                            alias_info = alias_map.get(mysql_col)
+                                            if not alias_info:
+                                                continue
+
+                                            jdy_alias, jdy_type = alias_info
+
                                             # 简道云有该字段，但数据库没有该字段
                                             if mysql_col not in row['values']:
                                                 continue
@@ -1947,7 +1974,16 @@ class Db2JdySyncService:
                                     t_data = jdy_data_found
 
                                     payload_has_changes = False
-                                    for mysql_col, jdy_alias in alias_map.items():
+
+                                    # 遍历 alias_map 的键 (mysql_col)
+                                    for mysql_col in alias_map.keys():
+                                        # 从 alias_map 获取元组
+                                        alias_info = alias_map.get(mysql_col)
+                                        if not alias_info:
+                                            continue
+
+                                        jdy_alias, jdy_type = alias_info
+
                                         # 简道云有该字段，但数据库没有该字段
                                         if mysql_col not in row['after_values']:
                                             continue
