@@ -29,73 +29,133 @@ TZ_UTC_8 = timezone(timedelta(hours=8))
 def json_serializer(obj):
     """
     自定义JSON序列化器，处理日期、时间和Decimal对象。
-    核心逻辑：将所有 date 和 datetime 对象（或字符串）从东八区（UTC+8）转换为标准的UTC时间，
-    并格式化为带 'Z' 的ISO 8601字符串，以满足简道云API的要求。
-    同时，将 Decimal 对象转换为 float 类型。
+    核心逻辑：
+    1. 所有来自数据库的 Naive (无时区) date/datetime 对象或字符串均代表 "UTC+8" (CST/北京时间)。
+    2. 将它们转换为感知时区的 "UTC" (带 'Z') 字符串，以便简道云正确解析。
+    3. 将 Decimal 对象转换为 float 类型。
+
+    # 示例 1 (string 对象):
+    #     - MySQL (s_val) = "2025-01-01 10:00:00"
+    #     - 逻辑:
+    #         1. 解析为 naive datetime (10:00)
+    #         2. 附加 TZ_UTC_8 -> 10:00+08:00
+    #         3. 转换为 UTC -> 02:00 UTC
+    #         4. 格式化为 "2025-01-01T02:00:00Z"
+    #         5. 简道云 UI (在CST) 将显示 "10:00:00"
+    #     - 返回字符串: "2025-01-01T02:00:00Z"
+
+    # 示例 2 (datetime 对象):
+    #     - MySQL中的datetime值: datetime.datetime(2025, 1, 10, 14, 30, 0)
+    #     - 逻辑:
+    #         1. 这是一个 naive datetime 对象
+    #         2. 附加 TZ_UTC_8 -> 14:30:00+08:00
+    #         3. 转换为 UTC -> 06:30:00 UTC
+    #     - 返回字符串: "2025-01-10T06:30:00Z"
     """
-    # MySQL 时间 "2025-07-08 00:21:30" (字符串) 被传入。
-    # 步骤 1 将其解析为 datetime_obj = datetime(..., 0, 21, 30)。
-    # 步骤 2 将其视为 UTC+8，并转换为 UTC 时间 2025-07-07T16:21:30Z。
-    # db2jdy_services.py 收到这个 UTC 字符串。
-    # 简道云 API 收到 2025-07-07T16:21:30Z。
-    # 简道云 UI (UTC+8) 显示：16:21:30Z + 8小时 = 2025-07-08 00:21:30。
 
     datetime_obj = None
 
-    # --- 1. 检查是否为字符串，并尝试解析 (UTC+8) ---
+    # --- 1. 检查是否为字符串，并尝试解析 ---
     if isinstance(obj, str):
         obj_str = obj.strip()
 
-        # 综合正则表达式，匹配多种日期时间格式
-        # "2024-01-15 10:30:45"      # 空格分隔
-        # "2024-01-15T10:30:45"      # T分隔
-        # "2024-01-15 10:30:45.123"
-        # "2024-01-15T10:30:45.123456"
-        # "2024-01-15 10:30:45.1"
-        # "2024-01-15 10:30:45Z"        # UTC时间
-        # "2024-01-15T10:30:45z"        # UTC时间（小写z）
-        # "2024-01-15 10:30:45+08:00"   # 东八区
-        # "2024-01-15T10:30:45-05:00"   # 西五区
-        # "2024-01-15 10:30:45+0800"    # 无冒号的时区
-        # "2024-01-15T10:30:45.123456Z"
-        # "2024-01-15 10:30:45.123+08:00"
-        # "2024-01-15T10:30:45.1-05:00"
-        pattern = r'^\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:?\d{2})?$'  # 标准格式
+        # --- 修复 1：尝试按 DATETIME 格式解析 (YYYY-MM-DD HH:MM...) ---
+        datetime_pattern = r'^\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:[Zz]|[+-]\d{2}:?\d{2})?$'
 
-        # r'^\d{4}-\d{2}-\d{2}$',  # 仅日期
-        # r'^\d{2}:\d{2}:\d{2}$',  # 仅时间
-        if len(obj_str) >= 19 and re.match(pattern, obj_str):
+        # --- 修复 2：尝试按 DATE 格式解析 (YYYY-MM-DD) ---
+        date_pattern = r'^\d{4}-\d{2}-\d{2}$'
+
+        if re.match(datetime_pattern, obj_str):
             try:
-                # 标准化格式
-                iso_str = obj_str.replace(' ', 'T').replace('Z', '+00:00')
+                # (标准 DATETIME 字符串)
+                iso_str = obj_str.replace(' ', 'T').replace('z', 'Z')
+
+                # (如果缺少秒, fromisoformat 会失败, 我们需要手动添加:00)
+                if len(iso_str) == 16:  # YYYY-MM-DDTHH:MM
+                    iso_str += ":00"
+
+                # (处理时区在缺少秒的情况) "2025-11-10T14:00+08:00"
+                if len(iso_str) > 16 and iso_str[16] != ':' and iso_str[16] != '.':
+                    # 它是 YYYY-MM-DDTHH:MM+TZ
+                    iso_str = iso_str[:16] + ":00" + iso_str[16:]
+
+                # (处理高精度毫秒, 截断到6位, 否则 fromisoformat 会失败)
+                parts = iso_str.split('.')
+                if len(parts) == 2:
+                    sec_part = parts[1]
+                    tz_part = ""
+
+                    if '+' in sec_part:
+                        tz_index = sec_part.find('+')
+                        tz_part = sec_part[tz_index:]
+                        sec_part = sec_part[:tz_index]
+                    elif '-' in sec_part:
+                        tz_index = sec_part.find('-')
+                        tz_part = sec_part[tz_index:]
+                        sec_part = sec_part[:tz_index]
+                    elif 'Z' in sec_part:
+                        tz_index = sec_part.find('Z')
+                        tz_part = sec_part[tz_index:]
+                        sec_part = sec_part[:tz_index]
+
+                    if len(sec_part) > 6:
+                        sec_part = sec_part[:6]  # 截断
+
+                    iso_str = f"{parts[0]}.{sec_part}{tz_part}"
+
+                if 'Z' in iso_str:
+                    iso_str = iso_str.replace('Z', '+00:00')
+
                 datetime_obj = datetime.fromisoformat(iso_str)
+
             except (ValueError, TypeError):
-                # 不是有效的日期时间字符串，保持 obj 为原始字符串
-                pass
+                logger.warning(f"json_serializer: Failed to parse string '{obj_str}' as datetime.")
+                pass  # 解析失败，它是一个普通字符串
+
+        elif re.match(date_pattern, obj_str):
+            try:
+                # (标准 DATE 字符串)
+                date_obj = date.fromisoformat(obj_str)
+
+                # --- 应用与 date 对象相同的逻辑 ---
+                # 将 date (例如 2025-01-01) 视为 UTC+8 当天的午夜 (00:00:00+08:00)
+                utc8_midnight = datetime.combine(date_obj, time.min, tzinfo=TZ_UTC_8)
+                # 转换为 UTC (将变为 2024-12-31T16:00:00Z)
+                utc_obj = utc8_midnight.astimezone(timezone.utc)
+                # 格式化为带 'Z' 的 ISO 8601 格式
+                return utc_obj.isoformat().replace('+00:00', 'Z')
+
+            except (ValueError, TypeError):
+                logger.warning(f"json_serializer: Failed to parse string '{obj_str}' as date.")
+                pass  # 解析失败，它是一个普通字符串
 
     # --- 2. 处理 datetime 对象 (无论是原始的还是刚从字符串解析的) ---
     if isinstance(obj, datetime) or datetime_obj:
         dt_to_process = obj if isinstance(obj, datetime) else datetime_obj
 
-        aware_obj = dt_to_process
-
-        # 2a. 检查是否是 Naive (无时区信息)
+        # 检查是否为 Naive (无时区)
         if dt_to_process.tzinfo is None or dt_to_process.tzinfo.utcoffset(dt_to_process) is None:
-            # 假设 naive datetime 是东八区时间 (本地时间)，为其附加时区信息
+            # 如果是 Naive，假定它是 UTC+8
             aware_obj = dt_to_process.replace(tzinfo=TZ_UTC_8)
+        else:
+            # 如果已经有TzInfo (Aware)，直接使用
+            aware_obj = dt_to_process
 
-        # 2b. 转换为 UTC 时间 (e.g., UTC+8 -> UTC)
+        # 将感知时区的对象转换为 UTC
         utc_obj = aware_obj.astimezone(timezone.utc)
 
-        # 2c. 格式化为带 'Z' 的 ISO 8601 格式
+        # 格式化为带 'Z' 的 ISO 8601 格式
         return utc_obj.isoformat().replace('+00:00', 'Z')
 
     # --- 3. 处理 date 对象 ---
+    # (必须在 datetime 之后，因为 datetime 是 date 的子类)
     if isinstance(obj, date):
-        # 将 date 视为东八区当天的午夜
-        aware_obj = datetime.combine(obj, time_obj.min).replace(tzinfo=TZ_UTC_8)
-        # 转换为 UTC 时间
-        utc_obj = aware_obj.astimezone(timezone.utc)
+        # 将 date (例如 2025-01-01) 视为 UTC+8 当天的午夜 (00:00:00+08:00)
+        utc8_midnight = datetime.combine(obj, time.min, tzinfo=TZ_UTC_8)
+
+        # 转换为 UTC (将变为 2024-12-31T16:00:00Z)
+        utc_obj = utc8_midnight.astimezone(timezone.utc)
+
         # 格式化为带 'Z' 的 ISO 8601 格式
         return utc_obj.isoformat().replace('+00:00', 'Z')
 
