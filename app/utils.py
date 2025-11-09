@@ -45,21 +45,33 @@ def json_serializer(obj):
     # --- 1. 检查是否为字符串，并尝试解析 (UTC+8) ---
     if isinstance(obj, str):
         obj_str = obj.strip()
-        try:
-            # 检查字符串长度是否至少为 'YYYY-MM-DD HH:MM:SS'
-            if len(obj_str) >= 19:
-                # 将 ' ' 替换为 'T'，使其兼容 ISO 格式
-                # 'YYYY-MM-DD HH:MM:SS.ffffff' -> 'YYYY-MM-DDTHH:MM:SS.ffffff'
-                if ' ' in obj_str:
-                    obj_str = obj_str.replace(' ', 'T')
 
-                # fromisoformat 可以原生处理毫秒 (.f)
-                # 并且可以处理 'Z' 或 '+00:00' (如果存在)
-                datetime_obj = datetime.fromisoformat(obj_str.replace('Z', '+00:00'))
+        # 综合正则表达式，匹配多种日期时间格式
+        # "2024-01-15 10:30:45"      # 空格分隔
+        # "2024-01-15T10:30:45"      # T分隔
+        # "2024-01-15 10:30:45.123"
+        # "2024-01-15T10:30:45.123456"
+        # "2024-01-15 10:30:45.1"
+        # "2024-01-15 10:30:45Z"        # UTC时间
+        # "2024-01-15T10:30:45z"        # UTC时间（小写z）
+        # "2024-01-15 10:30:45+08:00"   # 东八区
+        # "2024-01-15T10:30:45-05:00"   # 西五区
+        # "2024-01-15 10:30:45+0800"    # 无冒号的时区
+        # "2024-01-15T10:30:45.123456Z"
+        # "2024-01-15 10:30:45.123+08:00"
+        # "2024-01-15T10:30:45.1-05:00"
+        pattern = r'^\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:?\d{2})?$'  # 标准格式
 
-        except (ValueError, TypeError):
-            # 不是有效的日期时间字符串，保持 obj 为原始字符串
-            pass
+        # r'^\d{4}-\d{2}-\d{2}$',  # 仅日期
+        # r'^\d{2}:\d{2}:\d{2}$',  # 仅时间
+        if len(obj_str) >= 19 and re.match(pattern, obj_str):
+            try:
+                # 标准化格式
+                iso_str = obj_str.replace(' ', 'T').replace('Z', '+00:00')
+                datetime_obj = datetime.fromisoformat(iso_str)
+            except (ValueError, TypeError):
+                # 不是有效的日期时间字符串，保持 obj 为原始字符串
+                pass
 
     # --- 2. 处理 datetime 对象 (无论是原始的还是刚从字符串解析的) ---
     if isinstance(obj, datetime) or datetime_obj:
