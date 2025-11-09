@@ -122,10 +122,10 @@ class FieldMappingService:
             # 判断用户是否没有设置字段别名
             if m.widget_alias and m.widget_name and m.widget_alias == m.widget_name:
                 # 如没有设置，则使用 m.label 作为 表字段名
-                key, value = m.label, m.widget_alias
+                key, value = m.label, (m.widget_alias, m.type)
             else:
                 # 如设置了，使用 m.widget_alias 作为 表字段名
-                key, value = m.widget_alias, m.widget_alias
+                key, value = m.widget_alias, (m.widget_alias, m.type)
 
             result[key] = value
 
@@ -566,12 +566,21 @@ class Db2JdySyncService:
                 if field_name not in alias_map:
                     raise ValueError(f"task_id:[{task.id}] PK field '{field_name}' not in alias map.")
 
-                jdy_pk_field = alias_map[field_name]
+                jdy_pk_field, jdy_pk_type = alias_map[field_name]
                 pk_value = pk_values[i]
                 log_pk_values[field_name] = pk_value
 
+                # 字符串转换为int
+                if jdy_pk_type in {'number', 'autonumber', 'flowstate'} and pk_value and isinstance(pk_value, str):
+                    try:
+                        pk_value = int(pk_value.strip())
+                    except Exception as e:
+                        logger.error(
+                            f"task_id:[{task.id}] PK field '{field_name}' cannot be converted to int: {pk_value}")
+
                 filter_conditions.append({
                     "field": jdy_pk_field,
+                    # "type": jdy_pk_type,
                     "method": "eq",
                     "value": [pk_value]  # 传入数组
                 })
@@ -1018,11 +1027,19 @@ class Db2JdySyncService:
 
                         # 2. 比较
                         payload_has_changes = False
-                        # alias_map 是 {'mysql_col_name': 'jdy_widget_alias'}
+                        # alias_map 是 {'mysql_col_name': ('jdy_widget_alias', 'type')}
                         # t_data 是 {'jdy_widget_alias': 'jdy_value'}
                         # row_dict 是 {'mysql_col_name': 'mysql_value'}
 
-                        for mysql_col, jdy_alias in alias_map.items():
+                        # 遍历 alias_map 的键 (mysql_col)
+                        for mysql_col in alias_map.keys():
+                            # 从 alias_map 获取元组
+                            alias_info = alias_map.get(mysql_col)
+                            if not alias_info:
+                                continue
+
+                            jdy_alias, jdy_type = alias_info
+
                             # 简道云有该字段，但数据没有该字段
                             if mysql_col not in row_dict:
                                 continue  # 源数据 (row_dict) 中没有此列 (例如视图或SQL过滤)
@@ -1462,11 +1479,20 @@ class Db2JdySyncService:
                         # --- 数据比较逻辑 ---
 
                         jdy_id = jdy_data_found.get('_id')
-                        t_data = jdy_data_found  # 这就是优化点!
+                        t_data = jdy_data_found
 
                         # 2. 比较
                         payload_has_changes = False
-                        for mysql_col, jdy_alias in alias_map.items():
+
+                        # 遍历 alias_map 的键 (mysql_col)
+                        for mysql_col in alias_map.keys():
+                            # 从 alias_map 获取元组
+                            alias_info = alias_map.get(mysql_col)
+                            if not alias_info:
+                                continue
+
+                            jdy_alias, jdy_type = alias_info
+
                             # 简道云有该字段，但数据没有该字段
                             if mysql_col not in row_dict:
                                 continue  # 源数据 (row_dict) 中没有此列 (例如视图或SQL过滤)
@@ -1850,7 +1876,16 @@ class Db2JdySyncService:
                                     # 比较逻辑
                                     try:
                                         payload_has_changes = False
-                                        for mysql_col, jdy_alias in alias_map.items():
+
+                                        # 遍历 alias_map 的键 (mysql_col)
+                                        for mysql_col in alias_map.keys():
+                                            # 从 alias_map 获取元组
+                                            alias_info = alias_map.get(mysql_col)
+                                            if not alias_info:
+                                                continue
+
+                                            jdy_alias, jdy_type = alias_info
+
                                             # 简道云有该字段，但数据库没有该字段
                                             if mysql_col not in row['values']:
                                                 continue
@@ -1947,7 +1982,16 @@ class Db2JdySyncService:
                                     t_data = jdy_data_found
 
                                     payload_has_changes = False
-                                    for mysql_col, jdy_alias in alias_map.items():
+
+                                    # 遍历 alias_map 的键 (mysql_col)
+                                    for mysql_col in alias_map.keys():
+                                        # 从 alias_map 获取元组
+                                        alias_info = alias_map.get(mysql_col)
+                                        if not alias_info:
+                                            continue
+
+                                        jdy_alias, jdy_type = alias_info
+
                                         # 简道云有该字段，但数据库没有该字段
                                         if mysql_col not in row['after_values']:
                                             continue
