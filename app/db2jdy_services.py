@@ -1161,7 +1161,7 @@ class Db2JdySyncService:
                         # 成功, 设置为空闲
                         self._update_task_status(config_session, task,
                                                  # sync_status='idle',
-                                                 last_sync_time=datetime.now(TZ_UTC_8),
+                                                 # last_sync_time=datetime.now(TZ_UTC_8),
                                                  is_delete_first=False)
                     except Exception as e:
                         config_session.rollback()
@@ -1171,7 +1171,7 @@ class Db2JdySyncService:
                         return
 
             # 执行全量同步
-            self._update_task_status(config_session, task, sync_status='running', last_sync_time=datetime.now(TZ_UTC_8))
+            self._update_task_status(config_session, task, sync_status='running')
             # 如果没有主键
             if not task.business_keys:
                 logger.info(
@@ -1237,12 +1237,11 @@ class Db2JdySyncService:
                             # 成功后, 更新状态
                             self._update_task_status(config_session, task,
                                                      # sync_status='idle',
-                                                     last_sync_time=datetime.now(TZ_UTC_8),
+                                                     # last_sync_time=datetime.now(TZ_UTC_8),
                                                      is_delete_first=False)
 
                         # 调用全量同步
-                        self._update_task_status(config_session, task, sync_status='running',
-                                                 last_sync_time=datetime.now(TZ_UTC_8))
+                        self._update_task_status(config_session, task, sync_status='running')
                         self._insert_jdy_data_with_primary_key(config_session, task)
                         # 成功后, 更新状态并退出
                         self._update_task_status(config_session, task,
@@ -1641,8 +1640,7 @@ class Db2JdySyncService:
                 if self._is_view(session_task):
                     log_sync_error(task_config=session_task,
                                    extra_info=f"task_id:[{task_id_safe}] BINLOG mode is not allowed for VIEWS. Stopping listener.")
-                    self._update_task_status(config_session, session_task, sync_status='error',
-                                             last_sync_time=datetime.now(TZ_UTC_8))
+                    self._update_task_status(config_session, session_task, sync_status='error')
                     return
 
                 # 3b. 提取 API 密钥
@@ -1685,12 +1683,11 @@ class Db2JdySyncService:
                                 # 成功后, 更新状态
                                 self._update_task_status(config_session, session_task,
                                                          # sync_status='idle',
-                                                         last_sync_time=datetime.now(TZ_UTC_8),
+                                                         # last_sync_time=datetime.now(TZ_UTC_8),
                                                          is_delete_first=False)
 
                             # 调用全量同步
-                            self._update_task_status(config_session, session_task, sync_status='running',
-                                                     last_sync_time=datetime.now(TZ_UTC_8))
+                            self._update_task_status(config_session, session_task, sync_status='running')
                             self._insert_jdy_data_with_primary_key(config_session, session_task)
                             # 成功后, 更新状态并退出
                             self._update_task_status(config_session, session_task,
@@ -1709,8 +1706,7 @@ class Db2JdySyncService:
                             return  # 退出线程
                 else:
                     # 仅在非首次运行时更新状态
-                    self._update_task_status(config_session, session_task, sync_status='running',
-                                             last_sync_time=datetime.now(TZ_UTC_8))
+                    self._update_task_status(config_session, session_task, sync_status='running')
 
                 # 3f. 提取剩余的标量值
                 log_file = session_task.last_binlog_file
