@@ -122,10 +122,10 @@ class FieldMappingService:
             # 判断用户是否没有设置字段别名
             if m.widget_alias and m.widget_name and m.widget_alias == m.widget_name:
                 # 如没有设置，则使用 m.label 作为 表字段名
-                key, value = m.label, m.widget_alias
+                key, value = m.label, (m.widget_alias, m.type)
             else:
                 # 如设置了，使用 m.widget_alias 作为 表字段名
-                key, value = m.widget_alias, m.widget_alias
+                key, value = m.widget_alias, (m.widget_alias, m.type)
 
             result[key] = value
 
@@ -570,12 +570,21 @@ class Db2JdySyncService:
                 if field_name not in alias_map:
                     raise ValueError(f"task_id:[{task.id}] PK field '{field_name}' not in alias map.")
 
-                jdy_pk_field = alias_map[field_name]
+                jdy_pk_field, jdy_pk_type = alias_map[field_name]
                 pk_value = pk_values[i]
                 log_pk_values[field_name] = pk_value
 
+                # 字符串转换为int
+                if jdy_pk_type == 'number' and pk_value and isinstance(pk_value, str):
+                    try:
+                        pk_value = int(pk_value.strip())
+                    except Exception as e:
+                        logger.error(
+                            f"task_id:[{task.id}] PK field '{field_name}' cannot be converted to int: {pk_value}")
+
                 filter_conditions.append({
                     "field": jdy_pk_field,
+                    # "type": jdy_pk_type,
                     "method": "eq",
                     "value": [pk_value]  # 传入数组
                 })
