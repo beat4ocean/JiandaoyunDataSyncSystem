@@ -906,7 +906,7 @@ class Jdy2DbSyncService:
                 metadata = get_dynamic_metadata(engine)
                 table = Table(table_name, metadata, autoload_with=engine, extend_existing=True)
                 self.inspected_tables_cache[engine_url_key][table_name] = table
-                logger.info(f"Loading table definition from database ({engine_url_key}): {table_name}")
+                logger.debug(f"Loading table definition from database ({engine_url_key}): {table_name}")
                 return table
         except Exception as e:
             logger.error(f"Error checking or loading table definition for {table_name} ({engine_url_key}): {e}",
