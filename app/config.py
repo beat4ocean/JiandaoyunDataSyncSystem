@@ -69,6 +69,8 @@ class Config:
 
     # --- 简道云 API 配置 ---
     JDY_API_BASE_URL = os.getenv('JDY_API_BASE_URL', 'https://api.jiandaoyun.com')
+    # 全局最多接受请求：50 次/秒
+    GLOBAL_API_QPS = int(os.getenv('GLOBAL_API_QPS', 50))
 
     WEB_HOOK_BASE_URL = os.getenv('WEB_HOOK_BASE_URL')
 

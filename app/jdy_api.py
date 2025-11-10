@@ -3,6 +3,7 @@
 简道云 API 客户端 (v5)
 """
 import logging
+import threading
 
 import requests
 import json
@@ -11,6 +12,7 @@ from datetime import datetime, timedelta
 
 from requests import RequestException, HTTPError
 
+from app import Config
 from app.utils import TZ_UTC_8
 
 # 配置日志
@@ -22,15 +24,37 @@ class ApiClient:
     """
     简道云 API 客户端基类
     内置了身份验证、请求发送、错误处理、速率限制和失败重试的核心逻辑。
+
+    采用二级限流策略：
+    1. 全局限流 (Global): 限制 Config.GLOBAL_API_QPS，防止 8303 错误。
+    2. 端点限流 (Endpoint): 限制单个接口的 QPS (self.qps)。
     """
+
+    # 端点限流 (原逻辑)，为其增加一个锁
     _rate_limit_records = {}
+    _endpoint_lock = threading.Lock()
+
+    # 全局 (部门级别) 速率限制
+    _global_last_call_time = None
+    _global_lock = threading.Lock()
+    _global_min_interval = timedelta(seconds=0)
+
+    try:
+        if Config.GLOBAL_API_QPS > 0:
+            _global_min_interval = timedelta(seconds=1 / Config.GLOBAL_API_QPS)
+            logger.info(f"全局 API 限流已启用：{Config.GLOBAL_API_QPS} QPS")
+        else:
+            logger.warning("Config.GLOBAL_API_QPS 未设置或为 0。禁用全局速率限制。")
+    except (AttributeError, ZeroDivisionError, TypeError):
+        logger.warning("Config.GLOBAL_API_QPS 加载失败。禁用全局速率限制。")
+        pass
 
     def __init__(self, api_key, host, qps=10, retry_count=3, retry_delay=5):
         """
         初始化客户端。
         :param api_key: 租户专属的 API Key
         :param host: API Host (e.g., https://api.jiandaoyun.com)
-        :param qps: 此类API的QPS限制
+        :param qps: 此类API的 *端点* QPS限制
         :param retry_count: 失败重试次数
         :param retry_delay: 失败重试延迟（秒）
         """
@@ -44,22 +68,52 @@ class ApiClient:
         self.min_interval = timedelta(seconds=1 / qps) if qps > 0 else timedelta(seconds=0)
 
     def _throttle(self, endpoint):
-        """根据端点控制 API 调用速率。"""
+        """
+        根据端点和全局设置控制 API 调用速率 (二级节流)。
+        """
         now = datetime.now(TZ_UTC_8)
-        last_call_time = ApiClient._rate_limit_records.get(endpoint)
 
-        if last_call_time:
-            elapsed = now - last_call_time
-            wait_time = self.min_interval - elapsed
-            if wait_time.total_seconds() > 0:
-                logger.debug(f"Throttling API call to {endpoint} for {wait_time.total_seconds():.3f} seconds")
-                time.sleep(wait_time.total_seconds())
+        # --- 1. 全局节流 (保护 Code=8303) ---
+        if ApiClient._global_min_interval.total_seconds() > 0:
+            with ApiClient._global_lock:
+                last_call = ApiClient._global_last_call_time
+                if last_call:
+                    elapsed = now - last_call
+                    wait_time = ApiClient._global_min_interval - elapsed
+                    if wait_time.total_seconds() > 0:
+                        logger.debug(
+                            f"GLOBAL Throttling for {wait_time.total_seconds():.3f}s (Limit: {Config.GLOBAL_API_QPS} QPS)")
+                        time.sleep(wait_time.total_seconds())
+                        # 更新 'now'，因为我们刚刚等待过
+                        now = datetime.now(TZ_UTC_8)
 
-        ApiClient._rate_limit_records[endpoint] = datetime.now(TZ_UTC_8)  # 更新时间戳
+                # 记录本次调用时间
+                ApiClient._global_last_call_time = now
+
+        # --- 2. 端点节流 (原逻辑) ---
+        # (确保 self.qps (端点QPS) 也被遵守)
+        if self.min_interval.total_seconds() > 0:
+            with ApiClient._endpoint_lock:
+                last_call_time = ApiClient._rate_limit_records.get(endpoint)
+
+                if last_call_time:
+                    elapsed = now - last_call_time
+                    wait_time = self.min_interval - elapsed
+                    if wait_time.total_seconds() > 0:
+                        logger.debug(
+                            f"ENDPOINT Throttling for {endpoint} for {wait_time.total_seconds():.3f}s (Limit: {self.qps} QPS)")
+                        time.sleep(wait_time.total_seconds())
+                        # 更新 'now'
+                        now = datetime.now(TZ_UTC_8)
+
+        ApiClient._rate_limit_records[endpoint] = now  # 更新时间戳
 
     def _send_request(self, endpoint, data):
         """
         发送 POST 请求的私有核心方法，包含重试和速率限制逻辑。
+
+        [!! 修改 !!]
+        - 增加对 8303 错误的特定重试逻辑。
         """
         headers = {
             'Authorization': 'Bearer ' + self.api_key,
@@ -72,21 +126,29 @@ class ApiClient:
         last_exception = None
         for attempt in range(self.retry_count + 1):
             try:
-                self._throttle(endpoint)
-                logger.debug(f"Sending request to {url} with payload: {json.dumps(payload_dict, ensure_ascii=False)}") # Debugging line
+                self._throttle(endpoint)  # 调用新的二级节流
+                logger.debug(
+                    f"Sending request to {url} with payload: {json.dumps(payload_dict, ensure_ascii=False)}")  # Debugging line
                 res = requests.post(url=url, json=payload_dict, headers=headers,
                                     timeout=30)  # Increase timeout, use json parameter
 
                 # --- 增强错误日志 ---
                 if res.status_code >= 400:
+                    error_code = None
                     try:
                         error_info = res.json()
-                        logger.error(f"API 错误: Code={error_info.get('code')}, Msg={error_info.get('msg')}")
+                        error_code = error_info.get('code')  # 提取 code
+                        logger.error(f"API 错误: Code={error_code}, Msg={error_info.get('msg')}")
                         # 打印请求体以帮助诊断 400 Bad Request
                         logger.error(f"请求失败的 Payload: {json.dumps(payload_dict, ensure_ascii=False, indent=2)}")
                     except json.JSONDecodeError:
                         logger.error(f"API 请求失败，状态码: {res.status_code}, 响应内容非JSON: {res.text}")
                         logger.error(f"请求失败的 Payload: {json.dumps(payload_dict, ensure_ascii=False, indent=2)}")
+
+                    # 如果是团队频率限制 (8303)，提前警告
+                    if error_code == 8303:
+                        logger.warning(f"触发团队频率限制 (Code=8303)。将应用更长的延迟重试...")
+
                     res.raise_for_status()  # 引发 HTTPError
                 # --- 结束增强 ---
 
@@ -114,10 +176,30 @@ class ApiClient:
 
             except (RequestException, HTTPError) as e:
                 last_exception = e
+
+                # 1. 检查是否是 8303 错误
+                is_rate_limit_error = False
+                if hasattr(e, 'response') and e.response is not None:
+                    try:
+                        error_info = e.response.json()
+                        if error_info.get('code') == 8303:
+                            is_rate_limit_error = True
+                    except json.JSONDecodeError:
+                        pass  # 不是json
+
+                # 2. 计算延迟
+                if is_rate_limit_error:
+                    # 对于 8303 错误，使用更长的基础延迟 (e.g., 10秒) + 指数退避
+                    current_delay = (self.retry_delay + 5) * (2 ** attempt)
+                    logger.warning(f"检测到 Code=8303 错误。应用更长的重试延迟。")
+                else:
+                    # 默认指数退避
+                    current_delay = self.retry_delay * (2 ** attempt)
+
                 logger.error(f"API 请求到 '{endpoint}' 失败 (尝试 {attempt + 1}/{self.retry_count + 1}): {e}")
+
                 if attempt < self.retry_count:
-                    current_delay = self.retry_delay * (2 ** attempt)  # Exponential backoff
-                    logger.warning(f"将在 {current_delay} 秒后重试...")
+                    logger.warning(f"将在 {current_delay:.2f} 秒后重试...")
                     time.sleep(current_delay)
                 else:  # All retries failed
                     logger.error(f"对 '{endpoint}' 的所有重试均失败。最后错误: {e}")
