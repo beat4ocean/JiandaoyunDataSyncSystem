@@ -1,0 +1,42 @@
+# App configuration
+app:
+  image:
+    repository: jiandaoyundatasyncsystem
+    pullPolicy: IfNotPresent
+    tag: "2.0.0"
+  service:
+    type: ClusterIP # Change to LoadBalancer or NodePort for external access
+    port: 8848
+  containerPort: 8848
+  # initContainer waits for MySQL to be ready
+  initContainer:
+    image: busybox:1.36
+    enabled: true
+
+# MySQL configuration
+mysql:
+  image:
+    repository: mysql
+    pullPolicy: IfNotPresent
+    tag: "8.0"
+
+  # Internal service for the app to connect
+  internalService:
+    name: mysql # This name MUST match the DB host in your .env
+    port: 3306
+
+  # Optional: External service to replicate docker-compose 33306:3306
+  externalService:
+    enabled: false # Set to true to expose MySQL externally (e.g., for debugging)
+    type: NodePort
+    port: 33306    # Host port (if type is LoadBalancer)
+    nodePort: 30306 # Manual NodePort (if type is NodePort)
+
+  persistence:
+    enabled: true
+    size: 8Gi
+    storageClass: "" # Optional: specify a storage class. If "", uses default.
+
+# Name of the pre-created Kubernetes Secret holding your .env variables
+# You MUST create this secret manually (see deployment steps)
+envSecretName: "jdy-env-secret"

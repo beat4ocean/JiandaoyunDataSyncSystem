@@ -1,0 +1,20 @@
+{{- if .Values.mysql.externalService.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "jdy-data-sync.fullname" . }}-mysql-external
+  labels:
+    {{- include "jdy-data-sync.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.mysql.externalService.type }}
+  ports:
+    - port: {{ .Values.mysql.externalService.port }}
+      targetPort: mysql
+      protocol: TCP
+      name: mysql-external
+      {{- if (and (eq .Values.mysql.externalService.type "NodePort") .Values.mysql.externalService.nodePort) }}
+      nodePort: {{ .Values.mysql.externalService.nodePort }}
+      {{- end }}
+  selector:
+    {{- include "jdy-data-sync.mysql.selectorLabels" . | nindent 4 }}
+{{- end }}

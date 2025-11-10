@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "jdy-data-sync.fullname" . }}-app
+  labels:
+    {{- include "jdy-data-sync.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "jdy-data-sync.app.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "jdy-data-sync.app.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- if .Values.app.initContainer.enabled }}
+      initContainers:
+      - name: wait-for-mysql
+        image: {{ .Values.app.initContainer.image }}
+        imagePullPolicy: IfNotPresent
+        command: ['sh', '-c', 'until nc -z -w 2 {{ .Values.mysql.internalService.name }} {{ .Values.mysql.internalService.port }}; do echo "Waiting for mysql..."; sleep 2; done;']
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}-app
+          image: "{{ .Values.app.image.repository }}:{{ .Values.app.image.tag }}"
+          imagePullPolicy: {{ .Values.app.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.app.containerPort }}
+              protocol: TCP
+          envFrom:
+            - secretRef:
+                name: {{ .Values.envSecretName }}
+          resources: {} # Add resource limits/requests here
