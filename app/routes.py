@@ -88,7 +88,7 @@ def superuser_required(fn):
     return wrapper
 
 
-# --- 1. 数据库管理 (重构) ---
+# --- 1. 数据库管理 ---
 # (原 DatabaseSourceView)
 
 @api_bp.route('/databases', methods=['GET'])
@@ -420,7 +420,7 @@ def delete_jdy_key(key_id):
         return jsonify({"error": "删除密钥失败"}), 500
 
 
-# --- 3. 任务管理 (SyncTask) (重构) ---
+# --- 3. 任务管理 (SyncTask) ---
 
 def _parse_time_string(time_str: str | None) -> time | None:
     """辅助函数：从 ISO 字符串 (HH:MM:SS) 或 (YYYY-MM-DDTHH:MM:SS) 中解析时间对象"""

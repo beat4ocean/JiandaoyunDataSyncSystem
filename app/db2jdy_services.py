@@ -820,12 +820,21 @@ class Db2JdySyncService:
             # 1. 实例化
             data_api_create = DataApi(api_key, Config.JDY_API_BASE_URL, qps=10)
 
+            # # 使用主键排序
+            # pk_fields = [pk.strip() for pk in task.business_keys.split(',') if pk and pk.strip()]
+            # # pk_fields.sort()
+            # order_by_pks = ','.join([f"{pk.strip()} ASC" for pk in pk_fields])
+
             # 3. 构建带 SQL 过滤的查询, 并使用流式处理
             with get_dynamic_session(task) as source_session:
+
                 base_query = f"SELECT * FROM `{task.table_name}`"
                 params = {}
-                if task.source_filter_sql:
-                    base_query += f" WHERE {task.source_filter_sql}"
+                if task.source_filter_sql and task.source_filter_sql.strip():
+                    base_query += f" WHERE {task.source_filter_sql.strip().rstrip(';')}"
+
+                # # 添加排序操作
+                # base_query = f"{base_query} ORDER BY {order_by_pks}"
 
                 # --- 使用 LIMIT/OFFSET 批处理替换 stream_results ---
                 BATCH_SIZE = 1000
@@ -950,12 +959,21 @@ class Db2JdySyncService:
             data_api_create = DataApi(api_key, Config.JDY_API_BASE_URL, qps=20)  # Single create
             data_api_update = DataApi(api_key, Config.JDY_API_BASE_URL, qps=20)  # Single update
 
+            # 使用主键排序
+            pk_fields = [pk.strip() for pk in task.business_keys.split(',') if pk and pk.strip()]
+            # pk_fields.sort()
+            order_by_pks = ','.join([f"{pk.strip()} ASC" for pk in pk_fields])
+
+            # 3. 构建带 SQL 过滤的查询, 并使用流式处理
             with get_dynamic_session(task) as source_session:
 
                 base_query = f"SELECT * FROM `{task.table_name}`"
                 params = {}
-                if task.source_filter_sql:
-                    base_query += f" WHERE {task.source_filter_sql}"
+                if task.source_filter_sql and task.source_filter_sql.strip():
+                    base_query += f" WHERE {task.source_filter_sql.strip().rstrip(';')}"
+
+                # 添加排序操作
+                base_query = f"{base_query} ORDER BY {order_by_pks}"
 
                 # --- 使用 LIMIT/OFFSET 批处理替换 stream_results ---
                 BATCH_SIZE = 1000
@@ -1412,8 +1430,16 @@ class Db2JdySyncService:
                 )
                 # 使用动态确定的时间戳
                 params = {"last_sync_time": last_sync_time_for_query}
-                if task.source_filter_sql:
-                    base_query += f" AND ({task.source_filter_sql})"
+                if task.source_filter_sql and task.source_filter_sql.strip():
+                    base_query += f" AND {task.source_filter_sql.strip().rstrip(';')}"
+
+                # 使用主键排序
+                pk_fields = [pk.strip() for pk in task.business_keys.split(',') if pk and pk.strip()]
+                # pk_fields.sort()
+                order_by_pks = ','.join([f"{pk.strip()} ASC" for pk in pk_fields])
+
+                # 添加排序操作
+                base_query = f"{base_query} ORDER BY {order_by_pks}"
 
                 # --- 使用 LIMIT/OFFSET 批处理替换 stream_results ---
                 BATCH_SIZE = 1000
