@@ -827,28 +827,51 @@ class Db2JdySyncService:
                 if task.source_filter_sql:
                     base_query += f" WHERE {task.source_filter_sql}"
 
-                # --- 性能优化: 使用流式查询 ---
-                # 移除: rows = source_session.execute(text(base_query), params).mappings().all()
-                # sqlalchemy < 2 版本
-                # result_stream = source_session.execution_options(stream_results=True).execute(text(base_query), params)
-                # sqlalchemy >= 2 版本
-                result_stream = source_session.connection().execution_options(stream_results=True).execute(
-                    text(base_query), params)
-
+                # --- 使用 LIMIT/OFFSET 批处理替换 stream_results ---
+                BATCH_SIZE = 1000
+                offset = 0
                 has_processed_rows = False
 
-                # 4. 批量创建数据
-                batch_data = []
-                for row in result_stream.mappings():
-                    has_processed_rows = True
-                    total_source_rows += 1
+                while True:
+                    paginated_query = f"{base_query} LIMIT :batch_size OFFSET :offset"
+                    query_params = {**params, "batch_size": BATCH_SIZE, "offset": offset}
 
-                    row_dict = dict(row)
-                    data_payload = self._transform_row_to_jdy(row_dict, payload_map)
-                    if data_payload:
-                        batch_data.append(data_payload)
+                    rows = source_session.execute(text(paginated_query), query_params).mappings().all()
 
-                    if len(batch_data) >= 100:  # API 限制 100
+                    if not rows:
+                        break  # 没有更多数据了，退出循环
+
+                    if offset == 0 and rows:  # 仅在第一个非空批次时标记
+                        has_processed_rows = True
+
+                    # 4. 批量创建数据
+                    batch_data = []
+                    for row in rows:  # 迭代内存中的当前批次
+                        total_source_rows += 1
+
+                        row_dict = dict(row)
+                        data_payload = self._transform_row_to_jdy(row_dict, payload_map)
+                        if data_payload:
+                            batch_data.append(data_payload)
+
+                        if len(batch_data) >= 100:  # API 限制 100
+                            trans_id = str(uuid.uuid4())
+                            responses = data_api_create.create_batch_data(
+                                task.app_id, task.entry_id,
+                                data_list=batch_data, transaction_id=trans_id
+                            )
+                            # create_batch_data 返回一个列表，需要对列表中的每个响应求和
+                            success_count = sum(resp.get('success_count', 0) for resp in responses)
+                            logger.info(f"task_id:[{task.id}] Created {success_count} items.")
+
+                            total_created += success_count
+                            if success_count != len(batch_data):
+                                log_sync_error(task_config=task,
+                                               extra_info=f"task_id:[{task.id}] Create mismatch. Req: {len(batch_data)}, Created: {success_count}. Trans_id: {trans_id}")
+                            batch_data = []
+
+                    # 处理最后一个批次 (批处理循环内部)
+                    if batch_data:
                         trans_id = str(uuid.uuid4())
                         responses = data_api_create.create_batch_data(
                             task.app_id, task.entry_id,
@@ -861,24 +884,10 @@ class Db2JdySyncService:
                         total_created += success_count
                         if success_count != len(batch_data):
                             log_sync_error(task_config=task,
-                                           extra_info=f"task_id:[{task.id}] Create mismatch. Req: {len(batch_data)}, Created: {success_count}. Trans_id: {trans_id}")
-                        batch_data = []
+                                           extra_info=f"task_id:[{task.id}] Create mismatch. Req: {len(batch_data)}, Created: {success_count}. TransID: {trans_id}")
 
-                # 处理最后一个批次
-                if batch_data:
-                    trans_id = str(uuid.uuid4())
-                    responses = data_api_create.create_batch_data(
-                        task.app_id, task.entry_id,
-                        data_list=batch_data, transaction_id=trans_id
-                    )
-                    # create_batch_data 返回一个列表，需要对列表中的每个响应求和
-                    success_count = sum(resp.get('success_count', 0) for resp in responses)
-                    logger.info(f"task_id:[{task.id}] Created {success_count} items.")
-
-                    total_created += success_count
-                    if success_count != len(batch_data):
-                        log_sync_error(task_config=task,
-                                       extra_info=f"task_id:[{task.id}] Create mismatch. Req: {len(batch_data)}, Created: {success_count}. TransID: {trans_id}")
+                    # 为下一次循环增加偏移量
+                    offset += BATCH_SIZE
 
                 # 检查是否因为没有数据而退出循环
                 if not has_processed_rows:
@@ -948,151 +957,157 @@ class Db2JdySyncService:
                 if task.source_filter_sql:
                     base_query += f" WHERE {task.source_filter_sql}"
 
-                # --- 性能优化: 使用流式查询 ---
-                # 移除: rows = source_session.execute(text(base_query), params).mappings().all()
-                # sqlalchemy < 2 版本
-                # result_stream = source_session.execution_options(stream_results=True).execute(text(base_query), params)
-                # sqlalchemy >= 2 版本
-                result_stream = source_session.connection().execution_options(stream_results=True).execute(
-                    text(base_query), params)
-
-                # 标记是否处理了任何行
+                # --- 使用 LIMIT/OFFSET 批处理替换 stream_results ---
+                BATCH_SIZE = 1000
+                offset = 0
                 has_processed_rows = False
                 count_new, count_updated, count_skipped = 0, 0, 0
 
-                # 6. 遍历新增/更新
-                # for row in rows:
-                # 直接遍历迭代器，这会从数据库中逐行（或按小批量）获取数据
-                for row in result_stream.mappings():
-                    has_processed_rows = True  # 标记已处理
-                    row_dict = dict(row)
-                    try:
-                        self._get_pk_fields_and_values(task, row_dict)
-                    except ValueError as e:
-                        log_sync_error(task_config=task, error=e,
-                                       extra_info=f"task_id:[{task.id}] Row missing PK. Skipping.",
-                                       payload=row_dict)
-                        continue
+                while True:
+                    paginated_query = f"{base_query} LIMIT :batch_size OFFSET :offset"
+                    query_params = {**params, "batch_size": BATCH_SIZE, "offset": offset}
 
-                    data_payload = self._transform_row_to_jdy(row_dict, payload_map)
-                    if not data_payload:
-                        log_sync_error(task_config=task,
-                                       payload=row_dict,
-                                       extra_info=f"task_id:[{task.id}] Row missing required fields. Skipping.")
-                        continue
+                    rows = source_session.execute(text(paginated_query), query_params).mappings().all()
 
-                    # --- 优化API调用 ---
-                    jdy_data_found = None
-                    jdy_id_from_row = row_dict.get('_id')
+                    if not rows:
+                        break  # 没有更多数据了
 
-                    # 避免用户骚操作
-                    if jdy_id_from_row and jdy_id_from_row.strip() != '' and jdy_id_from_row.strip() != '-' and jdy_id_from_row.strip() != '_':
-                        # 我们有 ID, 但仍然需要数据进行比较
+                    if offset == 0 and rows:
+                        has_processed_rows = True
+
+                    # 6. 遍历新增/更新 (迭代内存中的当前批次)
+                    for row in rows:
+                        row_dict = dict(row)
                         try:
-                            jdy_data_response = data_api_query.get_single_data(task.app_id, task.entry_id,
-                                                                               jdy_id_from_row)
-                            jdy_data_found = jdy_data_response.get('data', {})
-                            if not jdy_data_found:
-                                logger.warning(
-                                    f"task_id:[{task.id}] _id {jdy_id_from_row} from row was not found in JDY. Will attempt PK search.")
-                                # (如果找不到, jdy_data_found 保持为 None 或 {}, 下面会触发 PK 搜索)
-                                # (为了安全, 强制触发PK搜索)
-                                jdy_data_found = None
-                        except Exception as fetch_err:
-                            log_sync_error(task_config=task, error=fetch_err,
-                                           extra_info=f"task_id:[{task.id}] Failed to fetch JDY data {jdy_id_from_row} (from row _id) for comparison. Will attempt PK search.")
-                            jdy_data_found = None  # 查找失败, 触发PK搜索
+                            self._get_pk_fields_and_values(task, row_dict)
+                        except ValueError as e:
+                            log_sync_error(task_config=task, error=e,
+                                           extra_info=f"task_id:[{task.id}] Row missing PK. Skipping.",
+                                           payload=row_dict)
+                            continue
 
-                    if not jdy_data_found:
-                        # 我们没有 ID, 或者 row _id 无效, 通过 PK 查找数据
-                        jdy_data_found = self._find_jdy_data_by_pk(
-                            task, row_dict,
-                            data_api_query, data_api_delete, alias_map
-                        )
-
-                    trans_id = str(uuid.uuid4())
-
-                    if jdy_data_found:
-                        # --- 数据比较逻辑 ---
-
-                        jdy_id = jdy_data_found.get('_id')
-                        t_data = jdy_data_found
-
-                        # 2. 比较
-                        payload_has_changes = False
-                        # alias_map 是 {'mysql_col_name': ('jdy_widget_alias', 'type')}
-                        # t_data 是 {'jdy_widget_alias': 'jdy_value'}
-                        # row_dict 是 {'mysql_col_name': 'mysql_value'}
-
-                        # 遍历 alias_map 的键 (mysql_col)
-                        for mysql_col in alias_map.keys():
-                            # 从 alias_map 获取元组
-                            alias_info = alias_map.get(mysql_col)
-                            if not alias_info:
-                                continue
-
-                            jdy_alias, jdy_type = alias_info
-
-                            # 简道云有该字段，但数据没有该字段
-                            if mysql_col not in row_dict:
-                                continue  # 源数据 (row_dict) 中没有此列 (例如视图或SQL过滤)
-                            # 数据库有该字段，但简道云没有该字段
-                            if jdy_alias not in t_data:
-                                # # 这是一个新字段 (在JDY中不存在), 视为变更
-                                # payload_has_changes = True
-                                # break
-                                continue
-
-                            s_val = row_dict[mysql_col]  # 源 (Source) 值
-                            t_val = t_data[jdy_alias]  # 目标 (Target) 值
-
-                            if self._is_value_different(s_val, t_val):
-                                payload_has_changes = True
-                                logger.debug(
-                                    f"task_id:[{task.id}] Change detected for {jdy_id} (Full Sync). Field {jdy_alias}: DB='{s_val}' != JDY='{t_val}'")
-                                break  # 找到一个差异, 足以触发更新
-
-                        if not payload_has_changes:
-                            # logger.debug(f"task_id:[{task.id}] Skipping update for {jdy_id} (Full Sync), no changes found.")
-                            count_skipped += 1
-                            continue  # 跳到下一行, 不执行更新
-
-                        # 更新
-                        logger.debug(
-                            f"task_id:[{task.id}] Changes found. Updating data with _id: {jdy_id} (Full Sync).")
-                        update_response = data_api_update.update_single_data(
-                            task.app_id, task.entry_id, jdy_id,
-                            data_payload, transaction_id=trans_id
-                        )
-                        update_jdy_id = update_response.get('data', {}).get('_id')
-
-                        if not update_jdy_id:
+                        data_payload = self._transform_row_to_jdy(row_dict, payload_map)
+                        if not data_payload:
                             log_sync_error(task_config=task,
-                                           payload=data_payload,
-                                           error=update_response,
-                                           extra_info=f"task_id:[{task.id}] Failed to update data.")
-                        else:
-                            count_updated += 1
-                            logger.debug(f"task_id:[{task.id}] Updated data with _id: {jdy_id}.")
+                                           payload=row_dict,
+                                           extra_info=f"task_id:[{task.id}] Row missing required fields. Skipping.")
+                            continue
 
-                    else:
-                        # 新增
-                        create_response = data_api_create.create_single_data(
-                            task.app_id, task.entry_id,
-                            data_payload, transaction_id=trans_id
-                        )
-                        new_jdy_id = create_response.get('data', {}).get('_id')
-                        if not new_jdy_id:
-                            log_sync_error(task_config=task,
-                                           payload=data_payload,
-                                           error=create_response,
-                                           extra_info=f"task_id:[{task.id}] Failed to create data.")
+                        # --- 优化API调用 ---
+                        jdy_data_found = None
+                        jdy_id_from_row = row_dict.get('_id')
+
+                        # 避免用户骚操作
+                        if jdy_id_from_row and jdy_id_from_row.strip() != '' and jdy_id_from_row.strip() != '-' and jdy_id_from_row.strip() != '_':
+                            # 我们有 ID, 但仍然需要数据进行比较
+                            try:
+                                jdy_data_response = data_api_query.get_single_data(task.app_id, task.entry_id,
+                                                                                   jdy_id_from_row)
+                                jdy_data_found = jdy_data_response.get('data', {})
+                                if not jdy_data_found:
+                                    logger.warning(
+                                        f"task_id:[{task.id}] _id {jdy_id_from_row} from row was not found in JDY. Will attempt PK search.")
+                                    # (如果找不到, jdy_data_found 保持为 None 或 {}, 下面会触发 PK 搜索)
+                                    # (为了安全, 强制触发PK搜索)
+                                    jdy_data_found = None
+                            except Exception as fetch_err:
+                                log_sync_error(task_config=task, error=fetch_err,
+                                               extra_info=f"task_id:[{task.id}] Failed to fetch JDY data {jdy_id_from_row} (from row _id) for comparison. Will attempt PK search.")
+                                jdy_data_found = None  # 查找失败, 触发PK搜索
+
+                        if not jdy_data_found:
+                            # 我们没有 ID, 或者 row _id 无效, 通过 PK 查找数据
+                            jdy_data_found = self._find_jdy_data_by_pk(
+                                task, row_dict,
+                                data_api_query, data_api_delete, alias_map
+                            )
+
+                        trans_id = str(uuid.uuid4())
+
+                        if jdy_data_found:
+                            # --- 数据比较逻辑 ---
+
+                            jdy_id = jdy_data_found.get('_id')
+                            t_data = jdy_data_found
+
+                            # 2. 比较
+                            payload_has_changes = False
+                            # alias_map 是 {'mysql_col_name': ('jdy_widget_alias', 'type')}
+                            # t_data 是 {'jdy_widget_alias': 'jdy_value'}
+                            # row_dict 是 {'mysql_col_name': 'mysql_value'}
+
+                            # 遍历 alias_map 的键 (mysql_col)
+                            for mysql_col in alias_map.keys():
+                                # 从 alias_map 获取元组
+                                alias_info = alias_map.get(mysql_col)
+                                if not alias_info:
+                                    continue
+
+                                jdy_alias, jdy_type = alias_info
+
+                                # 简道云有该字段，但数据没有该字段
+                                if mysql_col not in row_dict:
+                                    continue  # 源数据 (row_dict) 中没有此列 (例如视图或SQL过滤)
+                                # 数据库有该字段，但简道云没有该字段
+                                if jdy_alias not in t_data:
+                                    # # 这是一个新字段 (在JDY中不存在), 视为变更
+                                    # payload_has_changes = True
+                                    # break
+                                    continue
+
+                                s_val = row_dict[mysql_col]  # 源 (Source) 值
+                                t_val = t_data[jdy_alias]  # 目标 (Target) 值
+
+                                if self._is_value_different(s_val, t_val):
+                                    payload_has_changes = True
+                                    logger.debug(
+                                        f"task_id:[{task.id}] Change detected for {jdy_id} (Full Sync). Field {jdy_alias}: DB='{s_val}' != JDY='{t_val}'")
+                                    break  # 找到一个差异, 足以触发更新
+
+                            if not payload_has_changes:
+                                # logger.debug(f"task_id:[{task.id}] Skipping update for {jdy_id} (Full Sync), no changes found.")
+                                count_skipped += 1
+                                continue  # 跳到下一行, 不执行更新
+
+                            # 更新
+                            logger.debug(
+                                f"task_id:[{task.id}] Changes found. Updating data with _id: {jdy_id} (Full Sync).")
+                            update_response = data_api_update.update_single_data(
+                                task.app_id, task.entry_id, jdy_id,
+                                data_payload, transaction_id=trans_id
+                            )
+                            update_jdy_id = update_response.get('data', {}).get('_id')
+
+                            if not update_jdy_id:
+                                log_sync_error(task_config=task,
+                                               payload=data_payload,
+                                               error=update_response,
+                                               extra_info=f"task_id:[{task.id}] Failed to update data.")
+                            else:
+                                count_updated += 1
+                                logger.debug(f"task_id:[{task.id}] Updated data with _id: {jdy_id}.")
+
                         else:
-                            count_new += 1
-                            logger.debug(f"task_id:[{task.id}] Created data with _id: {new_jdy_id}.")
-                            # 是否需要回写，有待商榷，实际可不用回写
-                            # # 传入 row_dict 以进行复合主键回写
-                            # self._writeback_id_to_source(source_session, task, new_jdy_id, row_dict)
+                            # 新增
+                            create_response = data_api_create.create_single_data(
+                                task.app_id, task.entry_id,
+                                data_payload, transaction_id=trans_id
+                            )
+                            new_jdy_id = create_response.get('data', {}).get('_id')
+                            if not new_jdy_id:
+                                log_sync_error(task_config=task,
+                                               payload=data_payload,
+                                               error=create_response,
+                                               extra_info=f"task_id:[{task.id}] Failed to create data.")
+                            else:
+                                count_new += 1
+                                logger.debug(f"task_id:[{task.id}] Created data with _id: {new_jdy_id}.")
+                                # 是否需要回写，有待商榷，实际可不用回写
+                                # # 传入 row_dict 以进行复合主键回写
+                                # self._writeback_id_to_source(source_session, task, new_jdy_id, row_dict)
+
+                    # 批处理循环的末尾，增加偏移量
+                    offset += BATCH_SIZE
 
                 # 检查是否因为没有数据而退出循环
                 if not has_processed_rows:
@@ -1401,153 +1416,151 @@ class Db2JdySyncService:
                 if task.source_filter_sql:
                     base_query += f" AND ({task.source_filter_sql})"
 
-                # --- 2. 性能优化: 流式查询 ---
-                # 移除: rows = source_session.execute(text(base_query), params).mappings().all()
-
-                # if not rows:
-                #     logger.info(f"task_id:[{task.id}] No new data found since {last_sync_time_for_query}.")
-                #     self._update_task_status(config_session, task, status='idle', last_sync_time=current_sync_time)
-                #     return
-
-                # 1. 不要使用 .all()，而是获取结果迭代器
-                # 2. 使用 stream_results=True 启用服务器端游标，防止数据库连接因长时间处理而超时
-                # sqlalchemy < 2 版本
-                # result_stream = source_session.execution_options(stream_results=True).execute(text(base_query), params)
-                # sqlalchemy >= 2 版本
-                result_stream = source_session.connection().execution_options(stream_results=True).execute(
-                    text(base_query), params)
-
-                # 标记是否处理了任何行
+                # --- 使用 LIMIT/OFFSET 批处理替换 stream_results ---
+                BATCH_SIZE = 1000
+                offset = 0
                 has_processed_rows = False
                 count_new, count_updated, count_skipped = 0, 0, 0
 
-                # 6. 遍历新增/更新
-                # for row in rows:
-                # 直接遍历迭代器，这会从数据库中逐行（或按小批量）获取数据
-                for row in result_stream.mappings():
-                    has_processed_rows = True  # 标记已处理
-                    row_dict = dict(row)
-                    try:
-                        self._get_pk_fields_and_values(task, row_dict)
-                    except ValueError as e:
-                        log_sync_error(task_config=task, error=e,
-                                       extra_info=f"task_id:[{task.id}] Row missing PK. Skipping.",
-                                       payload=row_dict)
-                        continue
+                while True:
+                    paginated_query = f"{base_query} LIMIT :batch_size OFFSET :offset"
+                    query_params = {**params, "batch_size": BATCH_SIZE, "offset": offset}
 
-                    data_payload = self._transform_row_to_jdy(row_dict, payload_map)
-                    if not data_payload:
-                        log_sync_error(task_config=task,
-                                       payload=row_dict,
-                                       extra_info=f"task_id:[{task.id}] Row missing required fields. Skipping.")
-                        continue
+                    rows = source_session.execute(text(paginated_query), query_params).mappings().all()
 
-                    # --- 优化API调用 ---
-                    jdy_data_found = None
-                    jdy_id_from_row = row_dict.get('_id')
+                    if not rows:
+                        break  # 没有更多数据
 
-                    # 避免用户骚操作
-                    if jdy_id_from_row and jdy_id_from_row.strip() != '' and jdy_id_from_row.strip() != '-' and jdy_id_from_row.strip() != '_':
+                    if offset == 0 and rows:
+                        has_processed_rows = True
+
+                    # 6. 遍历新增/更新 (迭代内存中的当前批次)
+                    for row in rows:
+                        row_dict = dict(row)
                         try:
-                            jdy_data_response = data_api_query.get_single_data(task.app_id, task.entry_id,
-                                                                               jdy_id_from_row)
-                            jdy_data_found = jdy_data_response.get('data', {})
-                            if not jdy_data_found:
-                                logger.warning(
-                                    f"task_id:[{task.id}] _id {jdy_id_from_row} from row was not found in JDY. Will attempt PK search.")
+                            self._get_pk_fields_and_values(task, row_dict)
+                        except ValueError as e:
+                            log_sync_error(task_config=task, error=e,
+                                           extra_info=f"task_id:[{task.id}] Row missing PK. Skipping.",
+                                           payload=row_dict)
+                            continue
+
+                        data_payload = self._transform_row_to_jdy(row_dict, payload_map)
+                        if not data_payload:
+                            log_sync_error(task_config=task,
+                                           payload=row_dict,
+                                           extra_info=f"task_id:[{task.id}] Row missing required fields. Skipping.")
+                            continue
+
+                        # --- 优化API调用 ---
+                        jdy_data_found = None
+                        jdy_id_from_row = row_dict.get('_id')
+
+                        # 避免用户骚操作
+                        if jdy_id_from_row and jdy_id_from_row.strip() != '' and jdy_id_from_row.strip() != '-' and jdy_id_from_row.strip() != '_':
+                            try:
+                                jdy_data_response = data_api_query.get_single_data(task.app_id, task.entry_id,
+                                                                                   jdy_id_from_row)
+                                jdy_data_found = jdy_data_response.get('data', {})
+                                if not jdy_data_found:
+                                    logger.warning(
+                                        f"task_id:[{task.id}] _id {jdy_id_from_row} from row was not found in JDY. Will attempt PK search.")
+                                    jdy_data_found = None
+                            except Exception as fetch_err:
+                                log_sync_error(task_config=task, error=fetch_err,
+                                               extra_info=f"task_id:[{task.id}] Failed to fetch JDY data {jdy_id_from_row} (from row _id) for comparison. Will attempt PK search.")
                                 jdy_data_found = None
-                        except Exception as fetch_err:
-                            log_sync_error(task_config=task, error=fetch_err,
-                                           extra_info=f"task_id:[{task.id}] Failed to fetch JDY data {jdy_id_from_row} (from row _id) for comparison. Will attempt PK search.")
-                            jdy_data_found = None
 
-                    if not jdy_data_found:
-                        jdy_data_found = self._find_jdy_data_by_pk(
-                            task, row_dict,
-                            data_api_query, data_api_delete, alias_map
-                        )
+                        if not jdy_data_found:
+                            jdy_data_found = self._find_jdy_data_by_pk(
+                                task, row_dict,
+                                data_api_query, data_api_delete, alias_map
+                            )
 
-                    trans_id = str(uuid.uuid4())
+                        trans_id = str(uuid.uuid4())
 
-                    if jdy_data_found:
-                        # --- 数据比较逻辑 ---
+                        if jdy_data_found:
+                            # --- 数据比较逻辑 ---
 
-                        jdy_id = jdy_data_found.get('_id')
-                        t_data = jdy_data_found
+                            jdy_id = jdy_data_found.get('_id')
+                            t_data = jdy_data_found
 
-                        # 2. 比较
-                        payload_has_changes = False
+                            # 2. 比较
+                            payload_has_changes = False
 
-                        # 遍历 alias_map 的键 (mysql_col)
-                        for mysql_col in alias_map.keys():
-                            # 从 alias_map 获取元组
-                            alias_info = alias_map.get(mysql_col)
-                            if not alias_info:
-                                continue
+                            # 遍历 alias_map 的键 (mysql_col)
+                            for mysql_col in alias_map.keys():
+                                # 从 alias_map 获取元组
+                                alias_info = alias_map.get(mysql_col)
+                                if not alias_info:
+                                    continue
 
-                            jdy_alias, jdy_type = alias_info
+                                jdy_alias, jdy_type = alias_info
 
-                            # 简道云有该字段，但数据没有该字段
-                            if mysql_col not in row_dict:
-                                continue  # 源数据 (row_dict) 中没有此列 (例如视图或SQL过滤)
-                            # 数据库有该字段，但简道云没有该字段
-                            if jdy_alias not in t_data:
-                                # # 这是一个新字段 (在JDY中不存在), 视为变更
-                                # payload_has_changes = True
-                                # break
-                                continue
+                                # 简道云有该字段，但数据没有该字段
+                                if mysql_col not in row_dict:
+                                    continue  # 源数据 (row_dict) 中没有此列 (例如视图或SQL过滤)
+                                # 数据库有该字段，但简道云没有该字段
+                                if jdy_alias not in t_data:
+                                    # # 这是一个新字段 (在JDY中不存在), 视为变更
+                                    # payload_has_changes = True
+                                    # break
+                                    continue
 
-                            s_val = row_dict[mysql_col]
-                            t_val = t_data[jdy_alias]
+                                s_val = row_dict[mysql_col]
+                                t_val = t_data[jdy_alias]
 
-                            if self._is_value_different(s_val, t_val):
-                                payload_has_changes = True
+                                if self._is_value_different(s_val, t_val):
+                                    payload_has_changes = True
+                                    logger.debug(
+                                        f"task_id:[{task.id}] Change detected for {jdy_id} (Incremental). Field {jdy_alias}: DB='{s_val}' != JDY='{t_val}'")
+                                    break
+
+                            if not payload_has_changes:
                                 logger.debug(
-                                    f"task_id:[{task.id}] Change detected for {jdy_id} (Incremental). Field {jdy_alias}: DB='{s_val}' != JDY='{t_val}'")
-                                break
+                                    f"task_id:[{task.id}] Skipping update for {jdy_id} (Incremental), no changes found.")
+                                count_skipped += 1
+                                continue  # 跳到下一行, 不执行更新
 
-                        if not payload_has_changes:
+                            # 更新
                             logger.debug(
-                                f"task_id:[{task.id}] Skipping update for {jdy_id} (Incremental), no changes found.")
-                            count_skipped += 1
-                            continue  # 跳到下一行, 不执行更新
+                                f"task_id:[{task.id}] Changes found. Updating data with _id: {jdy_id} (Incremental).")
+                            update_response = data_api_update.update_single_data(
+                                task.app_id, task.entry_id, jdy_id,
+                                data_payload, transaction_id=trans_id
+                            )
+                            update_jdy_id = update_response.get('data', {}).get('_id')
 
-                        # 更新
-                        logger.debug(
-                            f"task_id:[{task.id}] Changes found. Updating data with _id: {jdy_id} (Incremental).")
-                        update_response = data_api_update.update_single_data(
-                            task.app_id, task.entry_id, jdy_id,
-                            data_payload, transaction_id=trans_id
-                        )
-                        update_jdy_id = update_response.get('data', {}).get('_id')
+                            if not update_jdy_id:
+                                log_sync_error(task_config=task,
+                                               payload=data_payload,
+                                               error=update_response,
+                                               extra_info=f"task_id:[{task.id}] Failed to update data.")
+                            else:
+                                count_updated += 1
+                                logger.debug(f"task_id:[{task.id}] Updated data with _id: {jdy_id}.")
 
-                        if not update_jdy_id:
-                            log_sync_error(task_config=task,
-                                           payload=data_payload,
-                                           error=update_response,
-                                           extra_info=f"task_id:[{task.id}] Failed to update data.")
                         else:
-                            count_updated += 1
-                            logger.debug(f"task_id:[{task.id}] Updated data with _id: {jdy_id}.")
+                            # 新增
+                            create_response = data_api_create.create_single_data(
+                                task.app_id, task.entry_id,
+                                data_payload, transaction_id=trans_id
+                            )
+                            new_jdy_id = create_response.get('data', {}).get('_id')
+                            if not new_jdy_id:
+                                log_sync_error(task_config=task,
+                                               payload=data_payload,
+                                               error=create_response,
+                                               extra_info=f"task_id:[{task.id}] Failed to create data.")
+                            else:
+                                count_new += 1
+                                logger.debug(f"task_id:[{task.id}] Created data with _id: {new_jdy_id}.")
+                                # 是否需要回写，有待商榷，实际可不用回写
+                                # # 传入 row_dict 以进行复合主键回写
+                                # self._writeback_id_to_source(source_session, task, new_jdy_id, row_dict)
 
-                    else:
-                        # 新增
-                        create_response = data_api_create.create_single_data(
-                            task.app_id, task.entry_id,
-                            data_payload, transaction_id=trans_id
-                        )
-                        new_jdy_id = create_response.get('data', {}).get('_id')
-                        if not new_jdy_id:
-                            log_sync_error(task_config=task,
-                                           payload=data_payload,
-                                           error=create_response,
-                                           extra_info=f"task_id:[{task.id}] Failed to create data.")
-                        else:
-                            count_new += 1
-                            logger.debug(f"task_id:[{task.id}] Created data with _id: {new_jdy_id}.")
-                            # 是否需要回写，有待商榷，实际可不用回写
-                            # # 传入 row_dict 以进行复合主键回写
-                            # self._writeback_id_to_source(source_session, task, new_jdy_id, row_dict)
+                    # 批处理循环的末尾
+                    offset += BATCH_SIZE
 
                 # 检查是否因为没有数据而退出循环
                 if not has_processed_rows:
