@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  jdy-data-sync-system:
+    image: jiandaoyundatasyncsystem:2.0.0
+    container_name: jiandaoyundatasyncsystem
+    env_file:
+      - .env
+    ports:
+      - "8848:8848"
+    restart: unless-stopped
+    depends_on:
+      - mysql
+
+  mysql:
+    image: mysql:8.0
+    container_name: mysql_db
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MYSQL_ROOT_PASSWORD: ${CONFIG_DB_PASSWORD}
+      MYSQL_DATABASE: ${CONFIG_DB_NAME}
+    ports:
+      - "33306:3306"
+    volumes:
+      # 持久化数据库数据
+      - mysql_data:/var/lib/mysql
+
+volumes:
+  # 声明 volume
+  mysql_data:
