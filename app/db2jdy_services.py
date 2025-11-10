@@ -976,7 +976,8 @@ class Db2JdySyncService:
                     jdy_data_found = None
                     jdy_id_from_row = row_dict.get('_id')
 
-                    if jdy_id_from_row:
+                    # 避免用户骚操作
+                    if jdy_id_from_row and jdy_id_from_row.strip() != '' and jdy_id_from_row.strip() != '-' and jdy_id_from_row.strip() != '_':
                         # 我们有 ID, 但仍然需要数据进行比较
                         try:
                             jdy_data_response = data_api_query.get_single_data(task.app_id, task.entry_id,
@@ -1436,7 +1437,8 @@ class Db2JdySyncService:
                     jdy_data_found = None
                     jdy_id_from_row = row_dict.get('_id')
 
-                    if jdy_id_from_row:
+                    # 避免用户骚操作
+                    if jdy_id_from_row and jdy_id_from_row.strip() != '' and jdy_id_from_row.strip() != '-' and jdy_id_from_row.strip() != '_':
                         try:
                             jdy_data_response = data_api_query.get_single_data(task.app_id, task.entry_id,
                                                                                jdy_id_from_row)
@@ -1823,7 +1825,8 @@ class Db2JdySyncService:
                                 jdy_data_found = None
                                 jdy_id_from_row = row['values'].get('_id')
 
-                                if jdy_id_from_row:
+                                # 避免用户骚操作
+                                if jdy_id_from_row and jdy_id_from_row.strip() != '' and jdy_id_from_row.strip() != '-' and jdy_id_from_row.strip() != '_':
                                     try:
                                         jdy_data_response = data_api_query.get_single_data(app_id, entry_id,
                                                                                            jdy_id_from_row)
@@ -1932,7 +1935,8 @@ class Db2JdySyncService:
                                 jdy_data_found = None
                                 jdy_id_from_row = row['after_values'].get('_id')
 
-                                if jdy_id_from_row:
+                                # 避免用户骚操作
+                                if jdy_id_from_row and jdy_id_from_row.strip() != '' and jdy_id_from_row.strip() != '-' and jdy_id_from_row.strip() != '_':
                                     try:
                                         jdy_data_response = data_api_query.get_single_data(app_id, entry_id,
                                                                                            jdy_id_from_row)
