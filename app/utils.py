@@ -34,7 +34,7 @@ def json_serializer(obj):
     2. 将它们转换为标准的UTC时间，并格式化为带 'Z' 的ISO 8601字符串。
     3. 将 Decimal 对象转换为 float 类型。
 
-    # 示例 2 (string 对象):
+    # 示例 1 (string 对象):
     #     - MySQL (s_val) = "2025-01-01 10:00:00"
     #     - 逻辑:
     #         1. 解析为 naive datetime
@@ -96,26 +96,29 @@ def json_serializer(obj):
     if isinstance(obj, datetime) or datetime_obj:
         dt_to_process = obj if isinstance(obj, datetime) else datetime_obj
 
-        # 2a. 检查是否是 Naive (转换时区)
+        # MySQL中的naive datetime是UTC+8，需要减去8小时
         if dt_to_process.tzinfo is None or dt_to_process.tzinfo.utcoffset(dt_to_process) is None:
-            # 设置 naive datetime 是 UTC 时间
-            aware_obj = dt_to_process.replace(tzinfo=timezone.utc)
+            # 减去8小时转换为UTC
+            utc_obj = dt_to_process - timedelta(hours=8)
+            # 设置为UTC时区
+            utc_obj = utc_obj.replace(tzinfo=timezone.utc)
         else:
-            # 特殊操作，当输入的 datetime UTC+8 格式日期时，直接强制转换时区为 UTC
-            aware_obj = dt_to_process.replace(tzinfo=timezone.utc)
+            # 减去8小时转换为UTC
+            utc_obj = dt_to_process - timedelta(hours=8)
+            # 如果已经有时区信息，直接转换为UTC
+            utc_obj = utc_obj.astimezone(timezone.utc)
 
-        # 确保转换为 UTC 时间
-        utc_obj = aware_obj.astimezone(timezone.utc)
-
-        # 2b. 格式化为带 'Z' 的 ISO 8601 格式
+        # 格式化为带 'Z' 的 ISO 8601 格式
         return utc_obj.isoformat().replace('+00:00', 'Z')
 
     # --- 3. 处理 date 对象 ---
     if isinstance(obj, date):
-        # (关键修正) 将 date 视为 UTC 当天的午夜
-        aware_obj = datetime.combine(obj, time_obj.min).replace(tzinfo=timezone.utc)
-        # 转换为 UTC 时间
-        utc_obj = aware_obj.astimezone(timezone.utc)
+        # 对于date对象，同样需要考虑时区偏移
+        # 将date视为UTC+8当天的午夜，然后减去8小时
+        utc8_midnight = datetime.combine(obj, time.min)
+        # 减去8小时转换为UTC
+        utc_time = utc8_midnight - timedelta(hours=8)
+        utc_obj = utc_time.replace(tzinfo=timezone.utc)
         # 格式化为带 'Z' 的 ISO 8601 格式
         return utc_obj.isoformat().replace('+00:00', 'Z')
 
