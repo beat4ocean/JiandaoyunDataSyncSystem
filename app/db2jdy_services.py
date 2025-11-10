@@ -1796,6 +1796,9 @@ class Db2JdySyncService:
                         current_task_state = check_session.query(SyncTask).get(task_id_safe)
                         if not current_task_state or not current_task_state.is_active:
                             logger.info(f"[{thread_name}] Task disabled. Stopping listener.")
+                            # 更新任务状态
+                            self._update_task_status(config_session, session_task, sync_status='idle',
+                                                     last_sync_time=datetime.now(TZ_UTC_8))
                             break  # 退出 'for binlog_event in stream:' 循环
                 except Exception as check_e:
                     # 如果无法检查数据库，这是一个严重问题，最好停止监听器
@@ -1832,7 +1835,7 @@ class Db2JdySyncService:
                 try:
                     # 在循环内部为 *每个事件* 创建短暂的会话
                     # 'task' 在这里是原始的游离对象, 我们只使用它来打开 get_dynamic_session
-                    with ConfigSession() as loop_session, get_dynamic_session(task) as source_session:
+                    with ConfigSession() as loop_session:
 
                         task_in_loop = loop_session.query(SyncTask).get(task_id_safe)
                         if not task_in_loop:  # 如果任务在两次检查之间被删除了
