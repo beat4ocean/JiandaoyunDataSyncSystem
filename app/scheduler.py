@@ -14,10 +14,10 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import joinedload
 
 from app.config import Config
+from app.db2jdy_services import Db2JdySyncService, FieldMappingService
 from app.jdy2db_services import Jdy2DbSyncService
 from app.jdy_api import DataApi
 from app.models import ConfigSession, SyncTask, Department
-from app.db2jdy_services import Db2JdySyncService, FieldMappingService
 from app.utils import log_sync_error, TZ_UTC_8
 
 # 配置日志
@@ -30,6 +30,9 @@ scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
 # 正在运行的 binlog 监听器
 running_binlog_listeners = set()
 
+# 正在运行的 (Cron/Interval) 调度任务
+ACTIVE_SCHEDULED_TASKS = set()
+
 
 # 用于 FULL_SYNC 和 INCREMENTAL 模式的包装器
 def run_db2jdy_task_wrapper(task_id: int):
@@ -39,74 +42,89 @@ def run_db2jdy_task_wrapper(task_id: int):
     thread_name = f"TaskRunner-{task_id}"
     current_thread().name = thread_name
 
-    sync_service = Db2JdySyncService()
+    # 1. (关键) 运行时并发检查 (内存缓存)
+    if task_id in ACTIVE_SCHEDULED_TASKS:
+        logger.info(f"[{thread_name}] task_id:[{task_id}] is already running in this process. Skipping this run.")
+        return
 
-    with (ConfigSession() as config_session):
-        task = None
-        try:
-            # 预加载 department 和 database
-            task = config_session.query(SyncTask).options(
-                joinedload(SyncTask.department).joinedload(Department.jdy_key_info),
-                joinedload(SyncTask.database)
-            ).filter(SyncTask.sync_type == 'db2jdy', SyncTask.id == task_id).first()
+    try:
+        # 2. 标记为正在运行 (在 try 内部, finally 中移除)
+        ACTIVE_SCHEDULED_TASKS.add(task_id)
+        logger.debug(f"[{thread_name}] task_id:[{task_id}] Added to active set.")
 
-            # 1. 检查任务是否有效
-            if not task:
-                logger.info(f"[{thread_name}] task_id:[{task_id}] not found. Removing job.")
-                try:
-                    scheduler.remove_job(f"task_{task_id}")
-                except JobLookupError:
-                    pass  # Job DNE
-                return
+        sync_service = Db2JdySyncService()
 
-            if not task.is_active:
-                logger.info(f"[{thread_name}] task_id:[{task_id}] is disabled. Skipping.")
-                return
+        with (ConfigSession() as config_session):
+            task = None
+            try:
+                # 预加载 department 和 database
+                task = config_session.query(SyncTask).options(
+                    joinedload(SyncTask.department).joinedload(Department.jdy_key_info),
+                    joinedload(SyncTask.database)
+                ).filter(SyncTask.sync_type == 'db2jdy', SyncTask.id == task_id).first()
 
-            # 检查 API Key
-            if not task.department or not task.department.jdy_key_info or not task.department.jdy_key_info.api_key:
-                logger.error(f"[{thread_name}] task_id:[{task_id}] missing API Key. Skipping.")
-                log_sync_error(task_config=task, extra_info="Task skipped: Missing API Key.")
-                return
+                # 1. 检查任务是否有效
+                if not task:
+                    logger.info(f"[{thread_name}] task_id:[{task_id}] not found. Removing job.")
+                    try:
+                        scheduler.remove_job(f"task_{task_id}")
+                    except JobLookupError:
+                        pass  # Job DNE
+                    return  # 退出, finally 会执行
 
-            # 检查源数据库配置
-            if not task.database:
-                logger.error(f"[{thread_name}] task_id:[{task_id}] missing Source Database config. Skipping.")
-                log_sync_error(task_config=task, extra_info="Task skipped: Missing Source Database config.")
-                return
+                if not task.is_active:
+                    logger.info(f"[{thread_name}] task_id:[{task_id}] is disabled. Skipping.")
+                    return  # 退出, finally 会执行
 
-            # 2. (关键) 并发检查: 如果任务已在运行, 则丢弃本次执行
-            if task.sync_status == 'running':
-                logger.info(f"[{thread_name}] task_id:[{task_id}] is already running. Skipping this run.")
-                return
+                # 检查 API Key
+                if not task.department or not task.department.jdy_key_info or not task.department.jdy_key_info.api_key:
+                    logger.error(f"[{thread_name}] task_id:[{task_id}] missing API Key. Skipping.")
+                    log_sync_error(task_config=task, extra_info="Task skipped: Missing API Key.")
+                    return  # 退出, finally 会执行
 
-            logger.info(f"[{thread_name}] Starting task: {task.task_name} (Mode: {task.sync_mode})")
+                # 检查源数据库配置
+                if not task.database:
+                    logger.error(f"[{thread_name}] task_id:[{task_id}] missing Source Database config. Skipping.")
+                    log_sync_error(task_config=task, extra_info="Task skipped: Missing Source Database config.")
+                    return  # 退出, finally 会执行
 
-            # # 3. 运行前准备 (添加 _id 等)
-            # sync_service._prepare_table(task)
+                # 2. (关键) 并发检查: (已移除对 DB 的检查)
+                # if task.sync_status == 'running':
+                #     logger.info(f"[{thread_name}] task_id:[{task_id}] is already running. Skipping this run.")
+                #     return
 
-            # 4. 执行任务
-            if task.sync_mode == 'FULL_SYNC':
-                sync_service.run_full_sync(config_session, task)
+                logger.info(f"[{thread_name}] Starting task: {task.task_name} (Mode: {task.sync_mode})")
 
-            elif task.sync_mode == 'INCREMENTAL':
-                sync_service.run_incremental(config_session, task)
+                # # 3. 运行前准备 (添加 _id 等)
+                # sync_service._prepare_table(task)
 
-        except OperationalError as e:
-            logger.error(f"[{thread_name}] DB connection error in task runner: {e}")
-            if task:  # 仅当 task 存在时记录
-                log_sync_error(task_config=task, error=e, extra_info="Task runner DB connection error.")
-        except Exception as e:
-            logger.error(f"[{thread_name}] Unknown error in task runner: {e}")
-            traceback.print_exc()
-            if task:  # 仅当 task 存在时记录
-                log_sync_error(task_config=task, error=e, extra_info="Task runner unknown error.")
-                # 确保状态被设置
-                try:
-                    task.sync_status = 'error'
-                    config_session.commit()
-                except:
-                    config_session.rollback()
+                # 4. 执行任务
+                if task.sync_mode == 'FULL_SYNC':
+                    sync_service.run_full_sync(config_session, task)
+
+                elif task.sync_mode == 'INCREMENTAL':
+                    sync_service.run_incremental(config_session, task)
+
+            except OperationalError as e:
+                logger.error(f"[{thread_name}] DB connection error in task runner: {e}")
+                if task:  # 仅当 task 存在时记录
+                    log_sync_error(task_config=task, error=e, extra_info="Task runner DB connection error.")
+            except Exception as e:
+                logger.error(f"[{thread_name}] Unknown error in task runner: {e}")
+                traceback.print_exc()
+                if task:  # 仅当 task 存在时记录
+                    log_sync_error(task_config=task, error=e, extra_info="Task runner unknown error.")
+                    # 确保状态被设置
+                    try:
+                        task.sync_status = 'error'
+                        config_session.commit()
+                    except:
+                        config_session.rollback()
+
+    finally:
+        # 3. 无论成功或失败, 都从运行时集合中移除
+        ACTIVE_SCHEDULED_TASKS.discard(task_id)
+        logger.debug(f"[{thread_name}] task_id:[{task_id}] finished. Removed from active set.")
 
 
 # --- jdy2db 任务的包装器 ---
@@ -119,88 +137,103 @@ def run_jdy2db_task_wrapper(task_id: int):
 
     logger.debug(f"[{thread_name}] Starting Jdy->DB daily full sync...")
 
-    with ConfigSession() as config_session:
-        task = None
-        try:
-            logger.debug(f"[Scheduler] task_id:[{task_id}] jdy2db: Running full sync...")
+    # 1. (关键) 运行时并发检查 (内存缓存)
+    if task_id in ACTIVE_SCHEDULED_TASKS:
+        logger.info(f"[{thread_name}] task_id:[{task_id}] is already running in this process. Skipping this run.")
+        return
 
-            # 预加载所有需要的关系
-            task = config_session.query(SyncTask).options(
-                joinedload(SyncTask.department).joinedload(Department.jdy_key_info),
-                joinedload(SyncTask.database)
-            ).filter(SyncTask.sync_type == 'jdy2db', SyncTask.id == task_id).first()
+    try:
+        # 2. 标记为正在运行
+        ACTIVE_SCHEDULED_TASKS.add(task_id)
+        logger.debug(f"[{thread_name}] task_id:[{task_id}] Added to active set.")
 
-            # 1. 检查任务是否有效
-            if not task:
-                logger.info(f"[{thread_name}] task_id:[{task_id}] not found. Removing job.")
-                try:
-                    scheduler.remove_job(f"task_{task_id}")
-                except JobLookupError:
-                    pass  # Job DNE
-                return
+        with ConfigSession() as config_session:
+            task = None
+            try:
+                logger.debug(f"[Scheduler] task_id:[{task_id}] jdy2db: Running full sync...")
 
-            if not task.is_active:
-                logger.info(f"[Scheduler] task_id:[{task_id}] is not active. Skipping.")
-                return
+                # 预加载所有需要的关系
+                task = config_session.query(SyncTask).options(
+                    joinedload(SyncTask.department).joinedload(Department.jdy_key_info),
+                    joinedload(SyncTask.database)
+                ).filter(SyncTask.sync_type == 'jdy2db', SyncTask.id == task_id).first()
 
-            # 检查 API Key
-            if not task.department or not task.department.jdy_key_info or not task.department.jdy_key_info.api_key:
-                logger.error(f"[{thread_name}] task_id:[{task_id}] missing API Key. Skipping.")
-                log_sync_error(task_config=task, extra_info="Task skipped: Missing API Key.")
-                return
+                # 1. 检查任务是否有效
+                if not task:
+                    logger.info(f"[{thread_name}] task_id:[{task_id}] not found. Removing job.")
+                    try:
+                        scheduler.remove_job(f"task_{task_id}")
+                    except JobLookupError:
+                        pass  # Job DNE
+                    return  # 退出, finally 会执行
 
-            # 检查源数据库配置
-            if not task.database:
-                logger.error(f"[{thread_name}] task_id:[{task_id}] missing Source Database config. Skipping.")
-                log_sync_error(task_config=task, extra_info="Task skipped: Missing Source Database config.")
-                return
+                if not task.is_active:
+                    logger.info(f"[Scheduler] task_id:[{task_id}] is not active. Skipping.")
+                    return  # 退出, finally 会执行
 
-            # 2. (关键) 并发检查: 如果任务已在运行, 则丢弃本次执行
-            if task.sync_status == 'running':
-                logger.info(f"[{thread_name}] task_id:[{task_id}] is already running. Skipping this run.")
-                return
+                # 检查 API Key
+                if not task.department or not task.department.jdy_key_info or not task.department.jdy_key_info.api_key:
+                    logger.error(f"[{thread_name}] task_id:[{task_id}] missing API Key. Skipping.")
+                    log_sync_error(task_config=task, extra_info="Task skipped: Missing API Key.")
+                    return  # 退出, finally 会执行
 
-            # [关键] 检查 app_id 和 entry_id 是否已填充
-            if not task.app_id or not task.entry_id:
-                logger.warning(
-                    f"[Scheduler] task_id:[{task_id}] has no app_id/entry_id. Skipping full sync. (Waiting for first webhook)")
-                return
+                # 检查源数据库配置
+                if not task.database:
+                    logger.error(f"[{thread_name}] task_id:[{task_id}] missing Source Database config. Skipping.")
+                    log_sync_error(task_config=task, extra_info="Task skipped: Missing Source Database config.")
+                    return  # 退出, finally 会执行
 
-            logger.info(f"[{thread_name}] Starting task: {task.task_name} (Mode: {task.daily_sync_type})")
+                # 2. (关键) 并发检查 (已移除对 DB 的检查)
+                # if task.sync_status == 'running':
+                #     logger.info(f"[{thread_name}] task_id:[{task_id}] is already running. Skipping this run.")
+                #     return
 
-            # 实例化 DataApi (用于数据查询)
-            api_client = DataApi(
-                api_key=task.department.jdy_key_info.api_key,
-                host=Config.JDY_API_BASE_URL,
-                qps=30
-            )
+                # [关键] 检查 app_id 和 entry_id 是否已填充
+                if not task.app_id or not task.entry_id:
+                    logger.warning(
+                        f"[Scheduler] task_id:[{task_id}] has no app_id/entry_id. Skipping full sync. (Waiting for first webhook)")
+                    return  # 退出, finally 会执行
 
-            # 不是首次同步
-            if not task.last_sync_time:
-                # 调用现有的全量同步逻辑
-                sync_service = Jdy2DbSyncService()  # 实例化
-                sync_service.sync_historical_data(task, api_client, delete_first=task.is_delete_first)
+                logger.info(f"[{thread_name}] Starting task: {task.task_name} (Mode: {task.daily_sync_type})")
 
-            # [关键] 如果同步类型是 ONCE，在成功后禁用任务 (或调度)
-            if task.daily_sync_type == 'ONCE':
-                logger.info(f"[Scheduler] task_id:[{task_id}] jdy2db: was set to ONCE. Disabling task.")
-                task.is_active = False  # 禁用任务
-                config_session.commit()
-                # 还需要从调度器中移除它
-                remove_task_from_scheduler(task_id)
+                # 实例化 DataApi (用于数据查询)
+                api_client = DataApi(
+                    api_key=task.department.jdy_key_info.api_key,
+                    host=Config.JDY_API_BASE_URL,
+                    qps=30
+                )
 
-        except Exception as e:
-            traceback.print_exc()
-            logger.error(f"[Scheduler] task_id:[{task_id}] jdy2db: Full sync failed: {e}", exc_info=True)
-            if task:  # 仅当 task 存在时记录
-                log_sync_error(task_config=task, error=e, extra_info="Full sync failed.")
-                # 确保状态被设置
-                try:
-                    task.sync_status = 'error'
+                # 不是首次同步
+                if not task.last_sync_time:
+                    # 调用现有的全量同步逻辑
+                    sync_service = Jdy2DbSyncService()  # 实例化
+                    sync_service.sync_historical_data(task, api_client, delete_first=task.is_delete_first)
+
+                # [关键] 如果同步类型是 ONCE，在成功后禁用任务 (或调度)
+                if task.daily_sync_type == 'ONCE':
+                    logger.info(f"[Scheduler] task_id:[{task_id}] jdy2db: was set to ONCE. Disabling task.")
+                    task.is_active = False  # 禁用任务
                     config_session.commit()
-                except Exception as e:
-                    config_session.rollback()
-                    logger.error(f"[{thread_name}] CRITICAL: Failed to set error status after crash: {e}")
+                    # 还需要从调度器中移除它
+                    remove_task_from_scheduler(task_id)
+
+            except Exception as e:
+                traceback.print_exc()
+                logger.error(f"[Scheduler] task_id:[{task_id}] jdy2db: Full sync failed: {e}", exc_info=True)
+                if task:  # 仅当 task 存在时记录
+                    log_sync_error(task_config=task, error=e, extra_info="Full sync failed.")
+                    # 确保状态被设置
+                    try:
+                        task.sync_status = 'error'
+                        config_session.commit()
+                    except Exception as e:
+                        config_session.rollback()
+                        logger.error(f"[{thread_name}] CRITICAL: Failed to set error status after crash: {e}")
+
+    finally:
+        # 3. 无论成功或失败, 都从运行时集合中移除
+        ACTIVE_SCHEDULED_TASKS.discard(task_id)
+        logger.debug(f"[{thread_name}] task_id:[{task_id}] finished. Removed from active set.")
 
 
 def run_binlog_listener_in_thread(task_id: int):
@@ -625,6 +658,24 @@ def start_scheduler(app: Flask):
     with app.app_context():
         logger.info("Starting APScheduler...")
         try:
+            # 启动时, 将所有 "running" 状态重置为 "error"
+            # 因为程序刚启动, 不可能有任务在运行
+            try:
+                with ConfigSession() as config_session:
+                    tasks_to_reset = config_session.query(SyncTask).filter(SyncTask.sync_status == 'running').all()
+                    if tasks_to_reset:
+                        logger.info(f"Resetting {len(tasks_to_reset)} 'running' tasks to 'error' state on startup.")
+                        for task in tasks_to_reset:
+                            task.sync_status = 'error'
+                            # 记录错误, 方便排查
+                            log_sync_error(task_config=task,
+                                           extra_info="System restart: Task was stuck in 'running' state.")
+                        config_session.commit()
+            except Exception as e:
+                logger.error(f"Failed to reset 'running' tasks on startup: {e}")
+                # 非关键错误, 继续启动
+                config_session.rollback()
+
             # 1. 添加 BINLOG 监听器管理器
             scheduler.add_job(
                 check_and_start_new_binlog_listeners,
