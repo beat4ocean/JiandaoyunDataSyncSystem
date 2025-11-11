@@ -2,17 +2,17 @@
 import logging
 from contextlib import contextmanager
 from datetime import timedelta, timezone
-from typing import Any, Generator
+from typing import Any, Generator, Dict
 from urllib.parse import quote_plus
 
-from sqlalchemy import MetaData, Table
+from sqlalchemy import MetaData, Table, text
 from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError, DBAPIError
 from sqlalchemy.orm import sessionmaker
 
 from app import ConfigSession
 from app.config import DB_CONNECT_ARGS
 from app.models import Database, SyncTask
-from app.utils import get_db_driver
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -58,18 +58,22 @@ def get_dynamic_session(task: SyncTask) -> Generator[Any, Any, None]:
             f"task_id:[{task.id}] Creating new dynamic engine for source DB: {db_info.db_show_name} (ID: {db_id})")
 
         # --- 根据 db_type 构建 URL ---
-        driver = get_db_driver(db_info.db_type)
-        if not driver:
-            raise ValueError(f"Unsupported database type: {db_info.db_type}")
-
-        # 构建连接字符串
-        db_url = (
-            f"{driver}://{db_info.db_user}:{quote_plus(db_info.db_password)}@"
-            f"{db_info.db_host}:{db_info.db_port}/{db_info.db_name}"
-        )
-
-        if db_info.db_args:
-            db_url += f"?{db_info.db_args}"
+        try:
+            db_url = get_connection_url(
+                db_type=db_info.db_type,
+                db_host=db_info.db_host,
+                db_port=db_info.db_port,
+                db_name=db_info.db_name,
+                db_user=db_info.db_user,
+                db_password=db_info.db_password,
+                db_args=db_info.db_args
+            )
+        except ValueError as e:
+            logger.error(f"task_id:[{task.id}] Failed to build connection URL: {e}")
+            raise e
+        except ImportError as e:
+            logger.error(f"task_id:[{task.id}] Missing database driver: {e}")
+            raise e
 
         engine = create_engine(db_url, pool_recycle=3600, connect_args=DB_CONNECT_ARGS)
         session_local = sessionmaker(bind=engine)
@@ -108,3 +112,168 @@ def get_dynamic_metadata(engine) -> MetaData:
     if engine_url not in dynamic_metadata_cache:
         dynamic_metadata_cache[engine_url] = MetaData()
     return dynamic_metadata_cache[engine_url]
+
+
+# --- “测试连接”功能函数 ---
+def test_db_connection(db_info: Dict[str, Any]) -> (bool, str):
+    """
+    尝试连接到数据库并执行一个简单查询。
+
+    :param db_info: 包含连接参数的字典 (来自前端)
+    :return: (bool: 是否成功, str: 消息)
+    """
+    try:
+        db_type = db_info.get('db_type')
+        db_user = db_info.get('db_user')
+        db_password = db_info.get('db_password', '')  # 密码可能为空
+        db_host = db_info.get('db_host')
+        db_port = db_info.get('db_port')
+        db_name = db_info.get('db_name')
+        db_args = db_info.get('db_args', '')
+
+        if not all([db_type, db_user, db_host, db_port, db_name]):
+            return False, "数据库类型、主机、端口、库名和用户名均不能为空"
+
+        # 确保 db_port 是 int
+        try:
+            db_port = int(db_port)
+        except (ValueError, TypeError):
+            return False, f"端口必须是数字: {db_port}"
+
+        # --- 1. 构建连接 URL (使用 get_connection_url) ---
+        db_url = get_connection_url(
+            db_type=db_type,
+            db_host=db_host,
+            db_port=db_port,
+            db_name=db_name,
+            db_user=db_user,
+            db_password=db_password,  # 传入原始密码
+            db_args=db_args
+        )
+
+        # --- 2. 尝试连接 ---
+        # 增加 Oracle 的连接参数
+        connect_args = {'connect_timeout': 5}
+        # if db_type == 'Oracle':
+        #     connect_args['encoding'] = 'UTF-8' # oracledb 驱动通常自动处理
+
+        engine = create_engine(db_url, connect_args=connect_args, pool_recycle=3600)
+
+        dialect_name = engine.dialect.name.lower()
+
+        with engine.connect() as connection:
+            # 执行一个简单的查询
+            query = "SELECT 1"
+            # Oracle 需要 `FROM dual`
+            if dialect_name == 'oracle':
+                query = "SELECT 1 FROM dual"
+
+            connection.execute(text(query))
+
+        return True, "数据库连接成功！"
+
+    except (OperationalError, DBAPIError) as e:
+        logger.warning(f"数据库连接测试失败: {e}")
+        # 返回一个更友好的错误信息
+        # 提取更清晰的错误
+        error_msg = getattr(e, 'orig', e)
+        # 适配不同驱动的错误提取
+        if hasattr(error_msg, 'args'):
+            # (code, message) or (message,)
+            error_msg_str = error_msg.args[0]
+            if isinstance(error_msg_str, (bytes)):
+                try:
+                    error_msg_str = error_msg_str.decode('utf-8')
+                except:
+                    error_msg_str = str(error_msg.args)
+            else:
+                error_msg_str = str(error_msg.args)
+        else:
+            error_msg_str = str(error_msg)
+
+        error_msg_str = error_msg_str.split('\n')[0]
+        return False, f"连接失败: {error_msg_str}"
+
+    except ImportError as e:
+        logger.error(f"Database driver not installed: {e}")
+        # 提示用户安装
+        driver_name = str(e).split("'")[-2]  # e.g. 'pymysql'
+        install_cmd = ""
+        if driver_name == 'pymysql':
+            install_cmd = " (请在 requirements.txt 中添加 'pymysql')"
+        elif driver_name == 'psycopg2':
+            install_cmd = " (请在 requirements.txt 中添加 'psycopg2-binary')"
+        elif driver_name == 'oracledb':
+            install_cmd = " (请在 requirements.txt 中添加 'oracledb')"
+        elif driver_name == 'cx_Oracle':
+            install_cmd = " (请在 requirements.txt 中添加 'cx_Oracle')"
+        return False, f"连接失败: 缺少数据库驱动 {e}。{install_cmd}"
+    except Exception as e:
+        logger.error(f"Unknown error occurred during database connection test: {e}")
+        return False, f"发生未知错误: {e}"
+
+
+# 获取数据库连接字符串
+def get_connection_url(db_type, db_host, db_port, db_name, db_user, db_password, db_args):
+    """
+    根据 db_type 动态构建 SQLAlchemy 连接 URL。
+    """
+    if not db_type or not db_type.strip():
+        raise ValueError(f"Unsupported database type: {db_type}")
+
+    # 密码需要 URL 编码
+    safe_password = quote_plus(db_password)
+
+    # 统一使用 get_db_driver 获取驱动
+    driver_dialect = get_db_driver(db_type)
+    if not driver_dialect:
+        raise ValueError(f"Unsupported database type: {db_type}")
+
+    # 构建 URL
+    db_url = f"{driver_dialect}://{db_user}:{safe_password}@{db_host}:{db_port}/{db_name}"
+
+    # 特殊处理 Oracle 的 DSN 模式 (如果 db_name 包含 /)
+    # oracledb 驱动支持 easy connect (host:port/service_name)
+    # cx_Oracle 可能需要 DSN
+    if driver_dialect.startswith('oracle') and '/' in db_name:
+        # 假设 db_name 可能是 service_name, Oracle 驱动更喜欢这种格式
+        # oracledb 支持 host:port/service_name
+        db_url = f"{driver_dialect}://{db_user}:{safe_password}@{db_host}:{db_port}/{db_name}"
+
+    # cx_Oracle DSN (如果需要)
+    # if driver_dialect == 'oracle+cx_oracle':
+    #     dsn = f"(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST={db_host})(PORT={db_port}))(CONNECT_DATA=(SERVICE_NAME={db_name})))"
+    #     db_url = f"oracle+cx_oracle://{db_user}:{safe_password}@{dsn}"
+
+    if db_args:
+        db_url += f"?{db_args}"
+
+    return db_url
+
+
+# 获取数据库驱动
+def get_db_driver(db_type: str) -> str:
+    """
+    将用户友好的 db_type 映射到 SQLAlchemy 驱动字符串。
+    """
+    if not db_type:
+        return None
+
+    db_type_upper = db_type.upper()
+
+    # 映射字典
+    # 使用 requirements.txt 中指定的驱动
+    driver_map = {
+        'STARROCKS': 'mysql+pymysql',
+        'MYSQL': 'mysql+pymysql',
+        'POSTGRESQL': 'postgresql+psycopg2',
+        'ORACLE': 'oracle+oracledb',  # 优先使用 oracledb
+        # 'ORACLE': 'oracle+cx_oracle', # 如果 oracledb 有问题，切换到 cx_oracle
+    }
+
+    # 允许用户输入 'MySQL' 或 'mysql+pymysql'
+    if '+' in db_type:
+        # 假设用户输入了完整的驱动
+        return db_type.lower()
+
+    return driver_map.get(db_type_upper)

@@ -11,13 +11,11 @@ from datetime import datetime
 from datetime import time as time_obj
 from decimal import Decimal
 from functools import wraps
-from typing import Dict, Any
-from urllib.parse import quote_plus
 
 import requests
 from pypinyin import pinyin, Style
-from sqlalchemy import create_engine, text
-from sqlalchemy.exc import OperationalError, DBAPIError
+from requests import RequestException
+from sqlalchemy.exc import OperationalError
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -176,7 +174,7 @@ def json_serializer(obj):
 
 
 # --- 失败重试装饰器 ---
-def retry(max_retries=3, delay=5, backoff=2, exceptions=(OperationalError, requests.exceptions.RequestException)):
+def retry(max_retries=3, delay=5, backoff=2, exceptions=(OperationalError, RequestException)):
     """
     一个装饰器，用于在函数引发特定异常时进行重试。
     :param max_retries: 最大重试次数。
@@ -415,95 +413,6 @@ def convert_to_pinyin(name: str) -> str | None:
         name = '_' + name
 
     return name
-
-
-# 获取数据库连接字符串
-def get_connection_url(db_type, db_host, db_port, db_name, db_user, db_password, db_args):
-    if not db_type or not db_type.strip():
-        raise ValueError(f"Unsupported database type: {db_type}")
-
-    elif db_type.upper() == 'MYSQL' or db_type.upper() == 'MYSQL+PYMYSQL':
-        db_url = f"mysql+pymysql://{db_user}:{quote_plus(db_password)}@{db_host}:{db_port}/{db_name}"
-        if db_args:
-            db_url += f"?{db_args}"
-    elif db_type.upper() == 'SQL SERVER' or db_type.upper() == 'MSSQL+PYMSSQL':
-        db_url = f"mssql+pymssql://{db_user}:{quote_plus(db_password)}@{db_host}:{db_port}/{db_name}"
-        if db_args:
-            db_url += f"?{db_args}"
-    elif db_type.upper() == 'POSTGRESQL' or db_type.upper() == 'POSTGRESQL+PSYCOPG2':
-        db_url = f"postgresql+psycopg2://{db_user}:{quote_plus(db_password)}@{db_host}:{db_port}/{db_name}"
-        if db_args:
-            db_url += f"?{db_args}"
-    elif db_type.upper() == 'ORACLE' or db_type.upper() == 'ORACLE+CX_ORACLE':
-        db_url = f"oracle+cx_oracle://{db_user}:{quote_plus(db_password)}@{db_host}:{db_port}/{db_name}"
-        if db_args:
-            db_url += f"?{db_args}"
-    else:
-        raise ValueError(f"Unsupported database type: {db_type}")
-
-    return db_url
-
-
-# 获取数据库驱动
-def get_db_driver(db_type: str) -> str:
-    driver_map = {
-        'MySQL': 'mysql+pymysql',
-        'PostgreSQL': 'postgresql+psycopg2',
-        'SQL Server': '"mssql+pymssql',
-        'Oracle': 'oracle+cx_oracle',
-    }
-
-    return driver_map.get(db_type)
-
-
-# --- “测试连接”功能函数 ---
-def test_db_connection(db_info: Dict[str, Any]) -> (bool, str):
-    """
-    尝试连接到数据库并执行一个简单查询。
-
-    :param db_info: 包含连接参数的字典 (来自前端)
-    :return: (bool: 是否成功, str: 消息)
-    """
-    try:
-        db_type = db_info.get('db_type')
-        db_user = db_info.get('db_user')
-        db_password = db_info.get('db_password', '')  # 密码可能为空
-        db_host = db_info.get('db_host')
-        db_port = db_info.get('db_port')
-        db_name = db_info.get('db_name')
-        db_args = db_info.get('db_args', '')
-
-        if not all([db_type, db_user, db_host, db_port, db_name]):
-            return False, "数据库类型、主机、端口、库名和用户名均不能为空"
-
-        # --- 1. 映射数据库类型到 SQLAlchemy 驱动 ---
-        driver = get_db_driver(db_type)
-        if not driver:
-            return False, ValueError(f"Unsupported database type: {db_type}")
-
-        # --- 2. 构建连接 URL ---
-        db_url = get_connection_url(db_type, db_host, db_port, db_name, db_user, db_password, db_args)
-
-        # --- 3. 尝试连接 ---
-        engine = create_engine(db_url, connect_args={'connect_timeout': 5}, pool_recycle=3600)
-
-        with engine.connect() as connection:
-            # 执行一个简单的查询
-            connection.execute(text("SELECT 1"))
-
-        return True, "数据库连接成功！"
-
-    except (OperationalError, DBAPIError) as e:
-        logger.warning(f"数据库连接测试失败: {e}")
-        # 返回一个更友好的错误信息
-        error_msg = str(e).split('\n')[0]
-        return False, f"连接失败: {error_msg}"
-    except ImportError as e:
-        logger.error(f"Database driver not installed: {e}")
-        return False, f"连接失败: 缺少数据库驱动 {e}。 (例如: 'mysql' 需要 'pymysql')"
-    except Exception as e:
-        logger.error(f"Unknown error occurred during database connection test: {e}")
-        return False, f"发生未知错误: {e}"
 
 
 # --- Webhook 签名验证 ---

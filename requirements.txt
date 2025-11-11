@@ -15,3 +15,6 @@ Flask-JWT-Extended>=4.0 # For authentication tokens
 Flask-Cors>=3.0 # For Cross-Origin Resource Sharing
 
 pypinyin
+
+psycopg2-binary # PostgreSQL 驱动
+oracledb # Oracle 驱动

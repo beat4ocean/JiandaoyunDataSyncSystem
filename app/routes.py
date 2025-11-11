@@ -8,17 +8,17 @@ from urllib.parse import quote
 
 from flask import Blueprint, jsonify, request, g
 from flask_jwt_extended import jwt_required, current_user
-from passlib.hash import pbkdf2_sha256 as sha256
 from sqlalchemy import select, desc
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
 from app.config import Config
+from app.database import test_db_connection
 from app.jdy2db_services import Jdy2DbSyncService
 from app.jdy_api import FormApi
 from app.models import (JdyKeyInfo, SyncTask, SyncErrLog, FormFieldMapping, Department, Database, ConfigSession, User)
 from app.scheduler import add_or_update_task_in_scheduler, remove_task_from_scheduler
-from app.utils import log_sync_error, validate_signature, test_db_connection
+from app.utils import log_sync_error, validate_signature
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

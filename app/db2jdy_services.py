@@ -9,7 +9,6 @@ from decimal import Decimal, InvalidOperation
 from threading import current_thread
 from typing import Tuple, List, Any
 
-import requests
 from pymysqlreplication import BinLogStreamReader
 from pymysqlreplication.event import HeartbeatLogEvent
 from pymysqlreplication.row_event import (
@@ -17,6 +16,7 @@ from pymysqlreplication.row_event import (
     UpdateRowsEvent,
     DeleteRowsEvent,
 )
+from requests import RequestException, HTTPError
 from sqlalchemy import text, inspect
 from sqlalchemy.exc import OperationalError, IntegrityError, NoSuchTableError
 from sqlalchemy.orm import Session, joinedload
@@ -201,7 +201,7 @@ class FieldMappingService:
             config_session.commit()
             logger.info(f"task_id:[{task.id}] Successfully updated {len(new_mappings)} field mappings.")
 
-        except (requests.exceptions.RequestException, requests.exceptions.HTTPError) as e:
+        except (RequestException, HTTPError) as e:
             config_session.rollback()
             log_sync_error(
                 task_config=task,
@@ -237,6 +237,8 @@ class Db2JdySyncService:
         # 动态获取引擎和会话
         try:
             dynamic_engine = get_dynamic_engine(task)
+            dialect_name = dynamic_engine.dialect.name
+
             with get_dynamic_session(task) as source_conn:  # 使用 connect() 行为
 
                 # db_name 来自 task
@@ -250,14 +252,35 @@ class Db2JdySyncService:
                     return
 
                 # 2. 检查是否为物理表 (BASE TABLE)
-                table_type_query = text(
-                    "SELECT table_type FROM information_schema.tables "
-                    "WHERE table_schema = :db_name AND table_name = :table_name"
-                )
-                result = source_conn.execute(table_type_query,
-                                             {"db_name": db_name, "table_name": task.table_name}).fetchone()
+                table_type = None
 
-                table_type = result[0] if result else None
+                if dialect_name in ('mysql', 'starrocks', 'postgresql'):
+                    table_type_query = text(
+                        "SELECT table_type FROM information_schema.tables "
+                        "WHERE table_schema = :db_name AND table_name = :table_name"
+                    )
+                    result = source_conn.execute(table_type_query,
+                                                 {"db_name": db_name, "table_name": task.table_name}).fetchone()
+                    table_type = result[0] if result else None
+
+                elif dialect_name == 'oracle':
+                    # Oracle 查询 (注意：Oracle 模式和表名通常大写)
+                    # 尝试查询 ALL_TABLES, 然后 ALL_VIEWS
+                    table_type_query_table = text(
+                        "SELECT 'BASE TABLE' FROM all_tables "
+                        "WHERE owner = :db_name AND table_name = :table_name"
+                    )
+                    table_type_query_view = text(
+                        "SELECT 'VIEW' FROM all_views "
+                        "WHERE owner = :db_name AND view_name = :table_name"
+                    )
+                    # Oracle 的 "db_name" 对应 "owner" (schema), 且通常是大写的
+                    params = {"db_name": db_name.upper(), "table_name": task.table_name.upper()}
+
+                    if source_conn.execute(table_type_query_table, params).fetchone():
+                        table_type = 'BASE TABLE'
+                    elif source_conn.execute(table_type_query_view, params).fetchone():
+                        table_type = 'VIEW'
 
                 if table_type == 'VIEW':
                     logger.info(f"task_id:[{task.id}] Source is a VIEW. Skipping _id column check.")
@@ -270,15 +293,39 @@ class Db2JdySyncService:
 
                 # 3. 检查 `_id` 列是否存在
                 columns = [col['name'] for col in inspector.get_columns(task.table_name)]
-                if '_id' not in columns:
+                # Oracle/PG 返回小写列名, MySQL 可能返回大写或小写
+                # 统一转为小写比较
+                columns_lower = [c.lower() for c in columns]
+
+                if '_id' not in columns_lower:
                     logger.info(f"task_id:[{task.id}] Adding `_id` column to table '{task.table_name}'...")
                     try:
-                        # 提交在会话级别处理
-                        source_conn.execute(
-                            text(f"ALTER TABLE `{task.table_name}` ADD COLUMN `_id` VARCHAR(50) NULL DEFAULT NULL"))
-                        source_conn.execute(text(f"ALTER TABLE `{task.table_name}` ADD INDEX `idx__id` (`_id`)"))
+                        # --- DDL 适配 ---
+                        if dialect_name in ('mysql', 'starrocks'):
+                            alter_sql = f'ALTER TABLE `{task.table_name}` ADD COLUMN `_id` VARCHAR(50) NULL DEFAULT NULL'
+                            index_sql = f'ALTER TABLE `{task.table_name}` ADD INDEX `idx__id` (`_id`)'
+                        elif dialect_name == 'postgresql':
+                            alter_sql = f'ALTER TABLE "{task.table_name}" ADD COLUMN "_id" VARCHAR(50) NULL'
+                            index_sql = f'CREATE INDEX "idx__id" ON "{task.table_name}" ("_id")'
+                        elif dialect_name == 'oracle':
+                            alter_sql = f'ALTER TABLE "{task.table_name}" ADD ("_id" VARCHAR2(50) NULL)'
+                            index_sql = f'CREATE INDEX "idx__id" ON "{task.table_name}" ("_id")'  # 显式创建索引
+                        else:
+                            # Fallback for unknown, but might fail
+                            logger.warning(
+                                f"task_id:[{task.id}] Unknown dialect {dialect_name}, using generic DDL for _id column.")
+                            alter_sql = f'ALTER TABLE "{task.table_name}" ADD COLUMN "_id" VARCHAR(50) NULL'
+                            index_sql = f'CREATE INDEX "idx__id" ON "{task.table_name}" ("_id")'
+
+                        if alter_sql:
+                            source_conn.execute(text(alter_sql))
+                        if index_sql:
+                            source_conn.execute(text(index_sql))
+
                         source_conn.commit()
                         logger.info(f"task_id:[{task.id}] Successfully added `_id` column and index.")
+
+
                     except Exception as alter_e:
                         source_conn.rollback()
                         log_sync_error(task_config=task, error=alter_e,
@@ -305,24 +352,33 @@ class Db2JdySyncService:
         try:
             dynamic_engine = get_dynamic_engine(task)
             db_name = task.database.db_name
+            dialect_name = dynamic_engine.dialect.name
 
             inspector = inspect(dynamic_engine)
 
             if not inspector.has_table(task.table_name):
                 raise ValueError(f"Source table {task.table_name} does not exist.")
 
-            table_type_query = text(
-                "SELECT table_type FROM information_schema.tables "
-                "WHERE table_schema = :db_name AND table_name = :table_name"
-            )
+            is_view = False
             with dynamic_engine.connect() as conn:  # 使用 engine.connect
-                result = conn.execute(table_type_query,
-                                      {"db_name": db_name, "table_name": task.table_name}).fetchone()
 
-            is_view = (result and result[0] == 'VIEW')
+                if dialect_name in ('mysql', 'starrocks', 'postgresql'):
+                    table_type_query = text(
+                        "SELECT table_type FROM information_schema.tables "
+                        "WHERE table_schema = :db_name AND table_name = :table_name"
+                    )
+                    result = conn.execute(table_type_query,
+                                          {"db_name": db_name, "table_name": task.table_name}).fetchone()
+                    is_view = (result and result[0] == 'VIEW')
 
-            # (移除) 缓存
-            # self._view_status_cache[cache_key] = is_view
+                elif dialect_name == 'oracle':
+                    table_type_query_view = text(
+                        "SELECT 1 FROM all_views "
+                        "WHERE owner = :db_name AND view_name = :table_name"
+                    )
+                    # Oracle 的 "db_name" 对应 "owner" (schema), 且通常是大写的
+                    params = {"db_name": db_name.upper(), "table_name": task.table_name.upper()}
+                    is_view = conn.execute(table_type_query_view, params).fetchone() is not None
 
             if is_view:
                 logger.info(f"task_id:[{task.id}] Source table {task.table_name} is a VIEW.")
@@ -466,37 +522,49 @@ class Db2JdySyncService:
         """
         将数据库行 (dict) 转换为简道云 API data 负载
         """
+        # payload_map 结构: {'db_col_name': 'jdy_widget_alias'}
+        # 无论 payload_map 的键 (db_col_name) 是 'UserName' 还是 'username',
+        payload_map_lower = {k.lower(): v for k, v in payload_map.items()}
+
         data_payload = {}
-        for col_name, value in row.items():
-            if col_name in payload_map:
-                widget_name = payload_map[col_name]
+        for col_name, value in row.items():  # col_name 可能来自 Oracle (e.g., 'USERNAME')
 
-                processed_value = value
+            # --- 适配大小写不敏感的键 (如 Oracle) ---
+            col_name_lower = col_name.lower()  # 'username'
 
-                # 1. 尝试解析是否为 JSON 字符串 (用于子表单, 地址, 成员等)
-                if isinstance(value, str) \
-                        and value.strip().startswith(('{', '[')) and value.strip().endswith(('}', ']')):
+            # 统一使用小写 map 进行 get() 查找
+            widget_name = payload_map_lower.get(col_name_lower)
+
+            # 如果在小写映射中找不到，说明此列不需要同步
+            if not widget_name:
+                continue  # 跳过此列
+
+            processed_value = value
+
+            # 1. 尝试解析是否为 JSON 字符串 (用于子表单, 地址, 成员等)
+            if isinstance(value, str) \
+                    and value.strip().startswith(('{', '[')) and value.strip().endswith(('}', ']')):
+                try:
+                    processed_value = json.loads(value)
+                except json.JSONDecodeError:
+                    # 如果解析JSON失败 (e.g., "[1,2,3"), 它是一个普通字符串
                     try:
-                        processed_value = json.loads(value)
-                    except json.JSONDecodeError:
-                        # 如果解析JSON失败 (e.g., "[1,2,3"), 它是一个普通字符串
-                        try:
-                            processed_value = json_serializer(value)
-                        except TypeError:
-                            processed_value = str(value)
-
-                # 2. 序列化所有其他类型 (Decimals, AND Date Strings)
-                else:
-                    try:
-                        # 错误写法，无法正确解析字符串str格式的时间
-                        # processed_value = json.loads(json.dumps(processed_value, default=json_serializer))
-                        # 移除 json.dumps/loads，直接调用 json_serializer
-                        processed_value = json_serializer(processed_value)
+                        processed_value = json_serializer(value)
                     except TypeError:
-                        # (如果 serializer 不支持该类型, e.g., list/dict, 回退)
                         processed_value = str(value)
 
-                data_payload[widget_name] = {"value": processed_value}
+            # 2. 序列化所有其他类型 (Decimals, AND Date Strings)
+            else:
+                try:
+                    # 错误写法，无法正确解析字符串str格式的时间
+                    # processed_value = json.loads(json.dumps(processed_value, default=json_serializer))
+                    # 移除 json.dumps/loads，直接调用 json_serializer
+                    processed_value = json_serializer(processed_value)
+                except TypeError:
+                    # (如果 serializer 不支持该类型, e.g., list/dict, 回退)
+                    processed_value = str(value)
+
+            data_payload[widget_name] = {"value": processed_value}
 
         return data_payload
 
@@ -511,20 +579,24 @@ class Db2JdySyncService:
         pk_fields = [pk.strip() for pk in task.business_keys.split(',') if pk and pk.strip()]
         pk_values = []
 
+        # --- 适配大小写不敏感的 row key (如 Oracle) ---
+        row_lower = {k.lower(): v for k, v in row.items()}
+
         for field in pk_fields:
-            if field not in row:
+            field_lower = field.lower()
+
+            if field_lower not in row_lower:
                 raise ValueError(f"task_id:[{task.id}] Composite PK field '{field}' not found in row data.")
-            # 修复 TypeError: Object of type date is not JSON serializable bug
-            # pk_values.append(row[field])
-            # 错误写法，无法正确解析字符串str格式的时间
-            # row_value = json.loads(json.dumps(row[field], default=json_serializer))
+
+            row_value_raw = row_lower[field_lower]
+
             try:
                 # 直接调用 serializer，它会正确处理 datetime 对象、
                 # date 字符串 (转UTC)、Decimal 和普通字符串
-                row_value = json_serializer(row[field])
+                row_value = json_serializer(row_value_raw)
             except TypeError:
                 # 如果 serializer 无法处理 (例如一个 list 或 dict)，则回退
-                row_value = str(row[field])
+                row_value = str(row_value_raw)
 
             pk_values.append(row_value)
 
@@ -543,11 +615,14 @@ class Db2JdySyncService:
         通过主键 (PK) 在简道云中查找对应的 *data*
         """
 
+        alias_map_lower = {k.lower(): v for k, v in alias_map.items()}
+
         filter_payload = {}
         log_pk_str = ""
 
         try:
             # 1. 获取复合主键字段和值
+            # pk_fields 可能包含 'UserName' 或 'username'
             pk_fields, pk_values = self._get_pk_fields_and_values(task, row_dict)
 
             filter_conditions = []
@@ -555,11 +630,20 @@ class Db2JdySyncService:
 
             # 2. 构建复合查询
             for i, field_name in enumerate(pk_fields):
-                if field_name not in alias_map:
+
+                # 统一使用小写进行比较
+                field_name_lower = field_name.lower()
+
+                # 使用小写版本进行查找
+                if field_name_lower not in alias_map_lower:
+                    # 错误消息中使用原始 field_name 以便排查
                     raise ValueError(f"task_id:[{task.id}] PK field '{field_name}' not in alias map.")
 
-                jdy_pk_field, jdy_pk_type = alias_map[field_name]
+                # 使用小写键获取 Jdy 别名和类型
+                jdy_pk_field, jdy_pk_type = alias_map_lower[field_name_lower]
                 pk_value = pk_values[i]
+
+                # 日志中仍然使用原始 field_name
                 log_pk_values[field_name] = pk_value
 
                 # 字符串转换为int
@@ -569,6 +653,8 @@ class Db2JdySyncService:
                     except Exception as e:
                         logger.error(
                             f"task_id:[{task.id}] PK field '{field_name}' cannot be converted to int: {pk_value}")
+                        log_sync_error(task_config=task, error=e,
+                                       extra_info=f"task_id:[{task.id}] PK field '{field_name}' cannot be converted to int: {pk_value}.")
 
                 filter_conditions.append({
                     "field": jdy_pk_field,
@@ -651,41 +737,84 @@ class Db2JdySyncService:
             row_dict: dict  # 传入整行数据
     ):
         """
-        将简道云 _id 回写到源数据库
+        将简道云 _id 回写到源数据库。
+        对于 StarRocks，使用 INSERT 语句（适用于主键模型更新）。
+        对于其他数据库，使用 UPDATE 语句。
         """
         if self._is_view(task):
             # logger.info(f"task_id:[{task.id}] Skipping _id writeback for VIEW.")
             return  # 视图不能回写
 
+        # --- DDL 获取方言和引号 ---
+        dialect_name = source_session.bind.dialect.name
+        quote_char = '`' if dialect_name in ('mysql', 'starrocks') else '"'
+
+        log_pk_values = {}
+
         try:
-            # 1. 获取复合主键字段和值
+            # 1. 获取复合主键字段和值 (主要用于日志记录)
             pk_fields, pk_values = self._get_pk_fields_and_values(task, row_dict)
-
-            # 2. 构建复合 WHERE 子句
-            where_clauses = []
-            params = {"jdy_id": jdy_id}
-            log_pk_values = {}
-
             for i, field_name in enumerate(pk_fields):
-                param_name = f"pk_val_{i}"
-                where_clauses.append(f"`{field_name}` = :{param_name}")
-                params[param_name] = pk_values[i]
                 log_pk_values[field_name] = pk_values[i]
 
-            where_sql = " AND ".join(where_clauses)
+            if dialect_name == 'starrocks':
+                # --- StarRocks 逻辑：使用 INSERT 语句 ---
+                # StarRocks 主键模型使用 INSERT 来实现 UPSERT/UPDATE
 
-            # 3. 构建并执行
-            update_stmt = text(
-                f'UPDATE `{task.table_name}` SET `_id` = :jdy_id '
-                f'WHERE {where_sql} AND `_id` IS NULL'
-            )
+                # 1. 准备要插入的完整数据 (原始行 + _id)
+                # 复制字典以避免修改原始传入的 row_dict
+                data_to_insert = row_dict.copy()
+                data_to_insert['_id'] = jdy_id
 
-            source_session.execute(update_stmt, params)
+                # 2. 构建列名列表 (带引号)
+                quoted_columns = [f"{quote_char}{col}{quote_char}" for col in data_to_insert.keys()]
+                columns_sql = ", ".join(quoted_columns)
+
+                # 3. 构建参数名列表 (SQLAlchemy 绑定格式)
+                param_names = [f":{col}" for col in data_to_insert.keys()]
+                params_sql = ", ".join(param_names)
+
+                # 4. 构建完整的 INSERT 语句
+                update_stmt = text(
+                    f"INSERT INTO {quote_char}{task.table_name}{quote_char} ({columns_sql}) "
+                    f"VALUES ({params_sql})"
+                )
+
+                # 5. 执行语句，参数为整个数据字典
+                source_session.execute(update_stmt, data_to_insert)
+
+            else:
+                # --- DDL 其他数据库使用 UPDATE ---
+
+                # 1. 构建复合 WHERE 子句
+                where_clauses = []
+                params = {"jdy_id": jdy_id}  # UPDATE 语句的参数
+
+                for i, field_name in enumerate(pk_fields):
+                    param_name = f"pk_val_{i}"
+                    # --- DDL 使用方言引号 ---
+                    where_clauses.append(f"{quote_char}{field_name}{quote_char} = :{param_name}")
+                    params[param_name] = pk_values[i]
+
+                where_sql = " AND ".join(where_clauses)
+
+                # 2. 构建并执行 UPDATE
+                # --- DDL 使用方言引号 ---
+                update_stmt = text(
+                    f'UPDATE {quote_char}{task.table_name}{quote_char} SET {quote_char}_id{quote_char} = :jdy_id '
+                    f'WHERE {where_sql} AND ({quote_char}_id{quote_char} IS NULL)'
+                )
+
+                # 3. 执行语句
+                source_session.execute(update_stmt, params)
+
+            # 提交事务
             source_session.commit()
 
         except Exception as e:
             source_session.rollback()
-            log_pk_str = json.dumps(log_pk_values) if 'log_pk_values' in locals() else "UNKNOWN"
+            # 确保 log_pk_str 总是可用的
+            log_pk_str = json.dumps(log_pk_values) if log_pk_values else "UNKNOWN"
             log_sync_error(
                 task_config=task,
                 error=e,
@@ -820,15 +949,16 @@ class Db2JdySyncService:
             # 1. 实例化
             data_api_create = DataApi(api_key, Config.JDY_API_BASE_URL, qps=10)
 
-            # # 使用主键排序
-            # pk_fields = [pk.strip() for pk in task.business_keys.split(',') if pk and pk.strip()]
-            # # pk_fields.sort()
-            # order_by_pks = ','.join([f"{pk.strip()} ASC" for pk in pk_fields])
+            # --- DDL 获取方言 ---
+            dynamic_engine = get_dynamic_engine(task)
+            dialect_name = dynamic_engine.dialect.name
+            quote_char = '`' if dialect_name in ('mysql', 'starrocks') else '"'
 
             # 3. 构建带 SQL 过滤的查询, 并使用流式处理
             with get_dynamic_session(task) as source_session:
 
-                base_query = f"SELECT * FROM `{task.table_name}`"
+                # --- DDL 使用方言引号 ---
+                base_query = f"SELECT * FROM {quote_char}{task.table_name}{quote_char}"
                 params = {}
                 if task.source_filter_sql and task.source_filter_sql.strip():
                     base_query += f" WHERE {task.source_filter_sql.strip().rstrip(';')}"
@@ -842,8 +972,26 @@ class Db2JdySyncService:
                 has_processed_rows = False
 
                 while True:
-                    paginated_query = f"{base_query} LIMIT :batch_size OFFSET :offset"
-                    query_params = {**params, "batch_size": BATCH_SIZE, "offset": offset}
+                    # --- DDL  Oracle/PG/MySQL 分页 ---
+                    paginated_query = ""
+                    query_params = {}
+
+                    if dialect_name == 'oracle':
+                        # Oracle 12c+ (OFFSET FETCH) or ROWNUM
+                        # ROWNUM strategy (safer for older versions)
+                        paginated_query = (
+                            f"SELECT * FROM ( "
+                            f"  SELECT base_query.*, ROWNUM rnum FROM ( {base_query} ) base_query "
+                            f"  WHERE ROWNUM <= :upper_bound "
+                            f") WHERE rnum > :lower_bound"
+                        )
+                        query_params = {**params, "upper_bound": offset + BATCH_SIZE, "lower_bound": offset}
+                    elif dialect_name == 'postgresql':
+                        paginated_query = f"{base_query} LIMIT :batch_size OFFSET :offset"
+                        query_params = {**params, "batch_size": BATCH_SIZE, "offset": offset}
+                    else:  # mysql, starrocks
+                        paginated_query = f"{base_query} LIMIT :batch_size OFFSET :offset"
+                        query_params = {**params, "batch_size": BATCH_SIZE, "offset": offset}
 
                     rows = source_session.execute(text(paginated_query), query_params).mappings().all()
 
@@ -959,15 +1107,23 @@ class Db2JdySyncService:
             data_api_create = DataApi(api_key, Config.JDY_API_BASE_URL, qps=20)  # Single create
             data_api_update = DataApi(api_key, Config.JDY_API_BASE_URL, qps=20)  # Single update
 
+            # --- DDL 获取方言和引号 ---
+            dynamic_engine = get_dynamic_engine(task)
+            dialect_name = dynamic_engine.dialect.name
+            quote_char = '`' if dialect_name in ('mysql', 'starrocks') else '"'
+
             # 使用主键排序
             pk_fields = [pk.strip() for pk in task.business_keys.split(',') if pk and pk.strip()]
             # pk_fields.sort()
-            order_by_pks = ','.join([f"{pk.strip()} ASC" for pk in pk_fields])
+            # --- DDL 主键排序字段加引号 ---
+            order_by_pks = ','.join([f"{quote_char}{pk.strip()}{quote_char} ASC" for pk in pk_fields])
 
             # 3. 构建带 SQL 过滤的查询, 并使用流式处理
             with get_dynamic_session(task) as source_session:
 
-                base_query = f"SELECT * FROM `{task.table_name}`"
+                # --- DDL 使用方言引号 ---
+                base_query = f"SELECT * FROM {quote_char}{task.table_name}{quote_char}"
+
                 params = {}
                 if task.source_filter_sql and task.source_filter_sql.strip():
                     base_query += f" WHERE {task.source_filter_sql.strip().rstrip(';')}"
@@ -982,8 +1138,24 @@ class Db2JdySyncService:
                 count_new, count_updated, count_skipped = 0, 0, 0
 
                 while True:
-                    paginated_query = f"{base_query} LIMIT :batch_size OFFSET :offset"
-                    query_params = {**params, "batch_size": BATCH_SIZE, "offset": offset}
+                    # --- DDL  Oracle/PG/MySQL 分页 ---
+                    paginated_query = ""
+                    query_params = {}
+
+                    if dialect_name == 'oracle':
+                        paginated_query = (
+                            f"SELECT * FROM ( "
+                            f"  SELECT base_query.*, ROWNUM rnum FROM ( {base_query} ) base_query "
+                            f"  WHERE ROWNUM <= :upper_bound "
+                            f") WHERE rnum > :lower_bound"
+                        )
+                        query_params = {**params, "upper_bound": offset + BATCH_SIZE, "lower_bound": offset}
+                    elif dialect_name == 'postgresql':
+                        paginated_query = f"{base_query} LIMIT :batch_size OFFSET :offset"
+                        query_params = {**params, "batch_size": BATCH_SIZE, "offset": offset}
+                    else:  # mysql, starrocks
+                        paginated_query = f"{base_query} LIMIT :batch_size OFFSET :offset"
+                        query_params = {**params, "batch_size": BATCH_SIZE, "offset": offset}
 
                     rows = source_session.execute(text(paginated_query), query_params).mappings().all()
 
@@ -1013,7 +1185,8 @@ class Db2JdySyncService:
 
                         # --- 优化API调用 ---
                         jdy_data_found = None
-                        jdy_id_from_row = row_dict.get('_id')
+                        # --- 适配 Oracle (列名可能大写) ---
+                        jdy_id_from_row = row_dict.get('_id') or row_dict.get('_ID')
 
                         # 避免用户骚操作
                         if jdy_id_from_row and jdy_id_from_row.strip() != '' and jdy_id_from_row.strip() != '-' and jdy_id_from_row.strip() != '_':
@@ -1054,8 +1227,13 @@ class Db2JdySyncService:
                             # t_data 是 {'jdy_widget_alias': 'jdy_value'}
                             # row_dict 是 {'mysql_col_name': 'mysql_value'}
 
+                            # --- 适配 Oracle (row_dict 键可能为大写) ---
+                            row_dict_lower = {k.lower(): v for k, v in row_dict.items()}
+
                             # 遍历 alias_map 的键 (mysql_col)
                             for mysql_col in alias_map.keys():
+                                mysql_col_lower = mysql_col.lower()
+
                                 # 从 alias_map 获取元组
                                 alias_info = alias_map.get(mysql_col)
                                 if not alias_info:
@@ -1064,7 +1242,8 @@ class Db2JdySyncService:
                                 jdy_alias, jdy_type = alias_info
 
                                 # 简道云有该字段，但数据没有该字段
-                                if mysql_col not in row_dict:
+                                # --- 适配 Oracle (使用 row_dict_lower) ---
+                                if mysql_col_lower not in row_dict_lower:
                                     continue  # 源数据 (row_dict) 中没有此列 (例如视图或SQL过滤)
                                 # 数据库有该字段，但简道云没有该字段
                                 if jdy_alias not in t_data:
@@ -1073,7 +1252,8 @@ class Db2JdySyncService:
                                     # break
                                     continue
 
-                                s_val = row_dict[mysql_col]  # 源 (Source) 值
+                                # --- 适配 Oracle (使用 row_dict_lower) ---
+                                s_val = row_dict_lower[mysql_col_lower]  # 源 (Source) 值
                                 t_val = t_data[jdy_alias]  # 目标 (Target) 值
 
                                 if self._is_value_different(s_val, t_val):
@@ -1299,6 +1479,20 @@ class Db2JdySyncService:
 
             # 动态创建 source_session 和 engine
             dynamic_engine = get_dynamic_engine(task)
+
+            dialect_name = dynamic_engine.dialect.name
+            quote_char = '`' if dialect_name in ('mysql', 'starrocks') else '"'
+
+            # 定义一个辅助函数来移除字段名两边的引号
+            def strip_quotes(field_name_str: str) -> str:
+                field_name_str = field_name_str.strip()
+                if field_name_str.startswith(quote_char) and field_name_str.endswith(quote_char):
+                    return field_name_str[1:-1]
+                # 额外处理 Gbase/Oracle 可能返回的大写
+                if dialect_name == 'oracle':
+                    return field_name_str.upper()
+                return field_name_str
+
             with get_dynamic_session(task) as source_session:
 
                 # --- 数据探测逻辑 ---
@@ -1308,49 +1502,56 @@ class Db2JdySyncService:
                 if not raw_field:
                     raise ValueError(f"task_id:[{task.id}] No incremental field specified.")
 
-                raw_field = ','.join([item.strip() for item in raw_field.split(',') if item.strip()])
+                # DDL 处理 "f1, f2" 类型的字段
+                def quote_field(f):
+                    return f"{quote_char}{strip_quotes(f)}{quote_char}"
 
-                field_for_probing = raw_field  # 用第一个字段用于数据类型探测
-                incremental_field_for_query = raw_field
+                # 重新处理 raw_field, 确保逗号分隔的字段被正确引用
+                raw_field_list = [item.strip() for item in raw_field.split(',') if item.strip()]
+
+                # 探测字段使用第一个
+                field_for_probing = strip_quotes(raw_field_list[0])
+
+                # 查询字段
+                incremental_field_for_query = ""
                 is_complex_field = False
 
-                # 1. 检查字段格式
-                if ',' in raw_field and '(' not in raw_field and ')' not in raw_field:
-                    # 格式: updated_time,created_time
-                    # 转换为 coalesce
-                    incremental_field_for_query = f"COALESCE({raw_field})"
-                    # 探测字段: updated_time
-                    field_for_probing = raw_field.split(',')[0].strip().replace('`', '')
-                    is_complex_field = True
-                    logger.debug(
-                        f"task_id:[{task.id}] Detected comma-separated fields. Query: {incremental_field_for_query}, ProbeField: {field_for_probing}")
+                raw_field_lower = raw_field.lower()
 
-                elif 'coalesce(' in raw_field.lower() or 'ifnull(' in raw_field.lower():
-                    # 格式: coalesce(updated_time,created_time) 或 IFNULL(...) 或 (其他复杂表达式)
+                if 'coalesce(' in raw_field_lower or 'ifnull(' in raw_field_lower:
+                    # 格式: coalesce(updated_time,created_time) 或 IFNULL(...)
+                    # 假设用户在复杂函数中已正确处理语法
                     incremental_field_for_query = f"({raw_field})"
                     is_complex_field = True
 
                     # 提取第一个字段用于探测
-                    # 查找第一个单词 (可能是函数名) 和随后的字段名
-                    # r'[a-zA-Z0-9_]+' 匹配字段名
-                    fields = re.findall(r'[a-zA-Z0-9_]+', raw_field.replace('`', ''))
-
+                    fields = re.findall(r'[a-zA-Z0-9_]+', raw_field)  # 查找字段名
                     if fields:
                         first_word = fields[0].lower()
                         if first_word in ['coalesce', 'ifnull'] and len(fields) > 1:
-                            field_for_probing = fields[1]  # e.g., coalesce(THIS_ONE, ...)
+                            field_for_probing = strip_quotes(fields[1])  # e.g., coalesce(THIS_ONE, ...)
                         else:
-                            field_for_probing = fields[0]  # e.g., THIS_ONE ...
+                            field_for_probing = strip_quotes(fields[0])  # e.g., THIS_ONE ...
                     else:
                         field_for_probing = raw_field  # 回退
 
                     logger.debug(
                         f"task_id:[{task.id}] Detected complex function. Query: {incremental_field_for_query}, ProbeField: {field_for_probing}")
 
+                elif len(raw_field_list) > 1:
+                    # 格式: updated_time, created_time
+                    # 转换为 coalesce
+                    quoted_fields = [quote_field(f) for f in raw_field_list]
+                    incremental_field_for_query = f"COALESCE({','.join(quoted_fields)})"
+                    field_for_probing = strip_quotes(raw_field_list[0])
+                    is_complex_field = True
+                    logger.debug(
+                        f"task_id:[{task.id}] Detected comma-separated fields. Query: {incremental_field_for_query}, ProbeField: {field_for_probing}")
+
                 else:
                     # 简单字段: updated_time
-                    incremental_field_for_query = f"`{raw_field}`"
-                    field_for_probing = raw_field.replace('`', '')
+                    field_for_probing = strip_quotes(raw_field_list[0])
+                    incremental_field_for_query = quote_field(field_for_probing)
                     is_complex_field = False
                     logger.debug(
                         f"task_id:[{task.id}] Detected simple field. Query: {incremental_field_for_query}, ProbeField: {field_for_probing}")
@@ -1360,8 +1561,13 @@ class Db2JdySyncService:
                 col_info = None
                 try:
                     columns = inspector.get_columns(task.table_name)
-                    # 使用 field_for_probing 查找列信息
-                    col_info = next((col for col in columns if col['name'] == field_for_probing), None)
+                    # 适配 Oracle (列名大写)
+                    field_for_probing_lookup = field_for_probing
+                    if dialect_name == 'oracle':
+                        field_for_probing_lookup = field_for_probing.upper()
+
+                    col_info = next((col for col in columns if col['name'].lower() == field_for_probing_lookup.lower()),
+                                    None)
                 except NoSuchTableError:
                     raise ValueError(f"task_id:[{task.id}] Incremental field's table '{task.table_name}' not found.")
 
@@ -1383,15 +1589,30 @@ class Db2JdySyncService:
                         f"task_id:[{task.id}] Detected DATE type. Querying >= {last_sync_time_for_query} (Truncated)")
 
                 # 4. 如果是 DATETIME，执行数据探测
-                elif col_type_name.startswith('DATETIME'):
-                    logger.debug(f"task_id:[{task.id}] Detected DATETIME type. Probing data ...")
+                elif col_type_name.startswith('DATETIME') or (
+                        # Oracle might be TIMESTAMP(6)
+                        dialect_name == 'oracle' and col_type_name.startswith('TIMESTAMP')):
+                    logger.debug(f"task_id:[{task.id}] Detected DATETIME/TIMESTAMP type. Probing data ...")
                     is_fake_datetime = False
 
-                    # 探测查询，限制100条
-                    probe_query = text(
-                        f"SELECT `{field_for_probing}` FROM `{task.table_name}` "
-                        f"WHERE `{field_for_probing}` IS NOT NULL LIMIT 100"
+                    # DDL  探测查询 (适配 Oracle/PG/MySQL)
+                    probe_field_quoted = quote_field(field_for_probing)
+                    probe_table_quoted = quote_field(task.table_name)
+
+                    probe_query_sql = (
+                        f"SELECT {probe_field_quoted} FROM {probe_table_quoted} "
+                        f"WHERE {probe_field_quoted} IS NOT NULL"
                     )
+
+                    if dialect_name == 'oracle':
+                        probe_query_sql = f"{probe_query_sql} FETCH FIRST 100 ROWS ONLY"
+                    elif dialect_name == 'postgresql':
+                        probe_query_sql = f"{probe_query_sql} LIMIT 100"
+                    else:  # mysql, starrocks
+                        probe_query_sql = f"{probe_query_sql} LIMIT 100"
+
+                    probe_query = text(probe_query_sql)
+
                     probe_results = source_session.execute(probe_query).fetchall()
 
                     # 没有数据，无法判断。为安全起见，使用截断（防止丢失数据）
@@ -1418,16 +1639,18 @@ class Db2JdySyncService:
                             f"task_id:[{task.id}] Probe found yyyy-MM-dd HH:mm:ss DATETIME format. Using exact timestamp.")
                         last_sync_time_for_query = last_sync_time
                 else:
-                    # 3. 如果是 TIMESTAMP 或其他类型，使用精确时间
+                    # 3. 如果是 TIMESTAMP (PG) 或其他类型，使用精确时间
                     last_sync_time_for_query = last_sync_time
                     logger.debug(
                         f"task_id:[{task.id}] Detected {col_type_name} type. Querying >= {last_sync_time_for_query}")
 
                 # 6. 获取源数据 (带 SQL 过滤)
+                # DDL  使用方言引号
                 base_query = (
-                    f"SELECT * FROM `{task.table_name}` "
+                    f"SELECT * FROM {quote_char}{task.table_name}{quote_char} "
                     f"WHERE {incremental_field_for_query} >= :last_sync_time"
                 )
+
                 # 使用动态确定的时间戳
                 params = {"last_sync_time": last_sync_time_for_query}
                 if task.source_filter_sql and task.source_filter_sql.strip():
@@ -1436,7 +1659,8 @@ class Db2JdySyncService:
                 # 使用主键排序
                 pk_fields = [pk.strip() for pk in task.business_keys.split(',') if pk and pk.strip()]
                 # pk_fields.sort()
-                order_by_pks = ','.join([f"{pk.strip()} ASC" for pk in pk_fields])
+                # --- DDL 主键排序字段加引号 ---
+                order_by_pks = ','.join([f"{quote_char}{pk.strip()}{quote_char} ASC" for pk in pk_fields])
 
                 # 添加排序操作
                 base_query = f"{base_query} ORDER BY {order_by_pks}"
@@ -1448,8 +1672,24 @@ class Db2JdySyncService:
                 count_new, count_updated, count_skipped = 0, 0, 0
 
                 while True:
-                    paginated_query = f"{base_query} LIMIT :batch_size OFFSET :offset"
-                    query_params = {**params, "batch_size": BATCH_SIZE, "offset": offset}
+                    # --- DDL  Oracle/PG/MySQL 分页 ---
+                    paginated_query = ""
+                    query_params = {}
+
+                    if dialect_name == 'oracle':
+                        paginated_query = (
+                            f"SELECT * FROM ( "
+                            f"  SELECT base_query.*, ROWNUM rnum FROM ( {base_query} ) base_query "
+                            f"  WHERE ROWNUM <= :upper_bound "
+                            f") WHERE rnum > :lower_bound"
+                        )
+                        query_params = {**params, "upper_bound": offset + BATCH_SIZE, "lower_bound": offset}
+                    elif dialect_name == 'postgresql':
+                        paginated_query = f"{base_query} LIMIT :batch_size OFFSET :offset"
+                        query_params = {**params, "batch_size": BATCH_SIZE, "offset": offset}
+                    else:  # mysql, starrocks
+                        paginated_query = f"{base_query} LIMIT :batch_size OFFSET :offset"
+                        query_params = {**params, "batch_size": BATCH_SIZE, "offset": offset}
 
                     rows = source_session.execute(text(paginated_query), query_params).mappings().all()
 
@@ -1479,7 +1719,8 @@ class Db2JdySyncService:
 
                         # --- 优化API调用 ---
                         jdy_data_found = None
-                        jdy_id_from_row = row_dict.get('_id')
+                        # --- 适配 Oracle (列名可能大写) ---
+                        jdy_id_from_row = row_dict.get('_id') or row_dict.get('_ID')
 
                         # 避免用户骚操作
                         if jdy_id_from_row and jdy_id_from_row.strip() != '' and jdy_id_from_row.strip() != '-' and jdy_id_from_row.strip() != '_':
@@ -1513,8 +1754,13 @@ class Db2JdySyncService:
                             # 2. 比较
                             payload_has_changes = False
 
+                            # --- 适配 Oracle (row_dict 键可能为大写) ---
+                            row_dict_lower = {k.lower(): v for k, v in row_dict.items()}
+
                             # 遍历 alias_map 的键 (mysql_col)
                             for mysql_col in alias_map.keys():
+                                mysql_col_lower = mysql_col.lower()
+
                                 # 从 alias_map 获取元组
                                 alias_info = alias_map.get(mysql_col)
                                 if not alias_info:
@@ -1523,7 +1769,8 @@ class Db2JdySyncService:
                                 jdy_alias, jdy_type = alias_info
 
                                 # 简道云有该字段，但数据没有该字段
-                                if mysql_col not in row_dict:
+                                # --- 适配 Oracle (使用 row_dict_lower) ---
+                                if mysql_col_lower not in row_dict_lower:
                                     continue  # 源数据 (row_dict) 中没有此列 (例如视图或SQL过滤)
                                 # 数据库有该字段，但简道云没有该字段
                                 if jdy_alias not in t_data:
@@ -1532,7 +1779,8 @@ class Db2JdySyncService:
                                     # break
                                     continue
 
-                                s_val = row_dict[mysql_col]
+                                # --- 适配 Oracle (使用 row_dict_lower) ---
+                                s_val = row_dict_lower[mysql_col_lower]
                                 t_val = t_data[jdy_alias]
 
                                 if self._is_value_different(s_val, t_val):
@@ -1606,7 +1854,7 @@ class Db2JdySyncService:
     @retry()
     def run_binlog_listener(self, task: SyncTask):
         """
-        运行一个长连接的 Binlog 监听器
+        运行一个长连接的 MySQL Binlog 监听器
         (独立创建会话, 事务 ID, 去重, 复合主键，支持首次全量同步)
         (增加数据比较逻辑, 优化API调用)
         """
@@ -1819,8 +2067,12 @@ class Db2JdySyncService:
                         if not current_task_state or not current_task_state.is_active:
                             logger.info(f"[{thread_name}] Task disabled. Stopping listener.")
                             # 更新任务状态
-                            self._update_task_status(config_session, session_task, sync_status='idle',
-                                                     last_sync_time=datetime.now(TZ_UTC_8))
+                            # 使用 current_task_state (如果存在) 或 session_task (如果不存在但仍需更新)
+                            task_to_update_on_stop = current_task_state or (
+                                check_session.query(SyncTask).get(task_id_safe))
+                            if task_to_update_on_stop:
+                                self._update_task_status(check_session, task_to_update_on_stop, sync_status='idle',
+                                                         last_sync_time=datetime.now(TZ_UTC_8))
                             break  # 退出 'for binlog_event in stream:' 循环
                 except Exception as check_e:
                     # 如果无法检查数据库，这是一个严重问题，最好停止监听器
@@ -1868,9 +2120,14 @@ class Db2JdySyncService:
                             trans_id = str(uuid.uuid4())  # 每个 row 操作都是一个事务
 
                             if isinstance(binlog_event, WriteRowsEvent):
+                                # --- 将 row['values'] 的键转为小写 ---
+                                # pymysqlreplication 默认返回小写键，这里是为确保安全
+                                row_values_lower = {k.lower(): v for k, v in row['values'].items()}
+
                                 # --- 优化API调用 (Write Event) ---
                                 jdy_data_found = None
-                                jdy_id_from_row = row['values'].get('_id')
+                                # --- 使用 row_values_lower 查找 _id ---
+                                jdy_id_from_row = row_values_lower.get('_id')
 
                                 # 避免用户骚操作
                                 if jdy_id_from_row and jdy_id_from_row.strip() != '' and jdy_id_from_row.strip() != '-' and jdy_id_from_row.strip() != '_':
@@ -1911,7 +2168,10 @@ class Db2JdySyncService:
                                         payload_has_changes = False
 
                                         # 遍历 alias_map 的键 (mysql_col)
-                                        for mysql_col in alias_map.keys():
+                                        for mysql_col in alias_map.keys():  # e.g., 'UserName'
+                                            # --- 统一使用小写比较 ---
+                                            mysql_col_lower = mysql_col.lower()  # e.g., 'username'
+
                                             # 从 alias_map 获取元组
                                             alias_info = alias_map.get(mysql_col)
                                             if not alias_info:
@@ -1920,15 +2180,17 @@ class Db2JdySyncService:
                                             jdy_alias, jdy_type = alias_info
 
                                             # 简道云有该字段，但数据库没有该字段
-                                            if mysql_col not in row['values']:
+                                            if mysql_col_lower not in row_values_lower:
                                                 continue
                                             # 数据库有该字段，但简道云没有该字段
                                             if jdy_alias not in t_data:
                                                 # payload_has_changes = True
                                                 # break
                                                 continue
-                                            s_val = row['values'][mysql_col]
+
+                                            s_val = row_values_lower[mysql_col_lower]
                                             t_val = t_data[jdy_alias]
+
                                             if self._is_value_different(s_val, t_val):
                                                 payload_has_changes = True
                                                 logger.debug(
@@ -1978,9 +2240,13 @@ class Db2JdySyncService:
                                             f"task_id:[{task_id_safe}] Created data with _id: {new_jdy_id}")
 
                             elif isinstance(binlog_event, UpdateRowsEvent):
+                                # --- 将 row['after_values'] 的键转为小写 ---
+                                row_values_lower = {k.lower(): v for k, v in row['after_values'].items()}
+
                                 # --- 优化API调用 (Update Event) ---
                                 jdy_data_found = None
-                                jdy_id_from_row = row['after_values'].get('_id')
+                                # --- 使用 row_values_lower 查找 _id ---
+                                jdy_id_from_row = row_values_lower.get('_id')
 
                                 # 避免用户骚操作
                                 if jdy_id_from_row and jdy_id_from_row.strip() != '' and jdy_id_from_row.strip() != '-' and jdy_id_from_row.strip() != '_':
@@ -2018,7 +2284,10 @@ class Db2JdySyncService:
                                     payload_has_changes = False
 
                                     # 遍历 alias_map 的键 (mysql_col)
-                                    for mysql_col in alias_map.keys():
+                                    for mysql_col in alias_map.keys():  # e.g., 'UserName'
+                                        # --- 统一使用小写比较 ---
+                                        mysql_col_lower = mysql_col.lower()  # e.g., 'username'
+
                                         # 从 alias_map 获取元组
                                         alias_info = alias_map.get(mysql_col)
                                         if not alias_info:
@@ -2027,7 +2296,7 @@ class Db2JdySyncService:
                                         jdy_alias, jdy_type = alias_info
 
                                         # 简道云有该字段，但数据库没有该字段
-                                        if mysql_col not in row['after_values']:
+                                        if mysql_col_lower not in row_values_lower:
                                             continue
                                         # 数据库有该字段，但简道云没有该字段
                                         if jdy_alias not in t_data:
@@ -2035,7 +2304,7 @@ class Db2JdySyncService:
                                             # break
                                             continue
 
-                                        s_val = row['after_values'][mysql_col]
+                                        s_val = row_values_lower[mysql_col_lower]
                                         t_val = t_data[jdy_alias]
 
                                         if self._is_value_different(s_val, t_val):
@@ -2082,8 +2351,12 @@ class Db2JdySyncService:
                                             f"task_id:[{task_id_safe}] Update event: Jdy ID not found, Created data with _id: {new_jdy_id}")
 
                             elif isinstance(binlog_event, DeleteRowsEvent):
+                                # --- 将 row['values'] 的键转为小写 ---
+                                row_values_lower = {k.lower(): v for k, v in row['values'].items()}
+
                                 # --- 优化API调用 (Delete Event) ---
-                                jdy_id = row['values'].get('_id')
+                                # --- 使用 row_values_lower 查找 _id ---
+                                jdy_id = row_values_lower.get('_id')
                                 if not jdy_id:
                                     # ID not in row, find it by PK
                                     jdy_data_found = self._find_jdy_data_by_pk(
@@ -2118,7 +2391,7 @@ class Db2JdySyncService:
                                                  current_log_file, current_log_pos,
                                                  last_sync_time=datetime.now(TZ_UTC_8))
 
-                except (requests.exceptions.RequestException, requests.exceptions.HTTPError) as api_err:
+                except (RequestException, HTTPError) as api_err:
                     # API 错误, 记录日志但不停止监听器
                     # 在 except 块中创建一个新会话来获取 'live' 的 task 对象进行日志记录
                     with ConfigSession() as error_session:

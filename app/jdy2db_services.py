@@ -7,7 +7,8 @@ from datetime import datetime, time
 from urllib.parse import quote
 
 from sqlalchemy import inspect, Table, Column, String, text, JSON, DateTime, Text, BigInteger, Float
-from sqlalchemy.dialects.mysql import insert, LONGTEXT
+from sqlalchemy.dialects.mysql import insert as mysql_insert, LONGTEXT
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.sql.sqltypes import TypeEngine, Integer, Boolean, Time
@@ -118,11 +119,12 @@ class FieldMappingService:
         return final_name
 
     @retry()
-    def get_sql_type(self, type: str | None, data_value: any) -> TypeEngine:
+    def get_sql_type(self, type: str | None, data_value: any, dialect_name: str = None) -> TypeEngine:
         """
         根据简道云的字段类型（优先）或值的Python类型推断出合适的 SQLAlchemy 数据类型。
         :param type: 从 `form_fields_mapping` 表中获取的简道云字段类型字符串。
         :param data_value: 字段的实际值，用于备用推断。
+        :param dialect_name: 数据库方言 (e.g., 'mysql', 'starrocks', 'postgresql')
         :return: SQLAlchemy 类型实例 (e.g., Text(), Float(), JSON())。
         """
         # 简道云字段类型到SQLAlchemy类型的映射 (返回类型类)
@@ -156,11 +158,16 @@ class FieldMappingService:
         if sql_type_class:
             if sql_type_class in (Text, String) and isinstance(data_value, str):
                 if len(data_value) > 65535:
-                    # logger.debug(f"Value length > 65535, promoting to LONGTEXT")
-                    return LONGTEXT()
+                    # logger.debug(f"Value length > 65535, promoting to LONGTEXT or VARCHAR")
+                    if dialect_name == 'starrocks':
+                        return String(1048576)  # Use VARCHAR(1048576) for StarRocks
+                    elif dialect_name == 'mysql':
+                        return LONGTEXT()
+                    else:
+                        return Text()  # Default
                 elif len(data_value) > 1024:
                     # logger.debug(f"Value length > 1024, promoting to TEXT")
-                    return Text()
+                    return Text()  # Text() 在 SQLAlchemy 中是通用的，会映射到 CLOB/TEXT
                 else:
                     # logger.debug(f"Value fits in String(1024)")
                     # For serial_number, radiogroup, combo, allow longer String if needed, e.g., String(255)
@@ -219,7 +226,12 @@ class FieldMappingService:
 
             # 根据长度决定使用 String/TEXT/LONGTEXT
             if len(data_value) > 65535:
-                return LONGTEXT()
+                if dialect_name == 'starrocks':
+                    return String(1048576)  # Use VARCHAR(1048576) for StarRocks
+                elif dialect_name == 'mysql':
+                    return LONGTEXT()
+                else:
+                    return Text()  # Default
             elif len(data_value) > 1024:
                 return Text()
             return String(1024)  # Default string length
@@ -516,6 +528,7 @@ class Jdy2DbSyncService:
                         f"task_id:[{task_config.id}] Table name changed. Checking if old table '{old_table_name}' exists...")
                     # 检查老表是否存在
                     inspector = inspect(dynamic_engine)
+                    dialect_name = dynamic_engine.dialect.name
 
                     # 检查是否老表已存在
                     exist_old_table = inspector.has_table(old_table_name)
@@ -532,8 +545,21 @@ class Jdy2DbSyncService:
                                     logger.warning(
                                         f"task_id:[{task_config.id}] Cannot rename: Target table '{new_table_name}' already exists. Skipping rename.")
                                 else:
-                                    connection.execute(
-                                        text(f"RENAME TABLE `{old_table_name}` TO `{new_table_name}`"))
+                                    # --- 通用化 DDL (去除反引号) ---
+                                    # 注意: RENAME TABLE 语法在 Oracle 上是不同的
+                                    if dialect_name in ('mysql', 'starrocks'):
+                                        rename_sql = f'RENAME TABLE `{old_table_name}` TO `{new_table_name}`'
+                                    elif dialect_name == 'postgresql':
+                                        rename_sql = f'ALTER TABLE "{old_table_name}" RENAME TO "{new_table_name}"'
+                                    elif dialect_name == 'oracle':
+                                        rename_sql = f'RENAME "{old_table_name}" TO "{new_table_name}"'  # Oracle
+                                    else:
+                                        rename_sql = f'ALTER TABLE {old_table_name} RENAME TO {new_table_name}'
+
+                                    connection.execute(text(rename_sql))
+                                    # (Oracle/Postgres 可能需要事务提交，但这里在 `with connection` 块外)
+                                    # (SQLAlchemy 2.0-style connect() 默认为 "autocommit" 模式执行 text())
+
                                     logger.info(f"task_id:[{task_config.id}] Table renamed successfully.")
                                     # 更新缓存
                                     engine_url_key = str(dynamic_engine.url)
@@ -904,6 +930,7 @@ class Jdy2DbSyncService:
             inspector = inspect(engine)
             if inspector.has_table(table_name):
                 metadata = get_dynamic_metadata(engine)
+                # extend_existing=True 允许在 Table 存在时重新加载
                 table = Table(table_name, metadata, autoload_with=engine, extend_existing=True)
                 self.inspected_tables_cache[engine_url_key][table_name] = table
                 logger.debug(f"Loading table definition from database ({engine_url_key}): {table_name}")
@@ -926,8 +953,10 @@ class Jdy2DbSyncService:
 
         logger.info(f"task_id:[{task_config.id}] Table '{table_name}' does not exist, creating from data samples...")
         try:
+            dialect_name = engine.dialect.name
             # 获取字段 comment
-            column_defs, column_comments = self.get_column_schema_from_data(data_samples, task_config)
+            column_defs, column_comments = self.get_column_schema_from_data(data_samples, task_config,
+                                                                            dialect_name=dialect_name)
             columns = [Column(name, col_type, comment=column_comments.get(name)) for name, col_type in
                        column_defs.items()]
 
@@ -961,7 +990,15 @@ class Jdy2DbSyncService:
                     f"task_id:[{task_config.id}] Duplicate column names detected when creating table '{table_name}', check mapping logic.")
                 # 可以选择抛出异常或尝试去重，这里选择记录错误并继续（可能导致建表失败）
 
-            table = Table(table_name, metadata, *final_columns, comment=table_comment, mysql_charset='utf8mb4')
+            # --- DDL 添加 mysql_charset，其他数据库会忽略它 ---
+            # table = Table(table_name, metadata, *final_columns, comment=table_comment, mysql_charset='utf8mb4')
+
+            # --- DDL 使 mysql_charset 成为条件式 ---
+            table_kwargs = {'comment': table_comment}
+            if engine.dialect.name == 'mysql':
+                table_kwargs['mysql_charset'] = 'utf8mb4'
+            table = Table(table_name, metadata, *final_columns, **table_kwargs)
+
             metadata.create_all(engine)  # 这会创建表
             logger.info(f"task_id:[{task_config.id}] Table '{table_name}' created successfully.")
 
@@ -1009,6 +1046,7 @@ class Jdy2DbSyncService:
         logger.info(
             f"task_id:[{task_config.id}] Table '{table_name}' does not exist, creating from form structure (form_update)...")
         try:
+            dialect_name = engine.dialect.name
             widgets = form_schema_data.get('widgets', [])
             columns = [Column('_id', String(50), unique=True, comment='唯一索引id')]  # 主键/唯一键
 
@@ -1035,7 +1073,8 @@ class Jdy2DbSyncService:
                 jdy_type = widget.get('type')
                 jdy_label = widget.get('label')
                 if col_name and col_name not in added_col_names:  # 确保列名有效且未重复添加
-                    sql_type = self.mapping_service.get_sql_type(jdy_type, None)  # 从 schema 创建时不依赖样本值
+                    sql_type = self.mapping_service.get_sql_type(jdy_type, None,
+                                                                 dialect_name=dialect_name)  # 从 schema 创建时不依赖样本值
                     columns.append(Column(col_name, sql_type, comment=jdy_label))
                     added_col_names.add(col_name)
                 elif col_name in added_col_names:
@@ -1043,7 +1082,16 @@ class Jdy2DbSyncService:
                         f"task_id:[{task_config.id}] Attempted to add duplicate column '{col_name}' to table '{table_name}' (likely from widget '{widget.get('widgetName')}'), skipped.")
 
             table_comment = form_schema_data.get('name', table_name)
-            table = Table(table_name, metadata, *columns, comment=table_comment, mysql_charset='utf8mb4')
+
+            # --- DDL 添加 mysql_charset ---
+            # table = Table(table_name, metadata, *columns, comment=table_comment, mysql_charset='utf8mb4')
+
+            # --- DDL 使 mysql_charset 成为条件式 ---
+            table_kwargs = {'comment': table_comment}
+            if engine.dialect.name == 'mysql':
+                table_kwargs['mysql_charset'] = 'utf8mb4'
+            table = Table(table_name, metadata, *columns, **table_kwargs)
+
             metadata.create_all(engine)
             logger.info(f"task_id:[{task_config.id}] Table '{table_name}' created successfully.")
 
@@ -1058,8 +1106,15 @@ class Jdy2DbSyncService:
             raise
 
     @retry()
-    def get_column_schema_from_data(self, data_samples: list[dict], task_config: SyncTask) -> (dict, dict):
-        """根据一批数据样本分析并生成所有字段的列定义"""
+    def get_column_schema_from_data(self, data_samples: list[dict], task_config: SyncTask,
+                                    dialect_name: str = None) -> (dict, dict):
+        """
+        根据一批数据样本分析并生成所有字段的列定义
+        :param data_samples:
+        :param task_config:
+        :param dialect_name: 数据库方言 (e.g., 'mysql', 'starrocks')
+        :return:
+        """
         column_types = {}
         column_comments = {}
 
@@ -1109,8 +1164,8 @@ class Jdy2DbSyncService:
                     db_col_name = self.mapping_service.get_column_name(widget, task_config.label_to_pinyin)
                     comment = mapping_info.label
                     jdy_type = mapping_info.type  # 获取简道云类型
-                    sql_type_instance = self.mapping_service.get_sql_type(jdy_type, sample_value)  # 直接获取实例
-
+                    sql_type_instance = self.mapping_service.get_sql_type(jdy_type, sample_value,
+                                                                          dialect_name=dialect_name)  # 直接获取实例
                 else:
                     # 如果映射不存在
                     # 如果使用 EXTRACT_SCHEMA_FROM_DATA
@@ -1120,7 +1175,8 @@ class Jdy2DbSyncService:
                         # db_col_name = re.sub(r'[^a-zA-Z0-9_]', '', key)
                         # 保留中文、英文、数字、下划线
                         db_col_name = re.sub(r'[^a-zA-Z0-9_\u4e00-\u9fff]', '', key)
-                        sql_type_instance = self.mapping_service.get_sql_type(None, sample_value)
+                        sql_type_instance = self.mapping_service.get_sql_type(None, sample_value,
+                                                                              dialect_name=dialect_name)
                         logger.warning(
                             f"task_id:[{task_config.id}] Field mapping not found for {task_config.app_id}/{task_config.entry_id}: {key}, extract column name = {db_col_name}.")
 
@@ -1142,7 +1198,10 @@ class Jdy2DbSyncService:
                 current_type_inst = column_types[db_col_name]
 
                 # 使用 isinstance 检查类型关系，优先使用更通用的类型
-                if isinstance(sql_type_instance, (LONGTEXT, Text)):
+                if isinstance(sql_type_instance, (LONGTEXT, Text, String)) and (
+                        isinstance(sql_type_instance, (LONGTEXT, Text)) or
+                        (isinstance(sql_type_instance, String) and sql_type_instance.length == 1048576)
+                ):
                     column_types[db_col_name] = sql_type_instance
                 elif isinstance(sql_type_instance, JSON) and not isinstance(current_type_inst, (LONGTEXT, Text)):
                     column_types[db_col_name] = sql_type_instance
@@ -1179,6 +1238,7 @@ class Jdy2DbSyncService:
         检查数据负载，如果发现 data 与 FormFieldMapping 不一致，则触发完整的 DDL 同步。
         """
         task_id = task_config.id
+        dialect_name = engine.dialect.name
 
         try:
             # 1. 获取当前映射中的所有 widget_alias
@@ -1289,10 +1349,11 @@ class Jdy2DbSyncService:
                                     # 检查系统字段
                                     if key in system_fields:
                                         if key not in existing_columns:
-                                            sql_type = self.mapping_service.get_sql_type(mapping_info.type, value)
+                                            sql_type = self.mapping_service.get_sql_type(mapping_info.type, value,
+                                                                                         dialect_name=dialect_name)
                                             cols_to_add[key] = {
                                                 "value": value,
-                                                "type": sql_type,
+                                                "type": sql_type,  # 应该是 sql_type 实例
                                                 "comment": key  # 使用 简道云 widget_alias/widget_name 作为 comment
                                             }
                                         # 处理下一个
@@ -1305,10 +1366,11 @@ class Jdy2DbSyncService:
                                         # 保留中文、英文、数字、下划线
                                         db_col_name = re.sub(r'[^a-zA-Z0-9_\u4e00-\u9fff]', '', key)
                                         if db_col_name and db_col_name not in existing_columns and db_col_name not in cols_to_add:
-                                            sql_type = self.mapping_service.get_sql_type(None, value)
+                                            sql_type = self.mapping_service.get_sql_type(None, value,
+                                                                                         dialect_name=dialect_name)
                                             cols_to_add[db_col_name] = {
                                                 "value": value,
-                                                "type": sql_type,
+                                                "type": sql_type,  # 应该是 sql_type 实例
                                                 "comment": key  # 使用 简道云 widget_alias/widget_name 作为 comment
                                             }
                                             logger.warning(
@@ -1334,7 +1396,7 @@ class Jdy2DbSyncService:
                                     if db_col_name and db_col_name not in existing_columns and db_col_name not in cols_to_add:
                                         cols_to_add[db_col_name] = {
                                             "value": value,
-                                            "type": mapping_info.type,
+                                            "type": mapping_info.type,  # 这里用 jdy_type
                                             "comment": mapping_info.label
                                         }
                                     # 处理下一个
@@ -1368,17 +1430,41 @@ class Jdy2DbSyncService:
                                     for col_name, col_info in cols_to_add.items():
                                         if not col_name:
                                             continue
-                                        sql_type_instance = self.mapping_service.get_sql_type(col_info["type"],
-                                                                                              col_info['value'])
-                                        type_string = sql_type_instance.compile(dialect=engine.dialect)
+                                        # 检查 col_info["type"] 是 jdy_type 还是 sql_type 实例
+                                        jdy_type_str = None
+                                        sql_type_inst = None
+                                        if isinstance(col_info["type"], TypeEngine):
+                                            sql_type_inst = col_info["type"]
+                                        else:
+                                            jdy_type_str = col_info["type"]  # mapping_info.type
+
+                                        if not sql_type_inst:
+                                            sql_type_inst = self.mapping_service.get_sql_type(jdy_type_str,
+                                                                                              col_info['value'],
+                                                                                              dialect_name=dialect_name)
+
+                                        type_string = sql_type_inst.compile(dialect=engine.dialect)
                                         try:
                                             logger.info(
                                                 f"task_id:[{task_id}] Will add column '{col_name}' with type '{type_string}'")
-                                            connection.execute(
-                                                text(
-                                                    f"ALTER TABLE `{table.name}` ADD COLUMN `{col_name}` {type_string} COMMENT :comment"),
-                                                {'comment': col_info['comment']}
-                                            )
+                                            # --- DDL 去除反引号，适配方言 ---
+                                            if dialect_name in ('mysql', 'starrocks'):
+                                                add_sql = f'ALTER TABLE `{table.name}` ADD COLUMN `{col_name}` {type_string} COMMENT :comment'
+                                                comment_sql = None
+                                            elif dialect_name == 'postgresql':
+                                                add_sql = f'ALTER TABLE "{table.name}" ADD COLUMN "{col_name}" {type_string}'
+                                                comment_sql = f'COMMENT ON COLUMN "{table.name}"."{col_name}" IS :comment'
+                                            elif dialect_name == 'oracle':
+                                                add_sql = f'ALTER TABLE "{table.name}" ADD ("{col_name}" {type_string})'
+                                                comment_sql = f'COMMENT ON COLUMN "{table.name}"."{col_name}" IS :comment'
+                                            else:
+                                                add_sql = f'ALTER TABLE {table.name} ADD COLUMN {col_name} {type_string}'
+                                                comment_sql = None
+
+                                            connection.execute(text(add_sql), {'comment': col_info['comment']})
+                                            if comment_sql:
+                                                connection.execute(text(comment_sql), {'comment': col_info['comment']})
+
                                         except Exception as e:
                                             logger.error(
                                                 f"task_id:[{task_id}] Failed to add column '{col_name}': {e}")
@@ -1392,8 +1478,17 @@ class Jdy2DbSyncService:
                                         try:
                                             logger.info(
                                                 f"task_id:[{task_id}] Will delete column '{col_name}'")
-                                            connection.execute(
-                                                text(f"ALTER TABLE `{table.name}` DROP COLUMN `{col_name}`"))
+                                            # --- DDL 去除反引号，适配方言 ---
+                                            if dialect_name in ('mysql', 'starrocks'):
+                                                drop_sql = f'ALTER TABLE `{table.name}` DROP COLUMN `{col_name}`'
+                                            elif dialect_name == 'postgresql':
+                                                drop_sql = f'ALTER TABLE "{table.name}" DROP COLUMN ("{col_name}")'
+                                            elif dialect_name == 'oracle':
+                                                drop_sql = f'ALTER TABLE "{table.name}" DROP COLUMN ("{col_name}")'
+                                            else:
+                                                drop_sql = f'ALTER TABLE {table.name} DROP COLUMN {col_name}'
+
+                                            connection.execute(text(drop_sql))
                                         except Exception as e:
                                             logger.error(
                                                 f"task_id:[{task_id}] Failed to delete column '{col_name}': {e}")
@@ -1432,19 +1527,29 @@ class Jdy2DbSyncService:
             log_sync_error(task_config=task_config, error=e, extra_info="Error in update_table_schema_from_data")
             return table  # 失败时返回原表
 
-    # 优化：比较 SQLAlchemy 类型实例
+    # None,  dialect_name=dialect_name比较 SQLAlchemy 类型实例
     def _is_type_different(self, existing_sqlalch_type: TypeEngine, expected_sqlalch_type: TypeEngine) -> bool:
         """比较两个 SQLAlchemy 类型实例是否代表不同的数据库类型"""
         if type(existing_sqlalch_type) != type(expected_sqlalch_type):
-            # # 允许从 String/Text 升级到 LONGTEXT
-            # if isinstance(existing_sqlalch_type, (String, Text)) and isinstance(expected_sqlalch_type, (LONGTEXT)):
-            #     return True
-            # # 允许从 Integer 升级到 BigInteger
-            # if isinstance(existing_sqlalch_type, Integer) and isinstance(expected_sqlalch_type, BigInteger):
-            #     return True
-            # # 允许从 Integer/BigInteger 升级到 Float
-            # if isinstance(existing_sqlalch_type, (Integer, BigInteger)) and isinstance(expected_sqlalch_type, Float):
-            #     return True
+            # 允许从 String/Text 升级到 LONGTEXT
+            if isinstance(existing_sqlalch_type, (String, Text)) and isinstance(expected_sqlalch_type, LONGTEXT):
+                return True
+            # 允许从 String/Text 升级到 VARCHAR(1048576) (StarRocks)
+            if isinstance(existing_sqlalch_type, (String, Text)) and \
+                    isinstance(expected_sqlalch_type, String) and expected_sqlalch_type.length == 1048576:
+                return True
+            # 允许从 VARCHAR(1048576) 降级到 LONGTEXT (如果 StarRocks -> MySQL)
+            if isinstance(existing_sqlalch_type, String) and existing_sqlalch_type.length == 1048576 and \
+                    isinstance(expected_sqlalch_type, LONGTEXT):
+                return True
+
+            # 允许从 Integer 升级到 BigInteger
+            if isinstance(existing_sqlalch_type, Integer) and isinstance(expected_sqlalch_type, BigInteger):
+                return True
+            # 允许从 Integer/BigInteger 升级到 Float
+            if isinstance(existing_sqlalch_type, (Integer, BigInteger)) and isinstance(expected_sqlalch_type, Float):
+                return True
+
             # 其他类型不匹配
             return True
 
@@ -1454,6 +1559,9 @@ class Jdy2DbSyncService:
             if (existing_sqlalch_type.length is not None and
                     expected_sqlalch_type.length is not None and
                     expected_sqlalch_type.length > existing_sqlalch_type.length):
+                # 排除 1048576 -> 1048576
+                if expected_sqlalch_type.length == 1048576 and existing_sqlalch_type.length == 1048576:
+                    return False
                 return True
             # 允许从 String 升级到 Text/LONGTEXT (已在 type check 中处理)
             return False
@@ -1473,6 +1581,8 @@ class Jdy2DbSyncService:
         new_widgets_payload = data.get('widgets', [])
         form_name = data.get('name') or data.get('formName')
         task_id = task_config.id
+
+        dialect_name = engine.dialect.name
 
         if not all([app_id, entry_id]):  # widgets 可以为空
             logger.warning(
@@ -1528,8 +1638,7 @@ class Jdy2DbSyncService:
                 db_col_name = self.mapping_service.get_column_name(widget, task_config.label_to_pinyin)
                 if not db_col_name:
                     continue
-
-                sql_type = self.mapping_service.get_sql_type(widget.get('type'), None)
+                sql_type = self.mapping_service.get_sql_type(widget.get('type'), None, dialect_name=dialect_name)
                 comment = widget.get('label', '')
 
                 # 检查此列是否已存在 (例如系统字段或冲突)
@@ -1565,11 +1674,12 @@ class Jdy2DbSyncService:
                      'widgetName': old_mapping.widget_name},
                     task_config.label_to_pinyin
                 )
-                old_sql_type = self.mapping_service.get_sql_type(old_mapping.type, None)
+                old_sql_type = self.mapping_service.get_sql_type(old_mapping.type, None, dialect_name=dialect_name)
 
                 # 获取 NEW derived name 和 type
                 new_db_col_name = self.mapping_service.get_column_name(new_widget, task_config.label_to_pinyin)
-                new_sql_type = self.mapping_service.get_sql_type(new_widget.get('type'), None)
+                new_sql_type = self.mapping_service.get_sql_type(new_widget.get('type'), None,
+                                                                 dialect_name=dialect_name)
                 new_comment = new_widget.get('label', '')
 
                 if not old_db_col_name or not new_db_col_name:
@@ -1617,12 +1727,22 @@ class Jdy2DbSyncService:
             with engine.connect() as connection:
                 with connection.begin() as transaction:
                     try:
+                        # --- DDL 去除反引号，适配方言 ---
                         # 执行删除列
                         if cols_to_drop:
                             logger.info(
                                 f"task_id:[{task_id}] Will drop columns from table '{table_name}': {', '.join(cols_to_drop)}")
                             for col_name in cols_to_drop:
-                                connection.execute(text(f"ALTER TABLE `{table_name}` DROP COLUMN `{col_name}`"))
+                                if dialect_name in ('mysql', 'starrocks'):
+                                    drop_sql = f'ALTER TABLE `{table_name}` DROP COLUMN `{col_name}`'
+                                elif dialect_name == 'postgresql':
+                                    drop_sql = f'ALTER TABLE "{table_name}" DROP COLUMN ("{col_name}")'
+                                elif dialect_name == 'oracle':
+                                    drop_sql = f'ALTER TABLE "{table_name}" DROP ("{col_name}")'
+                                else:
+                                    drop_sql = f'ALTER TABLE {table_name} DROP COLUMN {col_name}'
+
+                                connection.execute(text(drop_sql))
                                 ddl_executed = True
 
                         # 执行添加列
@@ -1631,11 +1751,23 @@ class Jdy2DbSyncService:
                                 f"task_id:[{task_id}] Will add columns to table '{table_name}': {', '.join([c[0] for c in cols_to_add])}")
                             for col_name, sql_type, comment in cols_to_add:
                                 type_string = sql_type.compile(dialect=engine.dialect)
-                                connection.execute(
-                                    text(
-                                        f"ALTER TABLE `{table_name}` ADD COLUMN `{col_name}` {type_string} COMMENT :comment"),
-                                    {'comment': comment}
-                                )
+                                comment_sql = None  # 初始化
+
+                                if dialect_name in ('mysql', 'starrocks'):
+                                    add_sql = f'ALTER TABLE `{table_name}` ADD COLUMN `{col_name}` {type_string} COMMENT :comment'
+                                elif dialect_name == 'postgresql':
+                                    add_sql = f'ALTER TABLE "{table_name}" ADD COLUMN "{col_name}" {type_string}'  # PG 不在 ADD COLUMN 时加 COMMENT
+                                    comment_sql = f'COMMENT ON COLUMN "{table_name}"."{col_name}" IS :comment'
+                                elif dialect_name == 'oracle':
+                                    add_sql = f'ALTER TABLE "{table_name}" ADD ("{col_name}" {type_string})'
+                                    comment_sql = f'COMMENT ON COLUMN "{table_name}"."{col_name}" IS :comment'
+                                else:
+                                    add_sql = f'ALTER TABLE {table_name} ADD COLUMN {col_name} {type_string}'
+                                    comment_sql = None
+
+                                connection.execute(text(add_sql), {'comment': comment})
+                                if comment_sql:
+                                    connection.execute(text(comment_sql), {'comment': comment})
                                 ddl_executed = True
 
                         # 执行重命名列
@@ -1644,10 +1776,33 @@ class Jdy2DbSyncService:
                                 f"task_id:[{task_id}] Will rename columns in table '{table_name}': {', '.join([f'`{o}`->`{n}`' for o, n, _, _ in cols_to_rename])}")
                             for old_name, new_name, sql_type, comment in cols_to_rename:
                                 type_string = sql_type.compile(dialect=engine.dialect)
-                                connection.execute(text(
-                                    f"ALTER TABLE `{table_name}` CHANGE COLUMN `{old_name}` `{new_name}` {type_string} COMMENT :comment"),
-                                    {'comment': comment}
-                                )
+                                rename_sql = None  # 初始化
+
+                                # MySQL/StarRocks 的 CHANGE 语法可以同时修改类型和备注
+                                if dialect_name in ('mysql', 'starrocks'):
+                                    rename_sql = f'ALTER TABLE `{table_name}` CHANGE COLUMN `{old_name}` `{new_name}` {type_string} COMMENT :comment'
+                                    connection.execute(text(rename_sql), {'comment': comment})
+                                # PG 和 Oracle 需要分步
+                                elif dialect_name == 'postgresql':
+                                    rename_sql = f'ALTER TABLE "{table_name}" RENAME COLUMN "{old_name}" TO "{new_name}"'
+                                    connection.execute(text(rename_sql))
+                                    connection.execute(text(
+                                        f'ALTER TABLE "{table_name}" ALTER COLUMN "{new_name}" TYPE {type_string}'))
+                                    connection.execute(
+                                        text(f'COMMENT ON COLUMN "{table_name}"."{new_name}" IS :comment'),
+                                        {'comment': comment})
+                                elif dialect_name == 'oracle':
+                                    rename_sql = f'ALTER TABLE "{table_name}" RENAME COLUMN "{old_name}" TO "{new_name}"'
+                                    connection.execute(text(rename_sql))
+                                    connection.execute(
+                                        text(f'ALTER TABLE "{table_name}" MODIFY ("{new_name}" {type_string})'))
+                                    connection.execute(
+                                        text(f'COMMENT ON COLUMN "{table_name}"."{new_name}" IS :comment'),
+                                        {'comment': comment})
+                                else:
+                                    rename_sql = f'ALTER TABLE "{table_name}" RENAME COLUMN "{old_name}" TO "{new_name}"'
+                                    connection.execute(text(rename_sql))  # 仅重命名
+
                                 ddl_executed = True
 
                         # 执行修改列类型
@@ -1656,10 +1811,21 @@ class Jdy2DbSyncService:
                                 f"task_id:[{task_id}] Will modify column types in table '{table_name}': {', '.join([f'`{n}`' for n, _, _ in cols_to_modify])}")
                             for col_name, sql_type, comment in cols_to_modify:
                                 type_string = sql_type.compile(dialect=engine.dialect)
-                                connection.execute(text(
-                                    f"ALTER TABLE `{table_name}` MODIFY COLUMN `{col_name}` {type_string} COMMENT :comment"),
-                                    {'comment': comment}
-                                )
+                                comment_sql = None  # 初始化
+
+                                if dialect_name in ('mysql', 'starrocks'):
+                                    modify_sql = f'ALTER TABLE `{table_name}` MODIFY COLUMN `{col_name}` {type_string} COMMENT :comment'
+                                    comment_sql = None  # MySQL 内联
+                                elif dialect_name == 'oracle':
+                                    modify_sql = f'ALTER TABLE "{table_name}" MODIFY ("{col_name}" {type_string})'
+                                    comment_sql = f'COMMENT ON COLUMN "{table_name}"."{col_name}" IS :comment'
+                                else:
+                                    modify_sql = f'ALTER TABLE "{table_name}" ALTER COLUMN "{col_name}" TYPE {type_string}'  # PG
+                                    comment_sql = f'COMMENT ON COLUMN "{table_name}"."{col_name}" IS :comment'  # PG
+
+                                connection.execute(text(modify_sql), {'comment': comment})
+                                if comment_sql:
+                                    connection.execute(text(comment_sql), {'comment': comment})
                                 ddl_executed = True
 
                         transaction.commit()
@@ -1810,10 +1976,10 @@ class Jdy2DbSyncService:
                     # 其他类型直接赋值 (包括数字、布尔值到Boolean列等)
                     else:
                         # 添加类型检查，防止如数字写入文本列的问题 (虽然通常数据库会处理)
+                        # Check for StarRocks String
                         if isinstance(col_type, (String, Text, LONGTEXT)) and not isinstance(value, str):
                             cleaned_data[db_col_name] = str(value)
-                        elif isinstance(col_type, (Integer, BigInteger, Float)) and not isinstance(value,
-                                                                                                   (int, float)):
+                        elif isinstance(col_type, (Integer, BigInteger, Float)) and not isinstance(value, (int, float)):
                             # 尝试转换，失败则记录警告
                             try:
                                 cleaned_data[db_col_name] = int(value) if isinstance(col_type,
@@ -1841,7 +2007,9 @@ class Jdy2DbSyncService:
 
     @retry()
     def upsert_data(self, session: Session, table: Table, data: dict, task_config: SyncTask):
-        """插入或更新单条数据 (使用 ON DUPLICATE KEY UPDATE 增强)"""
+        """
+        插入或更新单条数据 (适配 MySQL/StarRocks/PostgreSQL/Oracle)
+        """
         cleaned_data = self.clean_data_for_dml(table, data, task_config)
         if not cleaned_data:
             logger.warning(f"task_id:[{task_config.id}] Cleaned data is empty, nothing to sync.")
@@ -1855,20 +2023,70 @@ class Jdy2DbSyncService:
             return
 
         try:
-            # 构造 INSERT ... ON DUPLICATE KEY UPDATE 语句
-            stmt = insert(table).values(**cleaned_data)
-            # 排除 _id 字段在 UPDATE 部分中更新自己
-            update_data = {k: stmt.inserted[k] for k, v in cleaned_data.items() if k != '_id'}  # 使用 inserted 引用新值
-            if update_data:  # 只有在除了 _id 还有其他字段时才添加 ON DUPLICATE KEY UPDATE
-                on_duplicate_stmt = stmt.on_duplicate_key_update(**update_data)
-            else:
-                # 如果只有 _id，使用 INSERT IGNORE 或类似的逻辑避免错误，
-                # 但这里假设总有其他数据或至少系统字段，所以直接用 stmt
-                # 或者，如果确定是更新操作，可以构造 UPDATE 语句
-                # 这里简化处理：如果只有 _id，仍然尝试 INSERT，让 ON DUPLICATE 处理
-                on_duplicate_stmt = stmt.on_duplicate_key_update(_id=stmt.inserted._id)  # 无意义的更新，但能触发逻辑
+            # 1. 获取方言和用户指定的 db_type
+            dialect_name = session.bind.dialect.name
+            # db_type 用于 StarRocks 的特殊逻辑
+            db_type = task_config.database.db_type.upper() if task_config.database else ""
 
-            session.execute(on_duplicate_stmt)
+            # --- 策略 1: StarRocks (根据用户要求，仅 INSERT) ---
+            if db_type == 'STARROCKS':
+                # StarRocks 的主键模型允许 INSERT 覆盖
+                stmt = table.insert().values(**cleaned_data)
+                session.execute(stmt)
+
+            # --- 策略 2: MySQL (使用 ON DUPLICATE KEY UPDATE) ---
+            elif dialect_name == 'mysql':
+                # 构造 INSERT ... ON DUPLICATE KEY UPDATE 语句
+                stmt = mysql_insert(table).values(**cleaned_data)
+                # 排除 _id 字段在 UPDATE 部分中更新自己
+                update_data = {k: stmt.inserted[k] for k, v in cleaned_data.items() if k != '_id'}  # 使用 inserted 引用新值
+                if update_data:
+                    on_duplicate_stmt = stmt.on_duplicate_key_update(**update_data)
+                else:
+                    on_duplicate_stmt = stmt.on_duplicate_key_update(_id=stmt.inserted._id)  # 至少更新一个
+
+                session.execute(on_duplicate_stmt)
+
+            # --- 策略 3: PostgreSQL (使用 ON CONFLICT DO UPDATE) ---
+            elif dialect_name == 'postgresql':
+                stmt = postgresql_insert(table).values(**cleaned_data)
+                # 排除 _id 字段
+                update_data = {k: stmt.excluded[k] for k in cleaned_data if k != '_id'}
+                # 假设 _id 是唯一的约束
+                on_conflict_stmt = stmt.on_conflict_do_update(
+                    index_elements=['_id'],  # 必须是主键或唯一索引
+                    set_=update_data
+                )
+                session.execute(on_conflict_stmt)
+
+            # --- 策略 4: Oracle (使用 Read-then-Write / MERGE) ---
+            # (Read-then-Write 更简单且通用)
+            elif dialect_name == 'oracle':
+                # 1. 尝试查询
+                # 注意：必须使用 table.c._id
+                existing = session.query(table).filter(table.c._id == data_id).first()
+
+                if existing:
+                    # 2. 如果存在，则更新
+                    update_stmt = table.update().where(table.c._id == data_id).values(**cleaned_data)
+                    session.execute(update_stmt)
+                else:
+                    # 3. 如果不存在，则插入
+                    insert_stmt = table.insert().values(**cleaned_data)
+                    session.execute(insert_stmt)
+
+            # --- 策略 5: 其他 (回退到 Read-then-Write) ---
+            else:
+                logger.warning(
+                    f"task_id:[{task_config.id}] Unknown dialect '{dialect_name}'. Falling back to Read-then-Write upsert.")
+                existing = session.query(table).filter(table.c._id == data_id).first()
+                if existing:
+                    update_stmt = table.update().where(table.c._id == data_id).values(**cleaned_data)
+                    session.execute(update_stmt)
+                else:
+                    insert_stmt = table.insert().values(**cleaned_data)
+                    session.execute(insert_stmt)
+
             logger.debug(
                 f"task_id:[{task_config.id}] Data upserted successfully (_id: {data_id}) to table '{table.name}'.")
             # commit 移到 handle_webhook_data 末尾

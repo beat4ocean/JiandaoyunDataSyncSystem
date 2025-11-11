@@ -16,3 +16,10 @@ pip install --no-build-isolation ./passlib-1.7.4.tar.gz
 pip install --no-build-isolation ./flask_cors-6.0.1.tar.gz
 pip install --no-build-isolation ./pyjwt-2.10.1.tar.gz
 pip install --no-build-isolation ./flask_jwt_extended-4.7.1.tar.gz
+
+# 安装 postgres 驱动
+#pip install --no-build-isolation ./psycopg2_binary-2.9.11-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
+pip install --no-deps oracledb-3.4.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
+
+# 安装 oracle 驱动
+pip install --no-build-isolation ./oracledb-3.4.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
