@@ -30,5 +30,8 @@ RUN pip install --no-cache-dir -r requirements.txt -i https://mirrors.aliyun.com
 # 将当前目录内容复制到容器的 /app 目录下
 COPY . .
 
+# 将工作目录 /app 添加到 PYTHONPATH，以便 Python 可以找到 'app' 模块
+ENV PYTHONPATH "${PYTHONPATH}:/app"
+
 # 定义容器启动时运行的命令
 CMD ["python", "-u", "run.py"]
