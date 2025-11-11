@@ -465,6 +465,7 @@ class Jdy2DbSyncService:
                 task_config.table_name = new_table_name
                 update_task_config_flag = True
 
+        # 如果 优先级3 表单名转换 优先级比 2 高，会导致表名习惯性跟随表单名重命名
         # 优先级 2: task_config.table_name (数据库配置)
         elif old_table_name and old_table_name.strip():
             new_table_name = old_table_name.strip()
