@@ -676,19 +676,7 @@ def start_scheduler(app: Flask):
                 # 非关键错误, 继续启动
                 config_session.rollback()
 
-            # 1. 添加 BINLOG 监听器管理器
-            scheduler.add_job(
-                check_and_start_new_binlog_listeners,
-                trigger='interval',
-                minutes=Config.CHECK_INTERVAL_MINUTES,  # 每 CHECK_INTERVAL_MINUTES 检查一次是否有新/停止的 binlog 任务
-                id='binlog_manager',
-                replace_existing=True,
-                max_instances=1,  # (关键) 防止并发
-                next_run_time=datetime.now(TZ_UTC_8) + timedelta(seconds=5),  # 5秒后启动
-                misfire_grace_time=60  # 增加misfire_grace_time以防任务堆积
-            )
-
-            # 2. 添加字段映射刷新器
+            # 1. 添加字段映射刷新器
             scheduler.add_job(
                 update_all_field_mappings_job,
                 trigger='interval',
@@ -697,6 +685,18 @@ def start_scheduler(app: Flask):
                 replace_existing=True,
                 max_instances=1,  # (关键) 防止并发
                 next_run_time=datetime.now(TZ_UTC_8) + timedelta(seconds=3),  # 3秒后首次启动
+                misfire_grace_time=60  # 增加misfire_grace_time以防任务堆积
+            )
+
+            # 2. 添加 BINLOG 监听器管理器
+            scheduler.add_job(
+                check_and_start_new_binlog_listeners,
+                trigger='interval',
+                minutes=Config.CHECK_INTERVAL_MINUTES,  # 每 CHECK_INTERVAL_MINUTES 检查一次是否有新/停止的 binlog 任务
+                id='binlog_manager',
+                replace_existing=True,
+                max_instances=1,  # (关键) 防止并发
+                next_run_time=datetime.now(TZ_UTC_8) + timedelta(seconds=5),  # 5秒后启动
                 misfire_grace_time=60  # 增加misfire_grace_time以防任务堆积
             )
 

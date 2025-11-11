@@ -151,7 +151,7 @@ class FieldMappingService:
             # 1. 实例化
             form_api = FormApi(api_key=api_key, host=Config.JDY_API_BASE_URL, qps=30)
 
-            # 2. 调用
+            # 2. 调用 API
             response = form_api.get_form_widgets(task.app_id, task.entry_id)
 
             # 3. V5 响应结构
@@ -170,11 +170,16 @@ class FieldMappingService:
                 logger.info(f"task_id:[{task.id}] No widgets found for form.")
                 return
 
-            # 4. 删除旧映射
-            config_session.query(FormFieldMapping).filter_by(task_id=task.id).delete()
+            # 4. 获取现有的映射
+            logger.debug(f"task_id:[{task.id}] Fetching existing mappings from DB...")
+            existing_mappings_query = config_session.query(FormFieldMapping).filter_by(task_id=task.id)
+            # 使用 widget_alias (API中的 'name' 字段) 作为唯一键
+            existing_mappings_map = {m.widget_alias: m for m in existing_mappings_query.all()}
 
-            # 5. 插入新映射
-            new_mappings = []
+            new_count = 0
+            updated_count = 0
+
+            # 5. 遍历 API 字段，执行增、改
             for field in widgets:
                 # V5 API 结构
                 widget_alias = field.get('name')  # 'name' 字段 (用于查询/匹配)
@@ -186,20 +191,52 @@ class FieldMappingService:
                     # 跳过无效的字段 (例如 'SerialId' 可能没有 widget_name)
                     continue
 
-                mapping = FormFieldMapping(
-                    task_id=task.id,
-                    form_name=form_name,
-                    widget_name=widget_name,  # _widget_xxx
-                    widget_alias=widget_alias,  # name
-                    label=label,
-                    type=widget_type,
-                    data_modify_time=data_modify_time
-                )
-                new_mappings.append(mapping)
+                # 尝试从Map中弹出 (pop) 现有映射
+                existing_mapping = existing_mappings_map.pop(widget_alias, None)
 
-            config_session.add_all(new_mappings)
+                if existing_mapping:
+                    # --- 更新 (Update) ---
+                    # 检查是否有变化
+                    if (existing_mapping.form_name != form_name or
+                            existing_mapping.widget_name != widget_name or
+                            existing_mapping.label != label or
+                            existing_mapping.type != widget_type or
+                            existing_mapping.data_modify_time != data_modify_time):
+                        existing_mapping.form_name = form_name
+                        existing_mapping.widget_name = widget_name
+                        existing_mapping.label = label
+                        existing_mapping.type = widget_type
+                        existing_mapping.data_modify_time = data_modify_time
+
+                        # (SQLAlchemy 自动跟踪更改，无需 add)
+                        updated_count += 1
+
+                else:
+                    # --- 新增 (Add) ---
+                    new_mapping = FormFieldMapping(
+                        task_id=task.id,
+                        form_name=form_name,
+                        widget_name=widget_name,
+                        widget_alias=widget_alias,
+                        label=label,
+                        type=widget_type,
+                        data_modify_time=data_modify_time
+                    )
+                    config_session.add(new_mapping)
+                    new_count += 1
+
+            # 6. 删除 (Delete)
+            # 循环结束后，existing_mappings_map 中剩下的都是 DB 中有、但 API 不再返回的字段
+            deleted_count = 0
+            if existing_mappings_map:
+                for mapping_to_delete in existing_mappings_map.values():
+                    config_session.delete(mapping_to_delete)
+                    deleted_count += 1
+
+            # 7. 提交事务
             config_session.commit()
-            logger.info(f"task_id:[{task.id}] Successfully updated {len(new_mappings)} field mappings.")
+            logger.info(
+                f"task_id:[{task.id}] Successfully merged field mappings, Added: {new_count}, Updated: {updated_count}, Deleted: {deleted_count}.")
 
         except (RequestException, HTTPError) as e:
             config_session.rollback()
@@ -214,6 +251,16 @@ class FieldMappingService:
                 task_config=task,
                 error=e,
                 extra_info=f"task_id:[{task.id}] Failed to update mappings due to IntegrityError (e.g., duplicate widget_alias?)."
+            )
+        except Exception as e:
+            # 捕获其他潜在异常
+            config_session.rollback()
+            logger.error(f"task_id:[{task.id}] An unexpected error occurred during field mapping update: {e}",
+                         exc_info=True)
+            log_sync_error(
+                task_config=task,
+                error=e,
+                extra_info=f"task_id:[{task.id}] Unexpected error during merge."
             )
 
 
