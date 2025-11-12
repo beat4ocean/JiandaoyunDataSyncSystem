@@ -623,7 +623,8 @@ class Db2JdySyncService:
             raise ValueError(f"task_id:[{task.id}] business_keys is not configured.")
 
         # pk_field_name 格式 "pk1,pk2,pk3"
-        pk_fields = [pk.strip() for pk in task.business_keys.split(',') if pk and pk.strip()]
+        # pk_fields = [pk.strip() for pk in task.business_keys.split(',') if pk and pk.strip()]
+        pk_fields = task.business_keys
         pk_values = []
 
         # --- 适配大小写不敏感的 row key (如 Oracle) ---
@@ -1160,7 +1161,8 @@ class Db2JdySyncService:
             quote_char = '`' if dialect_name in ('mysql', 'starrocks') else '"'
 
             # 使用主键排序
-            pk_fields = [pk.strip() for pk in task.business_keys.split(',') if pk and pk.strip()]
+            # pk_fields = [pk.strip() for pk in task.business_keys.split(',') if pk and pk.strip()]
+            pk_fields = task.business_keys
             # pk_fields.sort()
             # --- DDL 主键排序字段加引号 ---
             order_by_pks = ','.join([f"{quote_char}{pk.strip()}{quote_char} ASC" for pk in pk_fields])
@@ -1462,7 +1464,7 @@ class Db2JdySyncService:
             return
         api_key = task.department.jdy_key_info.api_key
 
-        if not task.incremental_field:
+        if not task.incremental_fields:
             raise ValueError(f"task_id:[{task.id}] Incremental field (e.g., last_modified) is not configured.")
 
         if not task.business_keys:
@@ -1545,63 +1547,78 @@ class Db2JdySyncService:
                 # --- 数据探测逻辑 ---
 
                 # 解析 incremental 字段（有可能是复杂字段）
-                raw_field = task.incremental_field.strip() if task.incremental_field else None
-                if not raw_field:
+                # raw_field = task.incremental_fields.strip() if task.incremental_fields else None
+                raw_field_list = task.incremental_fields
+                if not raw_field_list:
                     raise ValueError(f"task_id:[{task.id}] No incremental field specified.")
 
                 # DDL 处理 "f1, f2" 类型的字段
                 def quote_field(f):
                     return f"{quote_char}{strip_quotes(f)}{quote_char}"
 
-                # 重新处理 raw_field, 确保逗号分隔的字段被正确引用
-                raw_field_list = [item.strip() for item in raw_field.split(',') if item.strip()]
+                # # 重新处理 raw_field, 确保逗号分隔的字段被正确引用
+                # raw_field_list = [item.strip() for item in raw_field.split(',') if item.strip()]
 
                 # 探测字段使用第一个
                 field_for_probing = strip_quotes(raw_field_list[0])
 
-                # 查询字段
-                incremental_field_for_query = ""
-                is_complex_field = False
+                # # 查询字段
+                # incremental_field_for_query = ""
+                # is_complex_field = False
+                #
+                # # raw_field_lower = raw_field.lower()
+                #
+                # if 'coalesce(' in raw_field_lower or 'ifnull(' in raw_field_lower:
+                #     # 格式: coalesce(updated_time,created_time) 或 IFNULL(...)
+                #     # 假设用户在复杂函数中已正确处理语法
+                #     incremental_field_for_query = f"({raw_field})"
+                #     is_complex_field = True
+                #
+                #     # 提取第一个字段用于探测
+                #     fields = re.findall(r'[a-zA-Z0-9_]+', raw_field)  # 查找字段名
+                #     if fields:
+                #         first_word = fields[0].lower()
+                #         if first_word in ['coalesce', 'ifnull'] and len(fields) > 1:
+                #             field_for_probing = strip_quotes(fields[1])  # e.g., coalesce(THIS_ONE, ...)
+                #         else:
+                #             field_for_probing = strip_quotes(fields[0])  # e.g., THIS_ONE ...
+                #     else:
+                #         field_for_probing = raw_field  # 回退
+                #
+                #     logger.debug(
+                #         f"task_id:[{task.id}] Detected complex function. Query: {incremental_field_for_query}, ProbeField: {field_for_probing}")
+                #
+                # # elif len(raw_field_list) > 1:
+                #     # 格式: updated_time, created_time
+                #     # 转换为 coalesce
+                #     quoted_fields = [quote_field(f) for f in raw_field_list]
+                #     incremental_field_for_query = f"COALESCE({','.join(quoted_fields)})"
+                #     field_for_probing = strip_quotes(raw_field_list[0])
+                #     # is_complex_field = True
+                #     logger.debug(
+                #         f"task_id:[{task.id}] Detected comma-separated fields. Query: {incremental_field_for_query}, ProbeField: {field_for_probing}")
+                #
+                # else:
+                #     # 简单字段: updated_time
+                #     field_for_probing = strip_quotes(raw_field_list[0])
+                #     incremental_field_for_query = quote_field(field_for_probing)
+                #     # is_complex_field = False
+                #     logger.debug(
+                #         f"task_id:[{task.id}] Detected simple field. Query: {incremental_field_for_query}, ProbeField: {field_for_probing}")
 
-                raw_field_lower = raw_field.lower()
+                # 1. 引用所有增量字段
+                quoted_incremental_fields = [quote_field(f) for f in raw_field_list]
 
-                if 'coalesce(' in raw_field_lower or 'ifnull(' in raw_field_lower:
-                    # 格式: coalesce(updated_time,created_time) 或 IFNULL(...)
-                    # 假设用户在复杂函数中已正确处理语法
-                    incremental_field_for_query = f"({raw_field})"
-                    is_complex_field = True
+                # 2. 为每个字段创建 ">= :last_sync_time" 条件
+                #    使用 :last_sync_time 作为绑定参数，SQLAlchemy 会正确处理
+                or_conditions = [f"{field_name} >= :last_sync_time" for field_name in quoted_incremental_fields]
 
-                    # 提取第一个字段用于探测
-                    fields = re.findall(r'[a-zA-Z0-9_]+', raw_field)  # 查找字段名
-                    if fields:
-                        first_word = fields[0].lower()
-                        if first_word in ['coalesce', 'ifnull'] and len(fields) > 1:
-                            field_for_probing = strip_quotes(fields[1])  # e.g., coalesce(THIS_ONE, ...)
-                        else:
-                            field_for_probing = strip_quotes(fields[0])  # e.g., THIS_ONE ...
-                    else:
-                        field_for_probing = raw_field  # 回退
+                # 3. 将它们用 " OR " 连接起来, 并加上括号
+                incremental_where_clause = f"({' OR '.join(or_conditions)})"
 
-                    logger.debug(
-                        f"task_id:[{task.id}] Detected complex function. Query: {incremental_field_for_query}, ProbeField: {field_for_probing}")
-
-                elif len(raw_field_list) > 1:
-                    # 格式: updated_time, created_time
-                    # 转换为 coalesce
-                    quoted_fields = [quote_field(f) for f in raw_field_list]
-                    incremental_field_for_query = f"COALESCE({','.join(quoted_fields)})"
-                    field_for_probing = strip_quotes(raw_field_list[0])
-                    is_complex_field = True
-                    logger.debug(
-                        f"task_id:[{task.id}] Detected comma-separated fields. Query: {incremental_field_for_query}, ProbeField: {field_for_probing}")
-
-                else:
-                    # 简单字段: updated_time
-                    field_for_probing = strip_quotes(raw_field_list[0])
-                    incremental_field_for_query = quote_field(field_for_probing)
-                    is_complex_field = False
-                    logger.debug(
-                        f"task_id:[{task.id}] Detected simple field. Query: {incremental_field_for_query}, ProbeField: {field_for_probing}")
+                logger.debug(
+                    f"task_id:[{task.id}] Generated incremental WHERE clause: {incremental_where_clause}, "
+                    f"Using probe field: {field_for_probing}")
 
                 # 2. 检查探测字段 (field_for_probing) 的类型
                 inspector = inspect(dynamic_engine)
@@ -1693,9 +1710,13 @@ class Db2JdySyncService:
 
                 # 6. 获取源数据 (带 SQL 过滤)
                 # DDL  使用方言引号
+                # base_query = (
+                #     f"SELECT * FROM {quote_char}{task.table_name}{quote_char} "
+                #     f"WHERE {incremental_field_for_query} >= :last_sync_time"
+                # )
                 base_query = (
                     f"SELECT * FROM {quote_char}{task.table_name}{quote_char} "
-                    f"WHERE {incremental_field_for_query} >= :last_sync_time"
+                    f"WHERE {incremental_where_clause}"
                 )
 
                 # 使用动态确定的时间戳
@@ -1704,7 +1725,8 @@ class Db2JdySyncService:
                     base_query += f" AND {task.source_filter_sql.strip().rstrip(';')}"
 
                 # 使用主键排序
-                pk_fields = [pk.strip() for pk in task.business_keys.split(',') if pk and pk.strip()]
+                # pk_fields = [pk.strip() for pk in task.business_keys.split(',') if pk and pk.strip()]
+                pk_fields = task.business_keys
                 # pk_fields.sort()
                 # --- DDL 主键排序字段加引号 ---
                 order_by_pks = ','.join([f"{quote_char}{pk.strip()}{quote_char} ASC" for pk in pk_fields])

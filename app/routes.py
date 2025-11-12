@@ -48,12 +48,31 @@ def row_to_dict(row, include_relations=None):
             continue
 
         value = getattr(row, column.name)
+
+        # # *** 统一处理 business_keys 和 incremental_fields (DB -> JSON) ***
+        # if isinstance(row, SyncTask) and column.name in ('business_keys', 'incremental_fields'):
+        #     if row.sync_type == 'db2jdy':
+        #         if not value:
+        #             d[column.name] = []  # 确保返回空数组
+        #         else:
+        #             try:
+        #                 # 1. 尝试按新格式 (JSON 字符串) 解析: "[\"pk1\", \"pk2\"]"
+        #                 parsed = json.loads(value)
+        #                 # 确保是列表 (兼容旧的 "pk1" 字符串)
+        #                 d[column.name] = parsed if isinstance(parsed, list) else [parsed]
+        #             except (json.JSONDecodeError, TypeError):
+        #                 # 2. 降级: 按旧格式 (逗号分隔) 解析: "pk1,pk2"
+        #                 d[column.name] = [k for k in str(value).split(',') if k]
+        #         continue  # 已处理，跳到下一个字段
+
         if isinstance(value, (datetime, date)):
             d[column.name] = value.isoformat()
         elif isinstance(value, time):
             # 将 time 对象格式化为 HH:MM:SS 字符串
             d[column.name] = value.strftime('%H:%M:%S')
         else:
+            # value 可能是 str, int, bool, None,
+            # 或来自 JSON 列的 list/dict
             d[column.name] = value
 
     # 2. (可选) 转换关联字段
@@ -269,7 +288,7 @@ def delete_database(db_id):
 @api_bp.route('/databases/test', methods=['POST'])
 @jwt_required()
 def test_database_connection():
-    """测试数据库连接（使用 app/utils.py 中的函数）"""
+    """测试数据库连接"""
     data = request.get_json()
     try:
         # 权限检查：确保用户只能测试他们有权访问的数据库
@@ -284,12 +303,12 @@ def test_database_connection():
             # (如果密码未更改，从数据库加载)
             if not data.get('db_password'):
                 data['db_password'] = db.db_password
-        # 2. 如果是新建 (data 不包含 id)
-        else:
-            if not current_user.is_superuser:
-                # 确保他们正在为自己的部门创建
-                pass  # (暂时允许测试，因为 department_id 可能还未设置)
-            pass
+        # # 2. 如果是新建 (data 不包含 id)
+        # else:
+        #     if not current_user.is_superuser:
+        #         # 确保他们正在为自己的部门创建
+        #         pass  # (暂时允许测试，因为 department_id 可能还未设置)
+        #     pass
 
         # 执行测试
         success, message = test_db_connection(data)
@@ -533,9 +552,26 @@ def add_sync_task():
             # (db2jdy 专属字段)
             new_task.app_id = data.get('app_id')  # db2jdy 必须
             new_task.entry_id = data.get('entry_id')  # db2jdy 必须
-            new_task.business_keys = data.get('business_keys')  # db2jdy 必须 (非 FULL_SYNC)
+
+            # # *** 统一处理 business_keys (JSON -> DB) ***
+            # raw_keys = data.get('business_keys')  # 期望是 ['pk1', 'pk2']
+            # if isinstance(raw_keys, list):
+            #     new_task.business_keys = json.dumps(raw_keys)
+            # else:
+            #     new_task.business_keys = raw_keys  # 降级
+            #
+            # # *** 修复: 统一处理 incremental_fields (JSON -> DB) ***
+            # raw_inc_field = data.get('incremental_fields')  # 期望是 ['field1']
+            # if isinstance(raw_inc_field, list):
+            #     new_task.incremental_fields = json.dumps(raw_inc_field)
+            # else:
+            #     new_task.incremental_fields = raw_inc_field  # 降级
+
+            # *** 移除 json.dumps, 直接赋值数组 ***
+            new_task.business_keys = data.get('business_keys')  # 期望是 ['pk1', 'pk2']
+            new_task.incremental_fields = data.get('incremental_fields')  # 期望是 ['field1']
+
             new_task.sync_mode = data.get('sync_mode', 'INCREMENTAL')
-            new_task.incremental_field = data.get('incremental_field')
             new_task.incremental_interval = data.get('incremental_interval')
             new_task.full_sync_time = _parse_time_string(data.get('full_sync_time'))
             new_task.source_filter_sql = data.get('source_filter_sql')
@@ -669,9 +705,33 @@ def update_sync_task(task_id):
         if sync_type == 'db2jdy':
             task_to_update.app_id = data.get('app_id', task_to_update.app_id)
             task_to_update.entry_id = data.get('entry_id', task_to_update.entry_id)
+
+            # # *** 统一处理 business_keys (JSON -> DB) ***
+            # if 'business_keys' in data:
+            #     raw_keys = data.get('business_keys')
+            #     if isinstance(raw_keys, list):
+            #         task_to_update.business_keys = json.dumps(raw_keys)
+            #     else:
+            #         task_to_update.business_keys = raw_keys  # 降级
+            #
+            # # *** 统一处理 incremental_fields (JSON -> DB) ***
+            # if 'incremental_fields' in data:
+            #     raw_inc_field = data.get('incremental_fields')
+            #     if isinstance(raw_inc_field, list):
+            #         task_to_update.incremental_fields = json.dumps(raw_inc_field)
+            #     else:
+            #         task_to_update.incremental_fields = raw_inc_field  # 降级
+
+            # # *** 移除 json.dumps, 直接赋值数组 ***
+            # if 'business_keys' in data:
+            #     task_to_update.business_keys = data.get('business_keys')  # 期望是 ['pk1']
+            #
+            # if 'incremental_fields' in data:
+            #     task_to_update.incremental_fields = data.get('incremental_fields')  # 期望是 ['field1']
+
             task_to_update.business_keys = data.get('business_keys', task_to_update.business_keys)
             task_to_update.sync_mode = data.get('sync_mode', task_to_update.sync_mode)
-            task_to_update.incremental_field = data.get('incremental_field', task_to_update.incremental_field)
+            task_to_update.incremental_fields = data.get('incremental_fields', task_to_update.incremental_fields)
             task_to_update.incremental_interval = data.get('incremental_interval', task_to_update.incremental_interval)
             # 修正 _parse_time_string 对 null 的处理
             full_sync_time_val = data.get('full_sync_time', task_to_update.full_sync_time)

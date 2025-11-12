@@ -1298,7 +1298,8 @@
                        @close="closeDialog" class="form-dialog">
 
               <div v-loading="dialogContentLoading" style="min-height: 300px;">
-                <el-form v-if="!dialogContentLoading" ref="formRef" :model="currentItem" :rules="taskRules" label-position="top" label-width="150px">
+                <el-form v-if="!dialogContentLoading" ref="formRef" :model="currentItem" :rules="taskRules"
+                         label-position="top" label-width="150px">
 
                   <input type="hidden" v-model="currentItem.sync_type"/>
 
@@ -1311,9 +1312,9 @@
                     <el-col :span="12">
                       <el-form-item label="所属部门 (租户)" prop="department_id" v-if="isSuperuser">
                         <el-select v-model="currentItem.department_id" placeholder="选择所属部门"
-                                  @change="onDepartmentChange">
+                                   @change="onDepartmentChange">
                           <el-option v-for="dept in departments" :key="dept.id"
-                                    :label="dept.department_name" :value="dept.id"></el-option>
+                                     :label="dept.department_name" :value="dept.id"></el-option>
                         </el-select>
                       </el-form-item>
                     </el-col>
@@ -1324,18 +1325,18 @@
                       <el-form-item label="源数据库" prop="database_id">
                         <el-select v-model="currentItem.database_id" placeholder="选择源数据库">
                           <el-option v-for="db in filteredDatabases" :key="db.id"
-                                    :label="db.db_show_name" :value="db.id"></el-option>
+                                     :label="db.db_show_name" :value="db.id"></el-option>
                         </el-select>
                       </el-form-item>
                     </el-col>
                     <el-col :span="12">
                       <el-form-item label="源数据库表名" prop="table_name">
                         <el-select v-model="currentItem.table_name"
-                                  placeholder="搜索或选择表名"
-                                  filterable
-                                  clearable
-                                  :loading="tablesLoading"
-                                  style="width: 100%;">
+                                   placeholder="搜索或选择表名"
+                                   filterable
+                                   clearable
+                                   :loading="tablesLoading"
+                                   style="width: 100%;">
                           <el-option v-for="table in tablesList" :key="table" :label="table" :value="table"></el-option>
                         </el-select>
                       </el-form-item>
@@ -1380,13 +1381,14 @@
                       <el-col :span="12">
                         <el-form-item label="源表主键" prop="business_keys">
                           <el-select v-model="currentItem.business_keys"
-                                    placeholder="选择主键 (可多选)"
-                                    multiple
-                                    filterable
-                                    clearable
-                                    :loading="columnsLoading"
-                                    style="width: 100%;">
-                            <el-option v-for="col in columnsList" :key="col.name" :label="col.name" :value="col.name"></el-option>
+                                     placeholder="选择主键 (可多选)"
+                                     multiple
+                                     filterable
+                                     clearable
+                                     :loading="columnsLoading"
+                                     style="width: 100%;">
+                            <el-option v-for="col in columnsList" :key="col.name" :label="col.name"
+                                       :value="col.name"></el-option>
                           </el-select>
                         </el-form-item>
                       </el-col>
@@ -1396,21 +1398,23 @@
                   <template v-if="currentItem.sync_mode === 'INCREMENTAL'">
                     <el-row :gutter="20">
                       <el-col :span="12">
-                        <el-form-item label="增量时间字段" prop="incremental_field">
-                          <el-select v-model="currentItem.incremental_field"
-                                    placeholder="选择增量时间字段"
-                                    filterable
-                                    clearable
-                                    :loading="columnsLoading"
-                                    style="width: 100%;">
-                            <el-option v-for="col in columnsList" :key="col.name" :label="col.name + ' (' + col.type + ')'" :value="col.name"></el-option>
+                        <el-form-item label="增量时间字段" prop="incremental_fields">
+                          <el-select v-model="currentItem.incremental_fields"
+                                     placeholder="选择增量时间字段 (可多选)"
+                                     multiple
+                                     filterable
+                                     clearable
+                                     :loading="columnsLoading"
+                                     style="width: 100%;">
+                            <el-option v-for="col in columnsList" :key="col.name"
+                                       :label="col.name + ' (' + col.type + ')'" :value="col.name"></el-option>
                           </el-select>
                         </el-form-item>
                       </el-col>
                       <el-col :span="12">
                         <el-form-item label="增量间隔 (分钟)" prop="incremental_interval">
                           <el-input-number v-model="currentItem.incremental_interval" :min="1"
-                                          style="width: 100%;"></el-input-number>
+                                           style="width: 100%;"></el-input-number>
                         </el-form-item>
                       </el-col>
                     </el-row>
@@ -1473,9 +1477,11 @@
                   </el-form-item>
 
                 </el-form>
-              </div> <template #footer>
+              </div>
+              <template #footer>
                 <el-button @click="closeDialog">取消</el-button>
-                <el-button type="primary" @click="saveItem" :loading="loading" :disabled="dialogContentLoading">保存</el-button>
+                <el-button type="primary" @click="saveItem" :loading="loading" :disabled="dialogContentLoading">保存
+                </el-button>
               </template>
             </el-dialog>
           </el-card>
@@ -1493,7 +1499,7 @@
                 entry_id: '',
                 sync_mode: 'INCREMENTAL',
                 is_active: true,
-                incremental_field: null,
+                incremental_fields: [],
                 incremental_interval: 5,
                 full_sync_time_temp: null,
                 full_sync_time: null,
@@ -1508,7 +1514,10 @@
             // *** 解构 useCrud 并获取原始的 saveItem ***
             const {
                 items, loading, dialogVisible, isEdit, currentItem, formRef,
-                fetchItems, openDialog, closeDialog, saveItem: originalSaveItem, deleteItem
+                fetchItems,
+                closeDialog,
+                saveItem: originalSaveItem,
+                deleteItem
             } = useCrud('/sync-tasks?sync_type=db2jdy', '同步任务', defaultTask, 'id');
 
             const departments = ref([]);
@@ -1538,22 +1547,21 @@
                 if (!db_id) return;
                 tablesLoading.value = true;
                 tablesList.value = [];
-                columnsList.value = [];
-
-                if (!isEditLoad) { // <-- 修复点: 仅在非编辑加载时清空
+                // 仅在用户主动更改时(isEditLoad=false)才清空字段
+                if (!isEditLoad) {
+                    columnsList.value = [];
                     currentItem.table_name = null;
                     currentItem.business_keys = [];
-                    currentItem.incremental_field = null;
+                    currentItem.incremental_fields = null;
                 }
 
                 try {
                     const response = await apiClient.get(`/database/inspector/${db_id}/tables`);
                     tablesList.value = response.data.tables;
 
-                    // *** 修复 #2 (part 1): 链式调用 ***
-                    // 如果是编辑加载，并且有表名，则 *立即* 获取字段列表
+                    // 链式调用: 如果是编辑模式加载，并且有表名，则 *立即* 获取字段列表
                     if (isEditLoad && currentItem.table_name) {
-                        // *** 修复 #1: 确保 fetchSchema 被 await ***
+                        // *** #1: 确保 fetchSchema 被 await ***
                         await fetchSchema(currentItem.table_name, true);
                     }
                 } catch (e) {
@@ -1571,9 +1579,10 @@
                 columnsLoading.value = true;
                 columnsList.value = [];
 
-                if (!isEditLoad) { // <-- 修复点: 仅在非编辑加载时清空
+                // 仅在用户主动更改时(isEditLoad=false)才清空字段
+                if (!isEditLoad) {
                     currentItem.business_keys = [];
-                    currentItem.incremental_field = null;
+                    currentItem.incremental_fields = [];
                 }
 
                 try {
@@ -1598,11 +1607,12 @@
                     return; // 验证失败, currentItem.business_keys 保持为数组
                 }
 
-                // 2. 创建一个待发送的数据副本, 将主键数组转换回逗号分隔的字符串
+                // *** 移除数据转换 ***
+                // 后端现在接受数组
                 const dataToSend = { ...currentItem };
-                if (Array.isArray(dataToSend.business_keys)) {
-                    dataToSend.business_keys = dataToSend.business_keys.join(',');
-                }
+                // if (Array.isArray(dataToSend.business_keys)) {
+                //    dataToSend.business_keys = dataToSend.business_keys.join(',');
+                // }
 
                 // 3. 重新实现 useCrud 中的保存逻辑
                 loading.value = true;
@@ -1653,9 +1663,59 @@
                 }
             };
 
-            // 动态验证规则
+            // *** 自定义 openDialog ***
+            const openDialog = (item = null) => {
+                // 1. 立即设置加载状态 (防止 v-if 渲染表单)
+                dialogContentLoading.value = true;
+                tablesLoading.value = false;
+                columnsLoading.value = false;
+                tablesList.value = [];
+                columnsList.value = [];
+
+                if (item) {
+                    // --- 编辑模式 ---
+                    isEdit.value = true;
+                    // 1. 深度拷贝
+                    let itemData = JSON.parse(JSON.stringify(item));
+                    // 2. 赋值给 currentItem
+                    Object.assign(currentItem, itemData);
+
+                    // 3. *** 关键修复: 确保 *所有* v-model 字段类型正确 ***
+                    if (currentItem.full_sync_time) {
+                        currentItem.full_sync_time_temp = currentItem.full_sync_time;
+                    }
+                    // 确保 business_keys 是一个数组 (后端已统一)
+                    if (!currentItem.business_keys || !Array.isArray(currentItem.business_keys)) {
+                        currentItem.business_keys = [];
+                    }
+                    // 确保 incremental_fields 是一个数组 (后端已统一)
+                    if (!currentItem.incremental_fields || !Array.isArray(currentItem.incremental_fields)) {
+                        currentItem.incremental_fields = [];
+                    }
+
+                } else {
+                    // --- 新增模式 ---
+                    isEdit.value = false;
+                    // 1. 清空
+                    Object.keys(currentItem).forEach(key => delete currentItem[key]);
+                    // 2. 赋默认值
+                    Object.assign(currentItem, JSON.parse(JSON.stringify(defaultTask)));
+
+                    // 3. 设置非超管的默认部门
+                    if (!props.isSuperuser) {
+                        const deptId = localStorage.getItem('department_id');
+                        currentItem.department_id = deptId ? parseInt(deptId) : null;
+                    }
+                }
+
+                // 4. 打开弹窗 (此时显示 v-loading)
+                dialogVisible.value = true;
+
+                // 5. 异步加载逻辑已移至 watch(dialogVisible)
+            };
+
             const validatePkField = (rule, value, callback) => {
-                // *** 检查数组长度 ***
+                // v-model 是数组，所以检查长度
                 if (currentItem.sync_mode !== 'FULL_SYNC' && (!value || value.length === 0)) {
                     callback(new Error('请选择源表主键'));
                 } else {
@@ -1675,7 +1735,7 @@
 
             // 规则: INCREMENTAL 模式需要 增量时间字段
             const validateIncrementalField = (rule, value, callback) => {
-                if (currentItem.sync_mode === 'INCREMENTAL' && !value) {
+                if (currentItem.sync_mode === 'INCREMENTAL' && (!value || value.length === 0)) {
                     callback(new Error('请选择增量时间字段'));
                 } else {
                     callback();
@@ -1700,7 +1760,7 @@
                 entry_id: [{required: true, message: '请输入 Entry ID', trigger: 'blur'}],
                 business_keys: [{validator: validatePkField, trigger: 'change'}],
                 full_sync_time: [{validator: validateFullReplaceTime, trigger: 'change'}],
-                incremental_field: [{validator: validateIncrementalField, trigger: 'change'}],
+                incremental_fields: [{validator: validateIncrementalField, trigger: 'change'}],
                 incremental_interval: [{validator: validateIncrementalInterval, trigger: 'change'}],
             }));
 
@@ -1741,70 +1801,58 @@
             //     // 应用新的自定义验证器
             //     business_keys: [{validator: validatePkField, trigger: 'blur'}],
             //     full_sync_time: [{validator: validateFullReplaceTime, trigger: 'change'}],
-            //     incremental_field: [{validator: validateIncrementalField, trigger: 'blur'}],
+            //     incremental_fields: [{validator: validateIncrementalField, trigger: 'blur'}],
             //     incremental_interval: [{validator: validateIncrementalInterval, trigger: 'change'}],
             // };
 
             const formatDateTime = (isoDateTime) => isoDateTime ? new Date(isoDateTime).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai'}) : '-';
             const statusType = (status) => status === 'running' ? 'primary' : (status === 'error' ? 'danger' : 'info');
 
-            // *** 监听对话框打开事件 ***
-            watch(() => dialogVisible.value, async (newVal) => { // 标记为 async
+            // 监听对话框打开事件 (修复时序问题)
+            watch(() => dialogVisible.value, async (newVal) => {
                 if (newVal) {
-                    // 1. 重置列表
-                    tablesList.value = [];
-                    columnsList.value = [];
+                    // 弹窗刚刚打开
+                    // 1. (数据转换已在 openDialog 中完成)
+                    // 2. (dialogContentLoading 已在 openDialog 中设为 true)
 
-                    // *** 立即设置 *主* 加载状态 ***
-                    dialogContentLoading.value = true;
-                    tablesLoading.value = false;
-                    columnsLoading.value = false;
-
-                    // 2. 加载基础依赖 (非阻塞)
+                    // 3. 加载基础依赖 (非阻塞)
                     fetchAllDatabases();
                     if (props.isSuperuser) fetchDepartments();
 
                     try {
-                        // 3. 处理数据
+                        // 4. *** 链式加载 列表数据 ***
+                        // 必须等待所有异步数据加载完毕，才能设置 loading = false
                         if (isEdit.value) {
-                            // 3a. 处理编辑模式
-                            if (currentItem.full_sync_time) {
-                                currentItem.full_sync_time_temp = currentItem.full_sync_time;
-                            }
-
-                            if (currentItem.business_keys && typeof currentItem.business_keys === 'string') {
-                                currentItem.business_keys = currentItem.business_keys.split(',').filter(k => k);
-                            } else if (!currentItem.business_keys) {
-                                currentItem.business_keys = [];
-                            }
-
-                            // *** 修复 #2: 链式调用 ***
                             if (currentItem.database_id) {
                                 // 等待 *所有* 异步数据加载完毕
+                                // (fetchTables 内部会 await fetchSchema)
                                 await fetchTables(currentItem.database_id, true);
                             }
-
                         } else {
-                            // 3b. 处理新增模式
-                            currentItem.full_sync_time_temp = null;
-                            currentItem.business_keys = [];
-                            if (!props.isSuperuser) {
-                                const deptId = localStorage.getItem('department_id');
-                                currentItem.department_id = deptId ? parseInt(deptId) : null;
+                            // "新增"模式, 如果有部门(非超管), 并且已自动选择了数据库
+                            if (currentItem.database_id) {
+                                await fetchTables(currentItem.database_id, false);
                             }
                         }
                     } catch (e) {
                         console.error("在弹窗准备期间发生错误:", e);
                     } finally {
-                        // *** 异步加载完成后，才解除主加载状态 ***
+                        // 5. *** 异步加载完成后，才解除主加载状态 ***
+                        // 此时 v-if="!dialogContentLoading" 变为 true, 表单渲染
                         dialogContentLoading.value = false;
+
+                        // 6. 等待 v-if 渲染完成
+                        Vue.nextTick(() => {
+                            if (formRef.value) {
+                                formRef.value.clearValidate();
+                            }
+                        });
                     }
                 }
             });
 
             // *** 监听 database_id 变化 ***
             watch(() => currentItem.database_id, (newDbId, oldDbId) => {
-                // (修复 #1)
                 // 仅当弹窗可见，且值真的发生变化时才触发
                 // (排除弹窗打开时 oldDbId 为 undefined/null 的情况)
                 if (!dialogVisible.value || newDbId === oldDbId || oldDbId === null || oldDbId === undefined) {
@@ -1829,10 +1877,11 @@
             return {
                 // 原始 crud 属性和方法
                 items, loading, dialogVisible, isEdit, currentItem, formRef,
-                fetchItems, openDialog, closeDialog, deleteItem,
-                // 重写的 saveItem
+                fetchItems,
+                closeDialog,
+                deleteItem,
+                openDialog,
                 saveItem,
-                // 组件特定的数据
                 taskRules,
                 departments,
                 allDatabases,

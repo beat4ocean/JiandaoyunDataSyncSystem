@@ -3,7 +3,7 @@ from datetime import datetime
 
 from passlib.hash import pbkdf2_sha256 as sha256
 from sqlalchemy import (Index, Boolean, Time, create_engine, MetaData, Column, Integer, String,
-                        DateTime, Text, UniqueConstraint, ForeignKey)
+                        DateTime, Text, UniqueConstraint, ForeignKey, JSON)
 from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import sessionmaker, DeclarativeBase, relationship
 
@@ -182,7 +182,7 @@ class SyncTask(ConfigBase):
     table_name = Column(String(255), nullable=True, comment="数据库表名 (源或目标)")
 
     # 业务主键 (db2jdy)
-    business_keys = Column(String(255), nullable=True, comment="数据表主键字段名 (复合主键用英文逗号分隔)")
+    business_keys = Column(JSON, nullable=True, comment="数据表主键字段名 (e.g. [\"pk1\", \"pk2\"])")
 
     # 简道云配置
     app_id = Column(String(100), nullable=True, comment="简道云应用ID (jdy2db 模式下可由 webhook 自动填充)")
@@ -194,8 +194,10 @@ class SyncTask(ConfigBase):
     # --- db2jdy (数据库 -> 简道云) 专属配置 ---
     sync_mode = Column(String(50), nullable=True, default='INCREMENTAL',
                        comment="同步模式 (FULL_SYNC, INCREMENTAL, BINLOG)")
+
     # 增量同步依赖的时间字段
-    incremental_field = Column(String(100), comment="增量同步依赖的时间字段 (仅 INCREMENTAL 模式)")
+    incremental_fields = Column(JSON, nullable=True, comment="增量同步依赖的时间字段 (e.g. [\"mod_time\"])")
+
     # 增量同步间隔 (分钟)
     incremental_interval = Column(Integer, comment="增量同步间隔 (分钟) (仅 INCREMENTAL 模式)")
     # 全量同步定时时间
