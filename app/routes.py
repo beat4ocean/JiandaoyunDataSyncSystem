@@ -8,12 +8,12 @@ from urllib.parse import quote
 
 from flask import Blueprint, jsonify, request, g
 from flask_jwt_extended import jwt_required, current_user
-from sqlalchemy import select, desc
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select, desc, inspect
+from sqlalchemy.exc import IntegrityError, OperationalError, NoSuchTableError
 from sqlalchemy.orm import joinedload
 
 from app.config import Config
-from app.database import test_db_connection
+from app.database import test_db_connection, get_dynamic_engine
 from app.jdy2db_services import Jdy2DbSyncService
 from app.jdy_api import FormApi
 from app.models import (JdyKeyInfo, SyncTask, SyncErrLog, FormFieldMapping, Department, Database, ConfigSession, User)
@@ -89,7 +89,6 @@ def superuser_required(fn):
 
 
 # --- 1. 数据库管理 ---
-# (原 DatabaseSourceView)
 
 @api_bp.route('/databases', methods=['GET'])
 @jwt_required()
@@ -769,7 +768,99 @@ def delete_sync_task(task_id):
         return jsonify({"error": "删除同步任务失败"}), 500
 
 
-# --- 4. 日志管理 (SyncErrLog) ---
+# --- 4. 数据库检查 (DB Inspector) ---
+
+def _get_db_or_404(db_id, session):
+    """辅助函数：检查用户是否有权访问 db_id"""
+    query = select(Database).where(Database.id == db_id, Database.sync_type == 'db2jdy')
+    if not current_user.is_superuser:
+        query = query.where(Database.department_id == current_user.department_id, Database.sync_type == 'db2jdy')
+
+    db_config = session.scalar(query)
+    if not db_config:
+        raise PermissionError("数据库不存在或权限不足")
+    return db_config
+
+
+@api_bp.route('/database/inspector/<int:db_id>/tables', methods=['GET'])
+@jwt_required()
+def get_db_tables(db_id):
+    """
+    获取指定数据库的所有表名和视图名
+    """
+    session = g.config_session
+    try:
+        # 1. 权限检查
+        db_config = _get_db_or_404(db_id, session)
+
+        # 2. 创建一个临时的 SyncTask 对象以传递给 get_dynamic_engine
+        #    get_dynamic_engine 会使用 db_config (task.database)
+        dummy_task = SyncTask(database_id=db_config.id)
+        dummy_task.database = db_config
+
+        # 3. 获取动态引擎并检查
+        engine = get_dynamic_engine(dummy_task)
+        inspector = inspect(engine)
+
+        table_names = inspector.get_table_names()
+        view_names = inspector.get_view_names()
+
+        all_names = sorted(list(set(table_names + view_names)))
+
+        return jsonify({"tables": all_names})
+
+    except PermissionError as e:
+        return jsonify({"error": str(e)}), 403
+    except OperationalError as e:
+        logger.error(f"[Inspector] 数据库连接失败 (DB_ID: {db_id}): {e}")
+        return jsonify({"error": f"数据库连接失败: {e.orig}"}), 500
+    except Exception as e:
+        logger.error(f"[Inspector] 获取表列表失败 (DB_ID: {db_id}): {e}\n{traceback.format_exc()}")
+        return jsonify({"error": f"检查数据库失败: {e}"}), 500
+
+
+@api_bp.route('/database/inspector/<int:db_id>/<string:table_name>/schema', methods=['GET'])
+@jwt_required()
+def get_table_schema(db_id, table_name):
+    """
+    获取指定表的所有列信息
+    """
+    session = g.config_session
+    try:
+        # 1. 权限检查
+        db_config = _get_db_or_404(db_id, session)
+
+        # 2. 创建临时任务
+        dummy_task = SyncTask(database_id=db_config.id)
+        dummy_task.database = db_config
+
+        # 3. 获取动态引擎并检查
+        engine = get_dynamic_engine(dummy_task)
+        inspector = inspect(engine)
+
+        columns = inspector.get_columns(table_name)
+
+        schema_list = [
+            {"name": col["name"], "type": str(col["type"])}
+            for col in columns
+        ]
+
+        return jsonify({"schema": schema_list})
+
+    except PermissionError as e:
+        return jsonify({"error": str(e)}), 403
+    except NoSuchTableError:
+        logger.warning(f"[Inspector] 表不存在 (DB_ID: {db_id}, Table: {table_name})")
+        return jsonify({"error": f"表 '{table_name}' 不存在"}), 404
+    except OperationalError as e:
+        logger.error(f"[Inspector] 数据库连接失败 (DB_ID: {db_id}): {e}")
+        return jsonify({"error": f"数据库连接失败: {e.orig}"}), 500
+    except Exception as e:
+        logger.error(f"[Inspector] 获取表结构失败 (DB_ID: {db_id}, Table: {table_name}): {e}\n{traceback.format_exc()}")
+        return jsonify({"error": f"检查表结构失败: {e}"}), 500
+
+
+# --- 5. 日志管理 (SyncErrLog) ---
 
 @api_bp.route('/sync-logs', methods=['GET'])
 @jwt_required()
@@ -805,7 +896,7 @@ def get_sync_logs():
         return jsonify({"error": "获取同步错误日志失败"}), 500
 
 
-# --- 5. 字段映射 (FormFieldMapping) ---
+# --- 6. 字段映射 (FormFieldMapping) ---
 
 @api_bp.route('/field-mappings', methods=['GET'])
 @jwt_required()
@@ -832,7 +923,7 @@ def get_field_mappings():
         return jsonify({"error": "获取字段映射失败"}), 500
 
 
-# --- 6. 简道云 Webhook 接收端点 ---
+# --- 7. 简道云 Webhook 接收端点 ---
 
 @api_bp.route('/jdy/webhook', methods=['POST'])
 def handle_jdy_webhook():
@@ -1026,7 +1117,7 @@ def handle_jdy_webhook():
         session.close()
 
 
-# --- 7. 部门管理 (Department) ---
+# --- 8. 部门管理 (Department) ---
 
 @api_bp.route('/departments', methods=['GET'])
 @superuser_required
@@ -1119,7 +1210,7 @@ def delete_department(dept_id):
         return jsonify({"error": f"删除部门失败: {e}"}), 500
 
 
-# --- 8. 用户管理 (User) ---
+# --- 9. 用户管理 (User) ---
 
 @api_bp.route('/users', methods=['GET'])
 @jwt_required()
@@ -1241,7 +1332,7 @@ def delete_user(user_id):
         return jsonify({"error": f"删除用户失败: {e}"}), 500
 
 
-# --- 9. 重置密码路由 ---
+# --- 10. 重置密码路由 ---
 
 @api_bp.route('/users/<int:user_id>/reset-password', methods=['PATCH'])
 @jwt_required()

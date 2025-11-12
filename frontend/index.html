@@ -238,13 +238,13 @@
                                     </el-icon>
                                     <span>任务管理</span>
                                 </template>
-                                <el-menu-item index="/tasks-db-to-jdy">
+                                <el-menu-item index="/tasks/db-to-jdy">
                                     <el-icon>
                                         <Upload/>
                                     </el-icon>
                                     <span>数据库->简道云</span>
                                 </el-menu-item>
-                                <el-menu-item index="/tasks-jdy-to-db">
+                                <el-menu-item index="/tasks/jdy-to-db">
                                     <el-icon>
                                         <Download/>
                                     </el-icon>
@@ -259,13 +259,13 @@
                                     </el-icon>
                                     <span>日志管理</span>
                                 </template>
-                                <el-menu-item index="/logs-db-to-jdy">
+                                <el-menu-item index="/logs/db-to-jdy">
                                     <el-icon>
                                         <Warning/>
                                     </el-icon>
                                     <span>数据库->简道云</span>
                                 </el-menu-item>
-                                <el-menu-item index="/logs-jdy-to-db">
+                                <el-menu-item index="/logs/jdy-to-db">
                                     <el-icon>
                                         <Warning/>
                                     </el-icon>
@@ -1328,7 +1328,14 @@
                   </el-col>
                   <el-col :span="12">
                     <el-form-item label="源数据库表名" prop="table_name">
-                      <el-input v-model="currentItem.table_name" placeholder="数据库中的表名或视图名"></el-input>
+                       <el-select v-model="currentItem.table_name"
+                                  placeholder="搜索或选择表名"
+                                  filterable
+                                  clearable
+                                  :loading="tablesLoading"
+                                  style="width: 100%;">
+                         <el-option v-for="table in tablesList" :key="table" :label="table" :value="table"></el-option>
+                       </el-select>
                     </el-form-item>
                   </el-col>
                 </el-row>
@@ -1370,8 +1377,15 @@
                   <el-row :gutter="20">
                     <el-col :span="12">
                       <el-form-item label="源表主键" prop="business_keys">
-                        <el-input v-model="currentItem.business_keys"
-                                  placeholder="e.g., id1,id2 (复合主键用英文逗号分隔)"></el-input>
+                        <el-select v-model="currentItem.business_keys"
+                                   placeholder="选择主键 (可多选)"
+                                   multiple
+                                   filterable
+                                   clearable
+                                   :loading="columnsLoading"
+                                   style="width: 100%;">
+                          <el-option v-for="col in columnsList" :key="col.name" :label="col.name" :value="col.name"></el-option>
+                        </el-select>
                       </el-form-item>
                     </el-col>
                   </el-row>
@@ -1381,8 +1395,14 @@
                   <el-row :gutter="20">
                     <el-col :span="12">
                       <el-form-item label="增量时间字段" prop="incremental_field">
-                        <el-input v-model="currentItem.incremental_field"
-                                  placeholder="e.g., last_modified_time"></el-input>
+                        <el-select v-model="currentItem.incremental_field"
+                                   placeholder="选择增量时间字段"
+                                   filterable
+                                   clearable
+                                   :loading="columnsLoading"
+                                   style="width: 100%;">
+                          <el-option v-for="col in columnsList" :key="col.name" :label="col.name + ' (' + col.type + ')'" :value="col.name"></el-option>
+                        </el-select>
                       </el-form-item>
                     </el-col>
                     <el-col :span="12">
@@ -1466,12 +1486,12 @@
                 department_id: null,
                 database_id: null,
                 table_name: '',
-                business_keys: '',
+                business_keys: [],
                 app_id: '',
                 entry_id: '',
                 sync_mode: 'INCREMENTAL',
                 is_active: true,
-                incremental_field: '',
+                incremental_field: null,
                 incremental_interval: 5,
                 full_sync_time_temp: null,
                 full_sync_time: null,
@@ -1483,26 +1503,157 @@
                 sync_type: 'db2jdy'
             };
 
-            // 3.6 - Fix API endpoint
-            const crud = useCrud('/sync-tasks?sync_type=db2jdy', '同步任务', defaultTask, 'id');
+            // *** 解构 useCrud 并获取原始的 saveItem ***
+            const {
+                items, loading, dialogVisible, isEdit, currentItem, formRef,
+                fetchItems, openDialog, closeDialog, saveItem: originalSaveItem, deleteItem
+            } = useCrud('/sync-tasks?sync_type=db2jdy', '同步任务', defaultTask, 'id');
+
             const departments = ref([]);
             const allDatabases = ref([]);
+
+            // *** 用于数据库检查的 Refs ***
+            const tablesList = ref([]);
+            const columnsList = ref([]);
+            const tablesLoading = ref(false);
+            const columnsLoading = ref(false);
 
             // 计算属性，用于根据选择的部门过滤数据库下拉框
             const filteredDatabases = computed(() => {
                 // 过滤出 sync_type = 'db2jdy' 的数据库
                 let dbs = allDatabases.value.filter(db => db.sync_type === 'db2jdy');
                 if (props.isSuperuser) {
-                    if (!crud.currentItem.department_id) return [];
-                    return dbs.filter(db => db.department_id === crud.currentItem.department_id);
+                    if (!currentItem.department_id) return [];
+                    return dbs.filter(db => db.department_id === currentItem.department_id);
                 }
                 return dbs; // 非超管，allDatabases 本身就是过滤过的
             });
 
+            // *** 获取表名列表的方法 ***
+            const fetchTables = async (db_id, isEditLoad = false) => {
+                if (!db_id) return;
+                tablesLoading.value = true;
+                tablesList.value = [];
+                columnsList.value = [];
+
+                if (!isEditLoad) { // <-- 修复点: 仅在非编辑加载时清空
+                    currentItem.table_name = null;
+                    currentItem.business_keys = [];
+                    currentItem.incremental_field = null;
+                }
+
+                try {
+                    const response = await apiClient.get(`/database/inspector/${db_id}/tables`);
+                    tablesList.value = response.data.tables;
+
+                    // *** 修复 #2 (part 1): 链式调用 ***
+                    // 如果是编辑加载，并且有表名，则 *立即* 获取字段列表
+                    if (isEditLoad && currentItem.table_name) {
+                        // 使用 await 确保 schema 加载完成
+                        await fetchSchema(currentItem.table_name, true);
+                    }
+                } catch (e) {
+                    console.error("获取表名列表失败:", e);
+                    // 错误已由拦截器显示
+                } finally {
+                    tablesLoading.value = false;
+                }
+            };
+
+            // *** 获取表结构的方法 ***
+            const fetchSchema = async (table_name, isEditLoad = false) => {
+                const db_id = currentItem.database_id;
+                if (!db_id || !table_name) return;
+                columnsLoading.value = true;
+                columnsList.value = [];
+
+                if (!isEditLoad) { // <-- 修复点: 仅在非编辑加载时清空
+                    currentItem.business_keys = [];
+                    currentItem.incremental_field = null;
+                }
+
+                try {
+                    const response = await apiClient.get(`/database/inspector/${db_id}/${table_name}/schema`);
+                    columnsList.value = response.data.schema;
+                } catch (e) {
+                    console.error("获取表结构失败:", e);
+                    // 错误已由拦截器显示
+                } finally {
+                    columnsLoading.value = false;
+                }
+            };
+
+            // *** 重写 saveItem 以处理 business_keys 数组 ***
+            const saveItem = async () => {
+                // 1. 表单验证
+                if (!formRef.value) return;
+                try {
+                    await formRef.value.validate();
+                } catch (error) {
+                    ElMessage.warning('请检查表单输入。');
+                    return; // 验证失败, currentItem.business_keys 保持为数组
+                }
+
+                // 2. 创建一个待发送的数据副本, 将主键数组转换回逗号分隔的字符串
+                const dataToSend = { ...currentItem };
+                if (Array.isArray(dataToSend.business_keys)) {
+                    dataToSend.business_keys = dataToSend.business_keys.join(',');
+                }
+
+                // 3. 重新实现 useCrud 中的保存逻辑
+                loading.value = true;
+                const baseUrl = '/sync-tasks'; // 不带查询参数的基础 URL
+                const url = isEdit.value ? `${baseUrl}/${dataToSend.id}` : baseUrl;
+                const method = isEdit.value ? 'put' : 'post';
+
+                try {
+                    // (来自 useCrud.saveItem 的清理逻辑)
+                    if ('full_sync_time_temp' in dataToSend) {
+                        dataToSend.full_sync_time = dataToSend.full_sync_time_temp || null;
+                        delete dataToSend.full_sync_time_temp;
+                    }
+                    if ('daily_sync_time_temp' in dataToSend) { // 以防万一
+                        delete dataToSend.daily_sync_time_temp;
+                    }
+                    delete dataToSend.created_at;
+                    delete dataToSend.updated_at;
+                    delete dataToSend.webhook_url;
+                    delete dataToSend.last_sync_time;
+
+                    // (PUT 请求的清理逻辑)
+                    if (method === 'put') {
+                        if ('password' in dataToSend && !dataToSend.password) delete dataToSend.password;
+                        if ('db_password' in dataToSend && !dataToSend.db_password) delete dataToSend.db_password;
+                        if ('api_key' in dataToSend && !dataToSend.api_key) delete dataToSend.api_key;
+                        if ('api_secret' in dataToSend && !dataToSend.api_secret) delete dataToSend.api_secret;
+                    }
+
+                    const response = await apiClient[method](url, dataToSend);
+
+                    if (isEdit.value) {
+                        const index = items.value.findIndex(i => i.id === dataToSend.id);
+                        if (index !== -1) items.value.splice(index, 1, response.data);
+                    } else {
+                        items.value.push(response.data);
+                    }
+                    closeDialog();
+                    ElMessage.success(`同步任务 保存成功！`);
+
+                } catch (error) {
+                    console.error(`保存 同步任务 失败:`, error);
+                    // 错误已由拦截器显示。
+                    // 我们不需要转换回数组，因为我们发送的是一个副本 (dataToSend)
+                    // currentItem.business_keys 仍然是数组。
+                } finally {
+                    loading.value = false;
+                }
+            };
+
             // 动态验证规则
             const validatePkField = (rule, value, callback) => {
-                if (crud.currentItem.sync_mode !== 'FULL_SYNC' && !value) {
-                    callback(new Error('请输入源表主键'));
+                // *** 检查数组长度 ***
+                if (currentItem.sync_mode !== 'FULL_SYNC' && (!value || value.length === 0)) {
+                    callback(new Error('请选择源表主键'));
                 } else {
                     callback();
                 }
@@ -1511,7 +1662,7 @@
             // 规则: FULL_SYNC 模式需要指定 全量同步时间
             const validateFullReplaceTime = (rule, value, callback) => {
                 // 注意: 验证器是为 'full_sync_time' 注册的，但检查 'full_sync_time_temp'
-                if (crud.currentItem.sync_mode === 'FULL_SYNC' && !crud.currentItem.full_sync_time_temp) {
+                if (currentItem.sync_mode === 'FULL_SYNC' && !currentItem.full_sync_time_temp) {
                     callback(new Error('请选择每日同步时间'));
                 } else {
                     callback();
@@ -1520,8 +1671,8 @@
 
             // 规则: INCREMENTAL 模式需要 增量时间字段
             const validateIncrementalField = (rule, value, callback) => {
-                if (crud.currentItem.sync_mode === 'INCREMENTAL' && !value) {
-                    callback(new Error('请输入增量时间字段'));
+                if (currentItem.sync_mode === 'INCREMENTAL' && !value) {
+                    callback(new Error('请选择增量时间字段'));
                 } else {
                     callback();
                 }
@@ -1529,7 +1680,7 @@
 
             // 规则: INCREMENTAL 模式需要 增量同步时间间隔
             const validateIncrementalInterval = (rule, value, callback) => {
-                if (crud.currentItem.sync_mode === 'INCREMENTAL' && !value) {
+                if (currentItem.sync_mode === 'INCREMENTAL' && !value) {
                     callback(new Error('请输入增量间隔'));
                 } else {
                     callback();
@@ -1540,19 +1691,19 @@
                 task_name: [{required: true, message: '请输入任务名称', trigger: 'blur'}],
                 department_id: [{required: props.isSuperuser, message: '请选择所属部门', trigger: 'change'}],
                 database_id: [{required: true, message: '请选择源数据库', trigger: 'change'}],
-                table_name: [{required: true, message: '请输入源表名', trigger: 'blur'}],
+                table_name: [{required: true, message: '请选择源表名', trigger: 'change'}],
                 app_id: [{required: true, message: '请输入 App ID', trigger: 'blur'}],
                 entry_id: [{required: true, message: '请输入 Entry ID', trigger: 'blur'}],
-                business_keys: [{validator: validatePkField, trigger: 'blur'}],
+                business_keys: [{validator: validatePkField, trigger: 'change'}],
                 full_sync_time: [{validator: validateFullReplaceTime, trigger: 'change'}],
-                incremental_field: [{validator: validateIncrementalField, trigger: 'blur'}],
+                incremental_field: [{validator: validateIncrementalField, trigger: 'change'}],
                 incremental_interval: [{validator: validateIncrementalInterval, trigger: 'change'}],
             }));
 
             const onDepartmentChange = () => {
                 // 管理员切换部门时，清空已选的数据库
                 if (props.isSuperuser) {
-                    crud.currentItem.database_id = null;
+                    currentItem.database_id = null;
                 }
             };
 
@@ -1593,28 +1744,86 @@
             const formatDateTime = (isoDateTime) => isoDateTime ? new Date(isoDateTime).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai'}) : '-';
             const statusType = (status) => status === 'running' ? 'primary' : (status === 'error' ? 'danger' : 'info');
 
-            watch(() => crud.dialogVisible.value, (newVal) => {
+            // *** 监听对话框打开事件 (重构) ***
+            watch(() => dialogVisible.value, async (newVal) => { // 标记为 async
                 if (newVal) {
+                    // 1. 重置加载状态
+                    tablesList.value = [];
+                    columnsList.value = [];
+                    tablesLoading.value = false;
+                    columnsLoading.value = false;
+
+                    // 2. 加载依赖
                     fetchAllDatabases();
                     if (props.isSuperuser) fetchDepartments();
 
-                    // 处理时间回显
-                    if (crud.isEdit.value && crud.currentItem.full_sync_time) {
-                        crud.currentItem.full_sync_time_temp = crud.currentItem.full_sync_time;
-                    } else if (newVal && !crud.isEdit.value) {
-                        crud.currentItem.full_sync_time_temp = null;
+                    // 3. 处理数据
+                    if (isEdit.value) {
+                        // 3a. 处理编辑模式
+                        if (currentItem.full_sync_time) {
+                            currentItem.full_sync_time_temp = currentItem.full_sync_time;
+                        }
+
+                        // 将 business_keys 从字符串转换为数组
+                        if (currentItem.business_keys && typeof currentItem.business_keys === 'string') {
+                            currentItem.business_keys = currentItem.business_keys.split(',').filter(k => k);
+                        } else if (!currentItem.business_keys) {
+                            currentItem.business_keys = []; // 确保是数组
+                        }
+
+                        // *** 修复 #2: 链式调用 ***
+                        // 在弹窗打开时，链式（await）加载表和字段
+                        // 这样能确保 v-model 渲染时，options 列表已存在
+                        if (currentItem.database_id) {
+                            await fetchTables(currentItem.database_id, true);
+                            // fetchTables 内部已包含 fetchSchema 的逻辑
+                        }
+
+                    } else {
+                         // 3b. 处理新增模式
+                        currentItem.full_sync_time_temp = null;
+                        currentItem.business_keys = []; // 确保新任务是空数组
                         // 非管理员自动设置部门ID
                         if (!props.isSuperuser) {
                             // 确保 department_id 是数字
                             const deptId = localStorage.getItem('department_id');
-                            crud.currentItem.department_id = deptId ? parseInt(deptId) : null;
+                            currentItem.department_id = deptId ? parseInt(deptId) : null;
                         }
                     }
                 }
             });
 
+            // *** 监听 database_id 变化 ***
+            watch(() => currentItem.database_id, (newDbId, oldDbId) => {
+                // 仅当弹窗可见，且值真的发生变化时才触发
+                // (排除弹窗打开时 oldDbId 为 undefined 的情况)
+                if (!dialogVisible.value || newDbId === oldDbId || oldDbId === undefined) {
+                    return;
+                }
+
+                // 此处 newDbId 可能是 null (用户清空) 或新值
+                // `isEditLoad = false` 会触发清空下游字段
+                fetchTables(newDbId, false);
+            });
+
+            // *** 监听 table_name 变化 ***
+            watch(() => currentItem.table_name, (newTableName, oldTableName) => {
+                // 仅当弹窗可见，且值真的发生变化时才触发
+                if (!dialogVisible.value || newTableName === oldTableName || oldTableName === undefined) {
+                    return;
+                }
+
+                // `isEditLoad = false` 会触发清空下游字段
+                fetchSchema(newTableName, false);
+            });
+
             return {
-                ...crud,
+                // 原始 crud 属性和方法
+                items, loading, dialogVisible, isEdit, currentItem, formRef,
+                fetchItems, openDialog, closeDialog, deleteItem,
+                // 重写的 saveItem
+                saveItem,
+                // 组件特定的数据
                 taskRules,
                 departments,
                 allDatabases,
@@ -1622,7 +1831,13 @@
                 onDepartmentChange,
                 formatDateTime,
                 statusType,
-                ElementPlusIcons
+                ElementPlusIcons,
+                tablesList,
+                columnsList,
+                tablesLoading,
+                columnsLoading,
+                fetchTables,
+                fetchSchema
             };
         }
     };
@@ -2226,7 +2441,7 @@
     // --- Router Setup (适配多租户) ---
     const routes = [
         // 3.6 - Default route
-        {path: '/', redirect: '/tasks-db-to-jdy'},
+        {path: '/', redirect: '/tasks/db-to-jdy'},
 
         {path: '/departments', component: DepartmentView},
         {path: '/users', component: UserView},
@@ -2234,10 +2449,10 @@
         {path: '/jdy-keys', component: JdyKeyInfoView},
 
         // 3.6 - Split routes
-        {path: '/tasks-db-to-jdy', component: SyncTaskViewDbToJdy},
-        {path: '/tasks-jdy-to-db', component: SyncTaskViewJdyToDb},
-        {path: '/logs-db-to-jdy', component: SyncLogViewDbToJdy},
-        {path: '/logs-jdy-to-db', component: SyncLogViewJdyToDb}
+        {path: '/tasks/db-to-jdy', component: SyncTaskViewDbToJdy},
+        {path: '/tasks/jdy-to-db', component: SyncTaskViewJdyToDb},
+        {path: '/logs/db-to-jdy', component: SyncLogViewDbToJdy},
+        {path: '/logs/jdy-to-db', component: SyncLogViewJdyToDb}
     ];
     const router = VueRouter.createRouter({history: VueRouter.createWebHashHistory(), routes});
 
