@@ -901,7 +901,11 @@ def get_table_schema(db_id, table_name):
         columns = inspector.get_columns(table_name)
 
         schema_list = [
-            {"name": col["name"], "type": str(col["type"])}
+            {
+                "name": col["name"],
+                # 修改点：将类型字符串按 ' COLLATE ' 拆分，只取第一部分
+                "type": str(col["type"]).split(' COLLATE ')[0]
+            }
             for col in columns
         ]
 
