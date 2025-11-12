@@ -1542,28 +1542,15 @@
                 return dbs; // 非超管，allDatabases 本身就是过滤过的
             });
 
-            // *** 获取表名列表的方法 ***
-            const fetchTables = async (db_id, isEditLoad = false) => {
+            // *** 获取表名列表的方法 - 简化版本 ***
+            const fetchTables = async (db_id) => {
                 if (!db_id) return;
                 tablesLoading.value = true;
                 tablesList.value = [];
-                // 仅在用户主动更改时(isEditLoad=false)才清空字段
-                if (!isEditLoad) {
-                    columnsList.value = [];
-                    currentItem.table_name = null;
-                    currentItem.business_keys = [];
-                    currentItem.incremental_fields = null;
-                }
 
                 try {
                     const response = await apiClient.get(`/database/inspector/${db_id}/tables`);
                     tablesList.value = response.data.tables;
-
-                    // 链式调用: 如果是编辑模式加载，并且有表名，则 *立即* 获取字段列表
-                    if (isEditLoad && currentItem.table_name) {
-                        // *** #1: 确保 fetchSchema 被 await ***
-                        await fetchSchema(currentItem.table_name, true);
-                    }
                 } catch (e) {
                     console.error("获取表名列表失败:", e);
                     // 错误已由拦截器显示
@@ -1572,28 +1559,78 @@
                 }
             };
 
-            // *** 获取表结构的方法 ***
-            const fetchSchema = async (table_name, isEditLoad = false) => {
+            // *** 获取表结构的方法 - 简化版本 ***
+            const fetchSchema = async (table_name) => {
                 const db_id = currentItem.database_id;
                 if (!db_id || !table_name) return;
                 columnsLoading.value = true;
                 columnsList.value = [];
 
-                // 仅在用户主动更改时(isEditLoad=false)才清空字段
-                if (!isEditLoad) {
-                    currentItem.business_keys = [];
-                    currentItem.incremental_fields = [];
-                }
-
                 try {
                     const response = await apiClient.get(`/database/inspector/${db_id}/${table_name}/schema`);
                     columnsList.value = response.data.schema;
+                    console.log('获取到的字段列表:', columnsList.value);
                 } catch (e) {
                     console.error("获取表结构失败:", e);
-                    // 错误已由拦截器显示
                 } finally {
                     columnsLoading.value = false;
                 }
+            };
+
+            // *** 核心修复：专门处理编辑模式的数据加载 ***
+            const loadEditData = async () => {
+                if (!currentItem.database_id || !currentItem.table_name) {
+                    console.warn('编辑模式缺少必要数据:', {
+                        database_id: currentItem.database_id,
+                        table_name: currentItem.table_name
+                    });
+                    return;
+                }
+
+                try {
+                    // 1. 先加载表列表
+                    await fetchTables(currentItem.database_id);
+
+                    // 2. 等待表列表加载完成后再加载字段
+                    await fetchSchema(currentItem.table_name);
+
+                    // 3. 确保数组字段格式正确
+                    if (currentItem.business_keys && !Array.isArray(currentItem.business_keys)) {
+                        console.log('转换 business_keys:', currentItem.business_keys);
+                        currentItem.business_keys = ensureArrayFormat(currentItem.business_keys);
+                    }
+
+                    if (currentItem.incremental_fields && !Array.isArray(currentItem.incremental_fields)) {
+                        console.log('转换 incremental_fields:', currentItem.incremental_fields);
+                        currentItem.incremental_fields = ensureArrayFormat(currentItem.incremental_fields);
+                    }
+
+                    console.log('最终数据:', {
+                        business_keys: currentItem.business_keys,
+                        incremental_fields: currentItem.incremental_fields,
+                        columnsList: columnsList.value
+                    });
+
+                } catch (error) {
+                    console.error('加载编辑数据失败:', error);
+                }
+            };
+
+            // *** 辅助函数：确保字段是数组格式 ***
+            const ensureArrayFormat = (value) => {
+                if (!value) return [];
+                if (Array.isArray(value)) return value;
+                if (typeof value === 'string') {
+                    // 尝试解析 JSON 字符串
+                    try {
+                        const parsed = JSON.parse(value);
+                        return Array.isArray(parsed) ? parsed : [parsed];
+                    } catch {
+                        // 如果不是 JSON，按逗号分隔处理
+                        return value.split(',').filter(item => item.trim());
+                    }
+                }
+                return [value];
             };
 
             // *** 重写 saveItem 以处理 business_keys 数组 ***
@@ -1607,12 +1644,8 @@
                     return; // 验证失败, currentItem.business_keys 保持为数组
                 }
 
-                // *** 移除数据转换 ***
-                // 后端现在接受数组
+                // *** 移除数据转换 - 后端直接接受数组 ***
                 const dataToSend = { ...currentItem };
-                // if (Array.isArray(dataToSend.business_keys)) {
-                //    dataToSend.business_keys = dataToSend.business_keys.join(',');
-                // }
 
                 // 3. 重新实现 useCrud 中的保存逻辑
                 loading.value = true;
@@ -1656,43 +1689,31 @@
                 } catch (error) {
                     console.error(`保存 同步任务 失败:`, error);
                     // 错误已由拦截器显示。
-                    // 我们不需要转换回数组，因为我们发送的是一个副本 (dataToSend)
-                    // currentItem.business_keys 仍然是数组。
                 } finally {
                     loading.value = false;
                 }
             };
 
-            // *** 自定义 openDialog ***
-            const openDialog = (item = null) => {
-                // 1. 立即设置加载状态 (防止 v-if 渲染表单)
+            // *** 完全重写 openDialog ***
+            const openDialog = async (item = null) => {
                 dialogContentLoading.value = true;
-                tablesLoading.value = false;
-                columnsLoading.value = false;
                 tablesList.value = [];
                 columnsList.value = [];
 
                 if (item) {
-                    // --- 编辑模式 ---
+                    // 编辑模式
                     isEdit.value = true;
                     // 1. 深度拷贝
                     let itemData = JSON.parse(JSON.stringify(item));
-                    // 2. 赋值给 currentItem
+                    // 2. *** 关键修复: 确保数组字段格式正确 ***
+                    itemData.business_keys = ensureArrayFormat(itemData.business_keys);
+                    itemData.incremental_fields = ensureArrayFormat(itemData.incremental_fields);
+
+                    if (itemData.full_sync_time) {
+                        itemData.full_sync_time_temp = itemData.full_sync_time;
+                    }
+
                     Object.assign(currentItem, itemData);
-
-                    // 3. *** 关键修复: 确保 *所有* v-model 字段类型正确 ***
-                    if (currentItem.full_sync_time) {
-                        currentItem.full_sync_time_temp = currentItem.full_sync_time;
-                    }
-                    // 确保 business_keys 是一个数组 (后端已统一)
-                    if (!currentItem.business_keys || !Array.isArray(currentItem.business_keys)) {
-                        currentItem.business_keys = [];
-                    }
-                    // 确保 incremental_fields 是一个数组 (后端已统一)
-                    if (!currentItem.incremental_fields || !Array.isArray(currentItem.incremental_fields)) {
-                        currentItem.incremental_fields = [];
-                    }
-
                 } else {
                     // --- 新增模式 ---
                     isEdit.value = false;
@@ -1711,7 +1732,29 @@
                 // 4. 打开弹窗 (此时显示 v-loading)
                 dialogVisible.value = true;
 
-                // 5. 异步加载逻辑已移至 watch(dialogVisible)
+                // 5. *** 修复：立即开始加载数据，不等待 watch ***
+                try {
+                    // 加载基础数据
+                    await fetchAllDatabases();
+                    if (props.isSuperuser) await fetchDepartments();
+
+                    // *** 关键：如果是编辑模式且有数据库和表信息，立即加载相关数据 ***
+                    if (isEdit.value && currentItem.database_id) {
+                        await loadEditData();
+                    }
+                } catch (e) {
+                    console.error("在弹窗准备期间发生错误:", e);
+                } finally {
+                    // 解除加载状态
+                    dialogContentLoading.value = false;
+
+                    // 等待 v-if 渲染完成
+                    Vue.nextTick(() => {
+                        if (formRef.value) {
+                            formRef.value.clearValidate();
+                        }
+                    });
+                }
             };
 
             const validatePkField = (rule, value, callback) => {
@@ -1768,6 +1811,11 @@
                 // 管理员切换部门时，清空已选的数据库
                 if (props.isSuperuser) {
                     currentItem.database_id = null;
+                    tablesList.value = [];
+                    columnsList.value = [];
+                    currentItem.table_name = null;
+                    currentItem.business_keys = [];
+                    currentItem.incremental_fields = [];
                 }
             };
 
@@ -1781,6 +1829,7 @@
                     }
                 }
             };
+
             const fetchAllDatabases = async () => {
                 try {
                     // 获取所有数据库，然后在前端过滤
@@ -1790,92 +1839,20 @@
                 }
             };
 
-            // const taskRules = {
-            //     task_name: [{required: true, message: '请输入任务名称', trigger: 'blur'}],
-            //     department_id: [{required: props.isSuperuser, message: '请选择所属部门', trigger: 'change'}],
-            //     database_id: [{required: true, message: '请选择源数据库', trigger: 'change'}],
-            //     table_name: [{required: true, message: '请输入源表名', trigger: 'blur'}],
-            //     app_id: [{required: true, message: '请输入 App ID', trigger: 'blur'}],
-            //     entry_id: [{required: true, message: '请输入 Entry ID', trigger: 'blur'}],
-            //
-            //     // 应用新的自定义验证器
-            //     business_keys: [{validator: validatePkField, trigger: 'blur'}],
-            //     full_sync_time: [{validator: validateFullReplaceTime, trigger: 'change'}],
-            //     incremental_fields: [{validator: validateIncrementalField, trigger: 'blur'}],
-            //     incremental_interval: [{validator: validateIncrementalInterval, trigger: 'change'}],
-            // };
-
             const formatDateTime = (isoDateTime) => isoDateTime ? new Date(isoDateTime).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai'}) : '-';
             const statusType = (status) => status === 'running' ? 'primary' : (status === 'error' ? 'danger' : 'info');
 
-            // 监听对话框打开事件 (修复时序问题)
-            watch(() => dialogVisible.value, async (newVal) => {
-                if (newVal) {
-                    // 弹窗刚刚打开
-                    // 1. (数据转换已在 openDialog 中完成)
-                    // 2. (dialogContentLoading 已在 openDialog 中设为 true)
-
-                    // 3. 加载基础依赖 (非阻塞)
-                    fetchAllDatabases();
-                    if (props.isSuperuser) fetchDepartments();
-
-                    try {
-                        // 4. *** 链式加载 列表数据 ***
-                        // 必须等待所有异步数据加载完毕，才能设置 loading = false
-                        if (isEdit.value) {
-                            if (currentItem.database_id) {
-                                // 等待 *所有* 异步数据加载完毕
-                                // (fetchTables 内部会 await fetchSchema)
-                                await fetchTables(currentItem.database_id, true);
-                            }
-                        } else {
-                            // "新增"模式, 如果有部门(非超管), 并且已自动选择了数据库
-                            if (currentItem.database_id) {
-                                await fetchTables(currentItem.database_id, false);
-                            }
-                        }
-                    } catch (e) {
-                        console.error("在弹窗准备期间发生错误:", e);
-                    } finally {
-                        // 5. *** 异步加载完成后，才解除主加载状态 ***
-                        // 此时 v-if="!dialogContentLoading" 变为 true, 表单渲染
-                        dialogContentLoading.value = false;
-
-                        // 6. 等待 v-if 渲染完成
-                        Vue.nextTick(() => {
-                            if (formRef.value) {
-                                formRef.value.clearValidate();
-                            }
-                        });
-                    }
+            // *** 简化监听器 ***
+            watch(() => currentItem.database_id, (newDbId) => {
+                if (dialogVisible.value && newDbId) {
+                    fetchTables(newDbId);
                 }
             });
 
-            // *** 监听 database_id 变化 ***
-            watch(() => currentItem.database_id, (newDbId, oldDbId) => {
-                // 仅当弹窗可见，且值真的发生变化时才触发
-                // (排除弹窗打开时 oldDbId 为 undefined/null 的情况)
-
-                // --- FIX 1: 移除了 || oldDbId === null || oldDbId === undefined ---
-                if (!dialogVisible.value || newDbId === oldDbId) {
-                    return;
+            watch(() => currentItem.table_name, (newTableName) => {
+                if (dialogVisible.value && newTableName) {
+                    fetchSchema(newTableName);
                 }
-
-                // `isEditLoad = false` 会触发清空下游字段
-                fetchTables(newDbId, false);
-            });
-
-            // *** 监听 table_name 变化 ***
-            watch(() => currentItem.table_name, (newTableName, oldTableName) => {
-                 // 仅当弹窗可见，且值真的发生变化时才触发
-
-                // --- FIX 2: 移除了 || oldTableName === null || oldTableName === undefined ---
-                if (!dialogVisible.value || newTableName === oldTableName) {
-                    return;
-                }
-
-                // `isEditLoad = false` 会触发清空下游字段
-                fetchSchema(newTableName, false);
             });
 
             return {
