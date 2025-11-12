@@ -1838,14 +1838,20 @@
                         console.error("在弹窗准备期间发生错误:", e);
                     } finally {
                         // 5. *** 异步加载完成后，才解除主加载状态 ***
-                        // 此时 v-if="!dialogContentLoading" 变为 true, 表单渲染
                         dialogContentLoading.value = false;
 
                         // 6. 等待 v-if 渲染完成
+                        // --- FIX 3 (Edit Task):
+                        //     使用双重 nextTick 解决偶发的渲染竞态条件
                         Vue.nextTick(() => {
-                            if (formRef.value) {
-                                formRef.value.clearValidate();
-                            }
+                            // 第一个 nextTick 确保 <el-form v-if> 已被 Vue 渲染到 DOM
+                            Vue.nextTick(() => {
+                                // 第二个 nextTick 确保 <el-form> 的 *子组件* (如下拉框)
+                                // 也完成了它们各自的内部渲染和数据绑定
+                                if (formRef.value) {
+                                    formRef.value.clearValidate();
+                                }
+                            });
                         });
                     }
                 }
@@ -1854,9 +1860,9 @@
             // *** 监听 database_id 变化 ***
             watch(() => currentItem.database_id, (newDbId, oldDbId) => {
                 // 仅当弹窗可见，且值真的发生变化时才触发
-                // (排除弹窗打开时 oldDbId 为 undefined/null 的情况)
 
-                // --- FIX 1: 移除了 || oldDbId === null || oldDbId === undefined ---
+                // --- FIX 1 (Add Task):
+                //     移除了 || oldDbId === null || oldDbId === undefined
                 if (!dialogVisible.value || newDbId === oldDbId) {
                     return;
                 }
