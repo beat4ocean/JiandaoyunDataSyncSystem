@@ -54,12 +54,12 @@ def initialize_databases(app: Flask):
                 # 检查并创建配置数据库
                 logger.info(f"Checking/Creating config database: {Config.CONFIG_DB_NAME}")
                 connection.execute(text(
-                    f"CREATE DATABASE IF NOT EXISTS `{Config.CONFIG_DB_NAME}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+                    f"CREATE DATABASE IF NOT EXISTS `{Config.CONFIG_DB_NAME}` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci"
                 ))
                 # # 检查并创建源数据库
                 # logger.info(f"Checking/Creating source database: {SOURCE_DB_NAME}")
                 # connection.execute(text(
-                #     f"CREATE DATABASE IF NOT EXISTS `{SOURCE_DB_NAME}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+                #     f"CREATE DATABASE IF NOT EXISTS `{SOURCE_DB_NAME}` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci"
                 # ))
             admin_engine.dispose()
             logger.info("Config Database existence check complete.")

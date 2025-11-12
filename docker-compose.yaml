@@ -2,31 +2,51 @@ version: '3.8'
 
 services:
   jdy-data-sync-system:
-    image: jiandaoyundatasyncsystem:2.0.0
+    image: jiandaoyundatasyncsystem:2.1.0
     container_name: jiandaoyundatasyncsystem
     env_file:
       - .env
     ports:
       - "8848:8848"
     restart: unless-stopped
-#    depends_on:
-#      - mysql
-#
-#  mysql:
-#    image: mysql:8.0
-#    container_name: mysql_db
-#    restart: unless-stopped
-#    env_file:
-#      - .env
-#    environment:
-#      MYSQL_ROOT_PASSWORD: ${CONFIG_DB_PASSWORD}
-#      MYSQL_DATABASE: ${CONFIG_DB_NAME}
-#    ports:
-#      - "33306:3306"
-#    volumes:
-#      # 持久化数据库数据
-#      - mysql_data:/var/lib/mysql
-#
-#volumes:
-#  # 声明 volume
-#  mysql_data:
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  mysql:
+    image: mysql:8.0
+    container_name: mysql
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MYSQL_ROOT_PASSWORD: ${CONFIG_DB_PASSWORD}
+      MYSQL_DATABASE: ${CONFIG_DB_NAME}
+    ports:
+      - "33306:3306"
+    # 容器日志大小配置
+    logging:
+      driver: 'json-file'
+      options:
+        max-size: '5g'
+    volumes:
+      # 挂载数据目录
+      - "./mysql/data:/var/lib/mysql"
+      # 挂载配置文件目录
+      - "./mysql/config:/etc/mysql/conf.d"
+    healthcheck:
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${CONFIG_DB_PASSWORD}" ]
+      timeout: 20s
+      retries: 15
+      interval: 10s
+      start_period: 30s
+    command:
+      - --default-authentication-plugin=mysql_native_password
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --wait-timeout=28800
+      - --interactive-timeout=28800
+      - --bind-address=0.0.0.0
+
+volumes:
+  mysql_data:
