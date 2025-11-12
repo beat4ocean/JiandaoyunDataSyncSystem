@@ -1855,7 +1855,9 @@
             watch(() => currentItem.database_id, (newDbId, oldDbId) => {
                 // 仅当弹窗可见，且值真的发生变化时才触发
                 // (排除弹窗打开时 oldDbId 为 undefined/null 的情况)
-                if (!dialogVisible.value || newDbId === oldDbId || oldDbId === null || oldDbId === undefined) {
+
+                // --- FIX 1: 移除了 || oldDbId === null || oldDbId === undefined ---
+                if (!dialogVisible.value || newDbId === oldDbId) {
                     return;
                 }
 
@@ -1866,7 +1868,9 @@
             // *** 监听 table_name 变化 ***
             watch(() => currentItem.table_name, (newTableName, oldTableName) => {
                  // 仅当弹窗可见，且值真的发生变化时才触发
-                if (!dialogVisible.value || newTableName === oldTableName || oldTableName === null || oldTableName === undefined) {
+
+                // --- FIX 2: 移除了 || oldTableName === null || oldTableName === undefined ---
+                if (!dialogVisible.value || newTableName === oldTableName) {
                     return;
                 }
 
