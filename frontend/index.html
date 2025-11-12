@@ -1296,184 +1296,186 @@
 
             <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑任务' : '添加任务'" width="700px"
                        @close="closeDialog" class="form-dialog">
-              <el-form ref="formRef" :model="currentItem" :rules="taskRules" label-position="top" label-width="150px">
 
-                <input type="hidden" v-model="currentItem.sync_type"/>
+              <div v-loading="dialogContentLoading" style="min-height: 300px;">
+                <el-form v-if="!dialogContentLoading" ref="formRef" :model="currentItem" :rules="taskRules" label-position="top" label-width="150px">
 
-                <el-row :gutter="20">
-                  <el-col :span="12">
-                    <el-form-item label="任务名称" prop="task_name">
-                      <el-input v-model="currentItem.task_name" placeholder="例如：销售订单同步"></el-input>
-                    </el-form-item>
-                  </el-col>
-                  <el-col :span="12">
-                    <el-form-item label="所属部门 (租户)" prop="department_id" v-if="isSuperuser">
-                      <el-select v-model="currentItem.department_id" placeholder="选择所属部门"
-                                 @change="onDepartmentChange">
-                        <el-option v-for="dept in departments" :key="dept.id"
-                                   :label="dept.department_name" :value="dept.id"></el-option>
-                      </el-select>
-                    </el-form-item>
-                  </el-col>
-                </el-row>
+                  <input type="hidden" v-model="currentItem.sync_type"/>
 
-                <el-row :gutter="20">
-                  <el-col :span="12">
-                    <el-form-item label="源数据库" prop="database_id">
-                      <el-select v-model="currentItem.database_id" placeholder="选择源数据库">
-                        <el-option v-for="db in filteredDatabases" :key="db.id"
-                                   :label="db.db_show_name" :value="db.id"></el-option>
-                      </el-select>
-                    </el-form-item>
-                  </el-col>
-                  <el-col :span="12">
-                    <el-form-item label="源数据库表名" prop="table_name">
-                       <el-select v-model="currentItem.table_name"
+                  <el-row :gutter="20">
+                    <el-col :span="12">
+                      <el-form-item label="任务名称" prop="task_name">
+                        <el-input v-model="currentItem.task_name" placeholder="例如：销售订单同步"></el-input>
+                      </el-form-item>
+                    </el-col>
+                    <el-col :span="12">
+                      <el-form-item label="所属部门 (租户)" prop="department_id" v-if="isSuperuser">
+                        <el-select v-model="currentItem.department_id" placeholder="选择所属部门"
+                                  @change="onDepartmentChange">
+                          <el-option v-for="dept in departments" :key="dept.id"
+                                    :label="dept.department_name" :value="dept.id"></el-option>
+                        </el-select>
+                      </el-form-item>
+                    </el-col>
+                  </el-row>
+
+                  <el-row :gutter="20">
+                    <el-col :span="12">
+                      <el-form-item label="源数据库" prop="database_id">
+                        <el-select v-model="currentItem.database_id" placeholder="选择源数据库">
+                          <el-option v-for="db in filteredDatabases" :key="db.id"
+                                    :label="db.db_show_name" :value="db.id"></el-option>
+                        </el-select>
+                      </el-form-item>
+                    </el-col>
+                    <el-col :span="12">
+                      <el-form-item label="源数据库表名" prop="table_name">
+                        <el-select v-model="currentItem.table_name"
                                   placeholder="搜索或选择表名"
                                   filterable
                                   clearable
                                   :loading="tablesLoading"
                                   style="width: 100%;">
-                         <el-option v-for="table in tablesList" :key="table" :label="table" :value="table"></el-option>
-                       </el-select>
-                    </el-form-item>
-                  </el-col>
-                </el-row>
-
-                <el-row :gutter="20">
-                  <el-col :span="12">
-                    <el-form-item label="简道云 App ID" prop="app_id">
-                      <el-input v-model="currentItem.app_id"></el-input>
-                    </el-form-item>
-                  </el-col>
-                  <el-col :span="12">
-                    <el-form-item label="简道云 Entry ID" prop="entry_id">
-                      <el-input v-model="currentItem.entry_id"></el-input>
-                    </el-form-item>
-                  </el-col>
-                </el-row>
-
-                <el-divider>同步模式配置</el-divider>
-
-                <el-row :gutter="20">
-                  <el-col :span="12">
-                    <el-form-item label="同步模式" prop="sync_mode">
-                      <el-select v-model="currentItem.sync_mode" placeholder="选择同步模式">
-                        <el-option label="INCREMENTAL (增量)" value="INCREMENTAL"></el-option>
-                        <el-option label="FULL_SYNC (全量)" value="FULL_SYNC"></el-option>
-                        <el-option label="BINLOG (实时)" value="BINLOG"></el-option>
-                      </el-select>
-                    </el-form-item>
-                  </el-col>
-                  <el-col :span="12">
-                    <el-form-item label="任务激活">
-                      <el-switch v-model="currentItem.is_active"></el-switch>
-                    </el-form-item>
-                  </el-col>
-                </el-row>
-
-                <template
-                    v-if="currentItem.sync_mode === 'FULL_SYNC' || currentItem.sync_mode === 'INCREMENTAL' || currentItem.sync_mode === 'BINLOG'">
-                  <el-row :gutter="20">
-                    <el-col :span="12">
-                      <el-form-item label="源表主键" prop="business_keys">
-                        <el-select v-model="currentItem.business_keys"
-                                   placeholder="选择主键 (可多选)"
-                                   multiple
-                                   filterable
-                                   clearable
-                                   :loading="columnsLoading"
-                                   style="width: 100%;">
-                          <el-option v-for="col in columnsList" :key="col.name" :label="col.name" :value="col.name"></el-option>
+                          <el-option v-for="table in tablesList" :key="table" :label="table" :value="table"></el-option>
                         </el-select>
                       </el-form-item>
                     </el-col>
                   </el-row>
-                </template>
 
-                <template v-if="currentItem.sync_mode === 'INCREMENTAL'">
                   <el-row :gutter="20">
                     <el-col :span="12">
-                      <el-form-item label="增量时间字段" prop="incremental_field">
-                        <el-select v-model="currentItem.incremental_field"
-                                   placeholder="选择增量时间字段"
-                                   filterable
-                                   clearable
-                                   :loading="columnsLoading"
-                                   style="width: 100%;">
-                          <el-option v-for="col in columnsList" :key="col.name" :label="col.name + ' (' + col.type + ')'" :value="col.name"></el-option>
+                      <el-form-item label="简道云 App ID" prop="app_id">
+                        <el-input v-model="currentItem.app_id"></el-input>
+                      </el-form-item>
+                    </el-col>
+                    <el-col :span="12">
+                      <el-form-item label="简道云 Entry ID" prop="entry_id">
+                        <el-input v-model="currentItem.entry_id"></el-input>
+                      </el-form-item>
+                    </el-col>
+                  </el-row>
+
+                  <el-divider>同步模式配置</el-divider>
+
+                  <el-row :gutter="20">
+                    <el-col :span="12">
+                      <el-form-item label="同步模式" prop="sync_mode">
+                        <el-select v-model="currentItem.sync_mode" placeholder="选择同步模式">
+                          <el-option label="INCREMENTAL (增量)" value="INCREMENTAL"></el-option>
+                          <el-option label="FULL_SYNC (全量)" value="FULL_SYNC"></el-option>
+                          <el-option label="BINLOG (实时)" value="BINLOG"></el-option>
                         </el-select>
                       </el-form-item>
                     </el-col>
                     <el-col :span="12">
-                      <el-form-item label="增量间隔 (分钟)" prop="incremental_interval">
-                        <el-input-number v-model="currentItem.incremental_interval" :min="1"
-                                         style="width: 100%;"></el-input-number>
+                      <el-form-item label="任务激活">
+                        <el-switch v-model="currentItem.is_active"></el-switch>
                       </el-form-item>
                     </el-col>
                   </el-row>
-                </template>
 
-                <template
-                    v-if="currentItem.sync_mode === 'INCREMENTAL' || currentItem.sync_mode === 'BINLOG'">
+                  <template
+                      v-if="currentItem.sync_mode === 'FULL_SYNC' || currentItem.sync_mode === 'INCREMENTAL' || currentItem.sync_mode === 'BINLOG'">
+                    <el-row :gutter="20">
+                      <el-col :span="12">
+                        <el-form-item label="源表主键" prop="business_keys">
+                          <el-select v-model="currentItem.business_keys"
+                                    placeholder="选择主键 (可多选)"
+                                    multiple
+                                    filterable
+                                    clearable
+                                    :loading="columnsLoading"
+                                    style="width: 100%;">
+                            <el-option v-for="col in columnsList" :key="col.name" :label="col.name" :value="col.name"></el-option>
+                          </el-select>
+                        </el-form-item>
+                      </el-col>
+                    </el-row>
+                  </template>
+
+                  <template v-if="currentItem.sync_mode === 'INCREMENTAL'">
+                    <el-row :gutter="20">
+                      <el-col :span="12">
+                        <el-form-item label="增量时间字段" prop="incremental_field">
+                          <el-select v-model="currentItem.incremental_field"
+                                    placeholder="选择增量时间字段"
+                                    filterable
+                                    clearable
+                                    :loading="columnsLoading"
+                                    style="width: 100%;">
+                            <el-option v-for="col in columnsList" :key="col.name" :label="col.name + ' (' + col.type + ')'" :value="col.name"></el-option>
+                          </el-select>
+                        </el-form-item>
+                      </el-col>
+                      <el-col :span="12">
+                        <el-form-item label="增量间隔 (分钟)" prop="incremental_interval">
+                          <el-input-number v-model="currentItem.incremental_interval" :min="1"
+                                          style="width: 100%;"></el-input-number>
+                        </el-form-item>
+                      </el-col>
+                    </el-row>
+                  </template>
+
+                  <template
+                      v-if="currentItem.sync_mode === 'INCREMENTAL' || currentItem.sync_mode === 'BINLOG'">
+                    <el-row :gutter="20">
+                      <el-col :span="12">
+                        <el-form-item label="首次执行全量同步">
+                          <el-switch v-model="currentItem.is_full_sync_first"></el-switch>
+                        </el-form-item>
+                      </el-col>
+                      <el-col :span="12" v-if="currentItem.is_full_sync_first">
+                        <el-form-item label="⚠️首次全量同步时，执行清空目标表操作">
+                          <el-switch v-model="currentItem.is_delete_first"></el-switch>
+                        </el-form-item>
+                      </el-col>
+                    </el-row>
+                  </template>
+
+                  <template v-if="currentItem.sync_mode === 'FULL_SYNC'">
+                    <el-row :gutter="20">
+                      <el-col :span="12">
+                        <el-form-item label="每日同步时间" prop="full_sync_time">
+                          <el-time-picker v-model="currentItem.full_sync_time_temp" format="HH:mm"
+                                          value-format="HH:mm:ss"
+                                          placeholder="选择时间"></el-time-picker>
+                        </el-form-item>
+                        <!--默认就是True-->
+                        <!--<el-form-item label="首次执行全量同步">
+                          <el-switch v-model="currentItem.is_full_sync_first"></el-switch>
+                        </el-form-item>-->
+                        <el-form-item label="⚠️首次全量同步时，执行清空目标表操作">
+                          <el-switch v-model="currentItem.is_delete_first"></el-switch>
+                        </el-form-item>
+                      </el-col>
+                    </el-row>
+                  </template>
+
+                  <template v-if="currentItem.sync_mode === 'INCREMENTAL' || currentItem.sync_mode === 'FULL_SYNC'">
+                    <el-form-item label="SQL 过滤条件 (选填)" prop="source_filter_sql">
+                      <el-input type="textarea" v-model="currentItem.source_filter_sql"
+                                placeholder="e.g., status = 'approved' AND amount > 1000"></el-input>
+                    </el-form-item>
+                  </template>
+
+                  <el-divider>通知配置</el-divider>
                   <el-row :gutter="20">
                     <el-col :span="12">
-                      <el-form-item label="首次执行全量同步">
-                        <el-switch v-model="currentItem.is_full_sync_first"></el-switch>
-                      </el-form-item>
-                    </el-col>
-                    <el-col :span="12" v-if="currentItem.is_full_sync_first">
-                      <el-form-item label="⚠️首次全量同步时，执行清空目标表操作">
-                        <el-switch v-model="currentItem.is_delete_first"></el-switch>
+                      <el-form-item label="发送企微错误日志">
+                        <el-switch v-model="currentItem.send_error_log_to_wecom"></el-switch>
                       </el-form-item>
                     </el-col>
                   </el-row>
-                </template>
-
-                <template v-if="currentItem.sync_mode === 'FULL_SYNC'">
-                  <el-row :gutter="20">
-                    <el-col :span="12">
-                      <el-form-item label="每日同步时间" prop="full_sync_time">
-                        <el-time-picker v-model="currentItem.full_sync_time_temp" format="HH:mm"
-                                        value-format="HH:mm:ss"
-                                        placeholder="选择时间"></el-time-picker>
-                      </el-form-item>
-                      <!--默认就是True-->
-                      <!--<el-form-item label="首次执行全量同步">
-                        <el-switch v-model="currentItem.is_full_sync_first"></el-switch>
-                      </el-form-item>-->
-                      <el-form-item label="⚠️首次全量同步时，执行清空目标表操作">
-                        <el-switch v-model="currentItem.is_delete_first"></el-switch>
-                      </el-form-item>
-                    </el-col>
-                  </el-row>
-                </template>
-
-                <template v-if="currentItem.sync_mode === 'INCREMENTAL' || currentItem.sync_mode === 'FULL_SYNC'">
-                  <el-form-item label="SQL 过滤条件 (选填)" prop="source_filter_sql">
-                    <el-input type="textarea" v-model="currentItem.source_filter_sql"
-                              placeholder="e.g., status = 'approved' AND amount > 1000"></el-input>
+                  <el-form-item label="企微机器人 Webhook URL" prop="wecom_robot_webhook_url"
+                                v-if="currentItem.send_error_log_to_wecom">
+                    <el-input type="textarea" v-model="currentItem.wecom_robot_webhook_url"
+                              placeholder="如果打开了企微错误通知，请粘贴机器人 URL"></el-input>
                   </el-form-item>
-                </template>
 
-                <el-divider>通知配置</el-divider>
-                <el-row :gutter="20">
-                  <el-col :span="12">
-                    <el-form-item label="发送企微错误日志">
-                      <el-switch v-model="currentItem.send_error_log_to_wecom"></el-switch>
-                    </el-form-item>
-                  </el-col>
-                </el-row>
-                <el-form-item label="企微机器人 Webhook URL" prop="wecom_robot_webhook_url"
-                              v-if="currentItem.send_error_log_to_wecom">
-                  <el-input type="textarea" v-model="currentItem.wecom_robot_webhook_url"
-                            placeholder="如果打开了企微错误通知，请粘贴机器人 URL"></el-input>
-                </el-form-item>
-
-              </el-form>
-              <template #footer>
+                </el-form>
+              </div> <template #footer>
                 <el-button @click="closeDialog">取消</el-button>
-                <el-button type="primary" @click="saveItem" :loading="loading">保存</el-button>
+                <el-button type="primary" @click="saveItem" :loading="loading" :disabled="dialogContentLoading">保存</el-button>
               </template>
             </el-dialog>
           </el-card>
@@ -1512,7 +1514,9 @@
             const departments = ref([]);
             const allDatabases = ref([]);
 
-            // *** 用于数据库检查的 Refs ***
+            // *** 新增弹窗内容加载状态 ***
+            const dialogContentLoading = ref(false);
+
             const tablesList = ref([]);
             const columnsList = ref([]);
             const tablesLoading = ref(false);
@@ -1549,7 +1553,7 @@
                     // *** 修复 #2 (part 1): 链式调用 ***
                     // 如果是编辑加载，并且有表名，则 *立即* 获取字段列表
                     if (isEditLoad && currentItem.table_name) {
-                        // 使用 await 确保 schema 加载完成
+                        // *** 修复 #1: 确保 fetchSchema 被 await ***
                         await fetchSchema(currentItem.table_name, true);
                     }
                 } catch (e) {
@@ -1744,72 +1748,77 @@
             const formatDateTime = (isoDateTime) => isoDateTime ? new Date(isoDateTime).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai'}) : '-';
             const statusType = (status) => status === 'running' ? 'primary' : (status === 'error' ? 'danger' : 'info');
 
-            // *** 监听对话框打开事件 (重构) ***
+            // *** 监听对话框打开事件 ***
             watch(() => dialogVisible.value, async (newVal) => { // 标记为 async
                 if (newVal) {
-                    // 1. 重置加载状态
+                    // 1. 重置列表
                     tablesList.value = [];
                     columnsList.value = [];
+
+                    // *** 立即设置 *主* 加载状态 ***
+                    dialogContentLoading.value = true;
                     tablesLoading.value = false;
                     columnsLoading.value = false;
 
-                    // 2. 加载依赖
+                    // 2. 加载基础依赖 (非阻塞)
                     fetchAllDatabases();
                     if (props.isSuperuser) fetchDepartments();
 
-                    // 3. 处理数据
-                    if (isEdit.value) {
-                        // 3a. 处理编辑模式
-                        if (currentItem.full_sync_time) {
-                            currentItem.full_sync_time_temp = currentItem.full_sync_time;
-                        }
+                    try {
+                        // 3. 处理数据
+                        if (isEdit.value) {
+                            // 3a. 处理编辑模式
+                            if (currentItem.full_sync_time) {
+                                currentItem.full_sync_time_temp = currentItem.full_sync_time;
+                            }
 
-                        // 将 business_keys 从字符串转换为数组
-                        if (currentItem.business_keys && typeof currentItem.business_keys === 'string') {
-                            currentItem.business_keys = currentItem.business_keys.split(',').filter(k => k);
-                        } else if (!currentItem.business_keys) {
-                            currentItem.business_keys = []; // 确保是数组
-                        }
+                            if (currentItem.business_keys && typeof currentItem.business_keys === 'string') {
+                                currentItem.business_keys = currentItem.business_keys.split(',').filter(k => k);
+                            } else if (!currentItem.business_keys) {
+                                currentItem.business_keys = [];
+                            }
 
-                        // *** 修复 #2: 链式调用 ***
-                        // 在弹窗打开时，链式（await）加载表和字段
-                        // 这样能确保 v-model 渲染时，options 列表已存在
-                        if (currentItem.database_id) {
-                            await fetchTables(currentItem.database_id, true);
-                            // fetchTables 内部已包含 fetchSchema 的逻辑
-                        }
+                            // *** 修复 #2: 链式调用 ***
+                            if (currentItem.database_id) {
+                                // 等待 *所有* 异步数据加载完毕
+                                await fetchTables(currentItem.database_id, true);
+                            }
 
-                    } else {
-                         // 3b. 处理新增模式
-                        currentItem.full_sync_time_temp = null;
-                        currentItem.business_keys = []; // 确保新任务是空数组
-                        // 非管理员自动设置部门ID
-                        if (!props.isSuperuser) {
-                            // 确保 department_id 是数字
-                            const deptId = localStorage.getItem('department_id');
-                            currentItem.department_id = deptId ? parseInt(deptId) : null;
+                        } else {
+                            // 3b. 处理新增模式
+                            currentItem.full_sync_time_temp = null;
+                            currentItem.business_keys = [];
+                            if (!props.isSuperuser) {
+                                const deptId = localStorage.getItem('department_id');
+                                currentItem.department_id = deptId ? parseInt(deptId) : null;
+                            }
                         }
+                    } catch (e) {
+                        console.error("在弹窗准备期间发生错误:", e);
+                    } finally {
+                        // *** 异步加载完成后，才解除主加载状态 ***
+                        dialogContentLoading.value = false;
                     }
                 }
             });
 
             // *** 监听 database_id 变化 ***
             watch(() => currentItem.database_id, (newDbId, oldDbId) => {
+                // (修复 #1)
                 // 仅当弹窗可见，且值真的发生变化时才触发
-                // (排除弹窗打开时 oldDbId 为 undefined 的情况)
-                if (!dialogVisible.value || newDbId === oldDbId || oldDbId === undefined) {
+                // (排除弹窗打开时 oldDbId 为 undefined/null 的情况)
+                if (!dialogVisible.value || newDbId === oldDbId || oldDbId === null || oldDbId === undefined) {
                     return;
                 }
 
-                // 此处 newDbId 可能是 null (用户清空) 或新值
                 // `isEditLoad = false` 会触发清空下游字段
                 fetchTables(newDbId, false);
             });
 
             // *** 监听 table_name 变化 ***
             watch(() => currentItem.table_name, (newTableName, oldTableName) => {
-                // 仅当弹窗可见，且值真的发生变化时才触发
-                if (!dialogVisible.value || newTableName === oldTableName || oldTableName === undefined) {
+                 // 仅当弹窗可见，且值真的发生变化时才触发
+                if (!dialogVisible.value || newTableName === oldTableName || oldTableName === null || oldTableName === undefined) {
                     return;
                 }
 
@@ -1832,12 +1841,15 @@
                 formatDateTime,
                 statusType,
                 ElementPlusIcons,
+                // 数据库检查
                 tablesList,
                 columnsList,
                 tablesLoading,
                 columnsLoading,
                 fetchTables,
-                fetchSchema
+                fetchSchema,
+                // *** 返回主加载状态 ***
+                dialogContentLoading
             };
         }
     };
