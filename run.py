@@ -165,27 +165,28 @@ if __name__ == "__main__":
     # 4.2. 添加字段映射刷新器
     start_scheduler(app)
 
-    # 5、将定时刷新任务作业 *添加* 到主调度器
-    try:
-        # 使用从 app.scheduler 导入的 *同一个* 调度器实例
-        scheduler.add_job(
-            refresh_scheduler,
-            'interval',
-            minutes=Config.CHECK_INTERVAL_MINUTES,
-            args=[app],
-            id='task_refresher',  # 添加一个唯一的 ID
-            replace_existing=True,
-            misfire_grace_time=60,
-            # 15秒后启动, 避开其他启动任务
-            next_run_time=datetime.now(TZ_UTC_8) + timedelta(seconds=15)
-        )
-
-        logger.info(f"Task refresher job added to main scheduler, runs every {Config.CHECK_INTERVAL_MINUTES} minutes.")
-
-    except Exception as e:
-        logger.error(f"Failed to add task refresher job to main scheduler: {e}")
-        log_sync_error(error=e, extra_info="Failed to start APScheduler")
-        sys.exit(1)
+    # # 5、将定时刷新任务作业 *添加* 到主调度器
+    # 修复：刷新任务可能导致任务丢失
+    # try:
+    #     # 使用从 app.scheduler 导入的 *同一个* 调度器实例
+    #     scheduler.add_job(
+    #         refresh_scheduler,
+    #         'interval',
+    #         minutes=Config.CHECK_INTERVAL_MINUTES,
+    #         args=[app],
+    #         id='task_refresher',  # 添加一个唯一的 ID
+    #         replace_existing=True,
+    #         misfire_grace_time=60,
+    #         # 15秒后启动, 避开其他启动任务
+    #         next_run_time=datetime.now(TZ_UTC_8) + timedelta(seconds=15)
+    #     )
+    #
+    #     logger.info(f"Task refresher job added to main scheduler, runs every {Config.CHECK_INTERVAL_MINUTES} minutes.")
+    #
+    # except Exception as e:
+    #     logger.error(f"Failed to add task refresher job to main scheduler: {e}")
+    #     log_sync_error(error=e, extra_info="Failed to start APScheduler")
+    #     sys.exit(1)
 
     # 6. 启动 Flask Web 服务器 (使用 Waitress)
     logger.info(f"Starting Flask web server with Waitress on http://0.0.0.0:{Config.SERVER_PORT}...")

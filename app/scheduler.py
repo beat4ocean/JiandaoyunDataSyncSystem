@@ -614,8 +614,10 @@ def add_or_update_task_in_scheduler(task: SyncTask):
             # 2. 必须修改触发器 (trigger)
             scheduler.reschedule_job(job_id, trigger=new_trigger)
 
-        # else:
-        #     logger.info(f"job_id:[{job_id}] Job exists and trigger is unchanged. Skipping.") # (跳过是期望的行为)
+            logger.info(f"job_id:[{job_id}] Rescheduling job finished.")
+
+        else:
+            logger.info(f"job_id:[{job_id}] Job exists and trigger is unchanged. Skipping.")  # (跳过是期望的行为)
 
 
     # 4. Job 不存在: 添加 (且 trigger 和 func 有效)
