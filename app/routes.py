@@ -924,6 +924,66 @@ def get_table_schema(db_id, table_name):
         return jsonify({"error": f"检查表结构失败: {e}"}), 500
 
 
+@api_bp.route('/database/inspector/<int:db_id>/<string:table_name>/keys', methods=['GET'])
+@jwt_required()
+def get_db_table_keys(db_id, table_name):
+    """
+    获取指定表的自动检测业务主键 (PK 或 Unique)
+    """
+    session = g.config_session
+
+    try:
+        # 1. 权限检查
+        db_config = _get_db_or_404(db_id, session)
+
+        # 2. 创建一个临时的 SyncTask 对象 (用于传递给 get_dynamic_engine 和 log_sync_error)
+        dummy_task = SyncTask(
+            database_id=db_id,
+            table_name=table_name,
+            business_keys=None
+        )
+        dummy_task.database = db_config
+
+        auto_detected_keys = None
+
+        # 3. 获取动态引擎并检查
+        engine = get_dynamic_engine(dummy_task)
+        inspector = inspect(engine)
+
+        # 4. 检查主键
+        pk_constraint = inspector.get_pk_constraint(table_name)
+        primary_keys = pk_constraint.get('constrained_columns', [])
+
+        if primary_keys:
+            auto_detected_keys = primary_keys
+            logger.info(f"[Inspector] Auto-detected primary keys for {table_name}: {primary_keys}")
+        else:
+            # 5. 如果没有主键，检查唯一约束
+            unique_constraints = inspector.get_unique_constraints(table_name)
+            if unique_constraints:
+                # 获取第一个唯一约束的列
+                first_unique_constraint = unique_constraints[0]
+                unique_keys = first_unique_constraint.get('column_names', [])
+                if unique_keys:
+                    auto_detected_keys = unique_keys
+                    logger.info(f"[Inspector] Auto-detected unique keys for {table_name}: {unique_keys}")
+
+        # 6. 返回检测到的 keys
+        return jsonify({"keys": auto_detected_keys or []})
+
+    except PermissionError as e:
+        return jsonify({"error": str(e)}), 403
+    except NoSuchTableError:
+        logger.warning(f"[Inspector] 表不存在 (DB_ID: {db_id}, Table: {table_name})")
+        return jsonify({"error": f"表 '{table_name}' 不存在"}), 404
+    except OperationalError as e:
+        logger.error(f"[Inspector] 数据库连接失败 (DB_ID: {db_id}): {e}")
+        return jsonify({"error": f"数据库连接失败: {e.orig}"}), 500
+    except Exception as e:
+        logger.error(f"[Inspector] 获取主键失败 (DB_ID: {db_id}, Table: {table_name}): {e}\n{traceback.format_exc()}")
+        return jsonify({"error": f"检查主键失败: {e}"}), 500
+
+
 # --- 5. 日志管理 (SyncErrLog) ---
 
 @api_bp.route('/sync-logs', methods=['GET'])

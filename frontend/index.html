@@ -1381,7 +1381,7 @@
                       <el-col :span="12">
                         <el-form-item label="源表主键" prop="business_keys">
                           <el-select v-model="currentItem.business_keys"
-                                     placeholder="选择主键 (可多选)"
+                                     placeholder="选择主键 (可多选, 可自动填充)"
                                      multiple
                                      filterable
                                      clearable
@@ -1559,19 +1559,39 @@
                 }
             };
 
-            // *** 获取表结构的方法 - 简化版本 ***
+            // --- *** fetchSchema 现在同时获取字段和主键 *** ---
             const fetchSchema = async (table_name) => {
                 const db_id = currentItem.database_id;
                 if (!db_id || !table_name) return;
+
+                // 两个下拉框都显示加载
                 columnsLoading.value = true;
+
+                // 清空旧数据
                 columnsList.value = [];
+                currentItem.business_keys = []; // 清空主键
 
                 try {
-                    const response = await apiClient.get(`/database/inspector/${db_id}/${table_name}/schema`);
-                    columnsList.value = response.data.schema;
+                    // *** 并行请求表结构和主键 ***
+                    const [schemaResponse, keysResponse] = await Promise.all([
+                        apiClient.get(`/database/inspector/${db_id}/${table_name}/schema`),
+                        apiClient.get(`/database/inspector/${db_id}/${table_name}/keys`) // 新增的API调用
+                    ]);
+
+                    // 填充字段列表
+                    columnsList.value = schemaResponse.data.schema;
+
+                    // *** 自动填充主键 ***
+                    if (keysResponse.data.keys && keysResponse.data.keys.length > 0) {
+                        currentItem.business_keys = keysResponse.data.keys;
+                    }
+
                     console.log('获取到的字段列表:', columnsList.value);
+                    console.log('自动检测到的主键:', currentItem.business_keys);
+
                 } catch (e) {
-                    console.error("获取表结构失败:", e);
+                    console.error("获取表结构或主键失败:", e);
+                    // 错误会由拦截器显示
                 } finally {
                     columnsLoading.value = false;
                 }
@@ -1592,20 +1612,29 @@
                     await fetchTables(currentItem.database_id);
 
                     // 2. 等待表列表加载完成后再加载字段
+                    // (注意：fetchSchema 现在也会自动加载 keys, 但由于 keys 已经存在于 currentItem, 它们将被覆盖)
+                    // (这是OK的，因为用户可能在保存后又修改了数据库，我们希望加载最新的)
                     await fetchSchema(currentItem.table_name);
 
                     // 3. 确保数组字段格式正确
-                    if (currentItem.business_keys && !Array.isArray(currentItem.business_keys)) {
-                        console.log('转换 business_keys:', currentItem.business_keys);
-                        currentItem.business_keys = ensureArrayFormat(currentItem.business_keys);
+                    // if (currentItem.business_keys && !Array.isArray(currentItem.business_keys)) {
+                    //     console.log('转换 business_keys:', currentItem.business_keys);
+                    //     currentItem.business_keys = ensureArrayFormat(currentItem.business_keys);
+                    // }
+                    //
+                    // if (currentItem.incremental_fields && !Array.isArray(currentItem.incremental_fields)) {
+                    //     console.log('转换 incremental_fields:', currentItem.incremental_fields);
+                    //     currentItem.incremental_fields = ensureArrayFormat(currentItem.incremental_fields);
+                    // }
+
+                    // ** fetchSchema 已经填充了最新的 keys, 我们需要重新加载 itemData 中的 keys **
+                    const originalItem = items.value.find(i => i.id === currentItem.id);
+                    if (originalItem) {
+                         currentItem.business_keys = ensureArrayFormat(originalItem.business_keys);
+                         currentItem.incremental_fields = ensureArrayFormat(originalItem.incremental_fields);
                     }
 
-                    if (currentItem.incremental_fields && !Array.isArray(currentItem.incremental_fields)) {
-                        console.log('转换 incremental_fields:', currentItem.incremental_fields);
-                        currentItem.incremental_fields = ensureArrayFormat(currentItem.incremental_fields);
-                    }
-
-                    console.log('最终数据:', {
+                    console.log('最终数据 (编辑模式):', {
                         business_keys: currentItem.business_keys,
                         incremental_fields: currentItem.incremental_fields,
                         columnsList: columnsList.value
@@ -1740,6 +1769,8 @@
 
                     // *** 关键：如果是编辑模式且有数据库和表信息，立即加载相关数据 ***
                     if (isEdit.value && currentItem.database_id) {
+                        // 在编辑模式下，loadEditData 会获取 schema,
+                        // 并保留 currentItem 中已保存的 business_keys
                         await loadEditData();
                     }
                 } catch (e) {
@@ -1851,6 +1882,7 @@
 
             watch(() => currentItem.table_name, (newTableName) => {
                 if (dialogVisible.value && newTableName) {
+                    // 当表名改变时，(重新)获取表结构和自动填充的主键
                     fetchSchema(newTableName);
                 }
             });

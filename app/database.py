@@ -114,6 +114,49 @@ def get_dynamic_metadata(engine) -> MetaData:
     return dynamic_metadata_cache[engine_url]
 
 
+# def get_business_keys(task: SyncTask):
+#     auto_detected_keys = None
+#
+#     table_name = task.table_name
+#     business_keys = task.business_keys
+#
+#     # 仅在 提供了表名、且用户未手动提供 business_keys 时
+#     if table_name and not business_keys:
+#         try:
+#             # 1. 获取引擎和检查器
+#             engine = get_dynamic_engine(task)
+#             inspector = inspect(engine)
+#
+#             # 2. 检查主键
+#             pk_constraint = inspector.get_pk_constraint(table_name)
+#             primary_keys = pk_constraint.get('constrained_columns', [])
+#
+#             if primary_keys:
+#                 auto_detected_keys = primary_keys
+#                 logger.info(f"[add_task] Auto-detected primary keys for {table_name}: {primary_keys}")
+#             else:
+#                 # 3. 如果没有主键，检查唯一约束
+#                 unique_constraints = inspector.get_unique_constraints(table_name)
+#                 if unique_constraints:
+#                     # 获取第一个唯一约束的列
+#                     first_unique_constraint = unique_constraints[0]
+#                     unique_keys = first_unique_constraint.get('column_names', [])
+#                     if unique_keys:
+#                         auto_detected_keys = unique_keys
+#                         logger.info(f"[add_task] Auto-detected unique keys for {table_name}: {unique_keys}")
+#
+#             task.business_keys = auto_detected_keys
+#
+#         except NoSuchTableError:
+#             logger.warning(
+#                 f"[add_task] Table '{table_name}' not found during key inspection. Skipping auto-detection.")
+#             # 表可能还不存在，或者名称错误，允许继续创建任务，但不自动填充
+#         except Exception as e:
+#             # 捕获其他数据库检查错误 (例如连接失败)
+#             logger.error(f"[add_task] Error during key inspection for {table_name}: {e}")
+#             log_sync_error(task_config=task, error=e, extra_info="Failed to auto-detect business keys.")
+
+
 # --- “测试连接”功能函数 ---
 def test_db_connection(db_info: Dict[str, Any]) -> (bool, str):
     """
