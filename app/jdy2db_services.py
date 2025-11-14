@@ -144,7 +144,10 @@ class FieldMappingService:
             'progress': Integer,  # Add progress
             'autonumber': BigInteger,  # Add autonumber (treat as big int)
             'flowstate': BigInteger,  # Keep as BigInteger
-            'boolean': Boolean  # Add boolean explicitly
+            'boolean': Boolean,  # Add boolean explicitly
+            'wx_open_id': String,
+            'wx_nickname': String,
+            'wx_gender': String,
         }
 
         sql_type_class = None
@@ -1265,8 +1268,8 @@ class Jdy2DbSyncService:
             # 3. 排除已知的系统字段
             system_fields = {
                 '_id', 'appId', 'entryId', 'creator', 'updater', 'deleter',
-                'createTime', 'updateTime', 'deleteTime', 'formName',  # 'flowState', 不是系统默认字段
-                # 'wx_open_id', 'wx_nickname', 'wx_gender' # 微信字段
+                'createTime', 'updateTime', 'deleteTime', 'formName', 'flowState',
+                'wx_open_id', 'wx_nickname', 'wx_gender'  # 微信字段
             }
 
             # 4. 找到数据中有但映射中没有的 keys
@@ -1615,8 +1618,8 @@ class Jdy2DbSyncService:
             # 定义系统字段 (这些字段不参与 DDL 变更)
             system_fields = {
                 '_id', 'appId', 'entryId', 'creator', 'updater', 'deleter',
-                'createTime', 'updateTime', 'deleteTime', 'formName',  # 'flowState', 不是系统默认字段
-                # 'wx_open_id', 'wx_nickname', 'wx_gender' # 微信字段
+                'createTime', 'updateTime', 'deleteTime', 'formName', 'flowState',
+                'wx_open_id', 'wx_nickname', 'wx_gender'  # 微信字段
             }
             # 2. 获取旧状态 (Old State)
             # 从 FormFieldMapping 表 (config_session)
@@ -1910,8 +1913,8 @@ class Jdy2DbSyncService:
             # 2. 添加系统字段映射 (如果它们不在映射表中)
             system_fields = [
                 '_id', 'appId', 'entryId', 'creator', 'updater', 'deleter',
-                'createTime', 'updateTime', 'deleteTime', 'formName',  # 'flowState', 不是系统默认字段
-                # 'wx_open_id', 'wx_nickname', 'wx_gender' # 微信字段
+                'createTime', 'updateTime', 'deleteTime', 'formName', 'flowState',
+                'wx_open_id', 'wx_nickname', 'wx_gender'  # 微信字段
             ]
             for field in system_fields:
                 if field not in mappings:
@@ -1921,6 +1924,10 @@ class Jdy2DbSyncService:
             for key, value in data.items():
                 # 使用新的双重映射字典查找列名
                 db_col_name = mappings.get(key)
+
+                # 系统字段没有表单映射，此时 key 就是 db_col_name
+                if not db_col_name and key in system_fields:
+                    db_col_name = key
 
                 # 如果映射中没有，并且 EXTRACT_SCHEMA_FROM_DATA 为 True，尝试从 key 推断 db_col_name
                 if not db_col_name and key not in system_fields:
