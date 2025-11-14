@@ -160,10 +160,10 @@ class FieldMappingService:
         # 2. 如果类型映射成功，但需要根据值调整 (例如 String vs Text)
         if sql_type_class:
             if sql_type_class in (Text, String) and isinstance(data_value, str):
-                if len(data_value) > 65535:
-                    # logger.debug(f"Value length > 65535, promoting to LONGTEXT or VARCHAR")
+                if len(data_value) > 1000:
+                    # logger.debug(f"Value length > 1000, promoting to LONGTEXT or VARCHAR")
                     if dialect_name == 'starrocks':
-                        return String(1048576)  # Use VARCHAR(1048576) for StarRocks
+                        return String(65533)  # Use VARCHAR(65533) for StarRocks
                     elif dialect_name == 'mysql':
                         return LONGTEXT()
                     else:
@@ -236,9 +236,9 @@ class FieldMappingService:
                     pass  # Not a valid time string
 
             # 根据长度决定使用 String/TEXT/LONGTEXT
-            if len(data_value) > 65535:
+            if len(data_value) > 1000:
                 if dialect_name == 'starrocks':
-                    return String(1048576)  # Use VARCHAR(1048576) for StarRocks
+                    return String(65533)  # Use VARCHAR(65533) for StarRocks
                 elif dialect_name == 'mysql':
                     return LONGTEXT()
                 else:
@@ -1212,7 +1212,7 @@ class Jdy2DbSyncService:
                 # 使用 isinstance 检查类型关系，优先使用更通用的类型
                 if isinstance(sql_type_instance, (LONGTEXT, Text, String)) and (
                         isinstance(sql_type_instance, (LONGTEXT, Text)) or
-                        (isinstance(sql_type_instance, String) and sql_type_instance.length == 1048576)
+                        (isinstance(sql_type_instance, String) and sql_type_instance.length == 65533)
                 ):
                     column_types[db_col_name] = sql_type_instance
                 elif isinstance(sql_type_instance, JSON) and not isinstance(current_type_inst, (LONGTEXT, Text)):
@@ -1540,20 +1540,10 @@ class Jdy2DbSyncService:
             return table  # 失败时返回原表
 
     # None,  dialect_name=dialect_name比较 SQLAlchemy 类型实例
-    def _is_type_different(self, existing_sqlalch_type: TypeEngine, expected_sqlalch_type: TypeEngine) -> bool:
+    def _is_type_different(self, existing_sqlalch_type: TypeEngine, expected_sqlalch_type: TypeEngine,
+                           dialect_name: str = None) -> bool:
         """比较两个 SQLAlchemy 类型实例是否代表不同的数据库类型"""
         if type(existing_sqlalch_type) != type(expected_sqlalch_type):
-            # 允许从 String/Text 升级到 LONGTEXT
-            if isinstance(existing_sqlalch_type, (String, Text)) and isinstance(expected_sqlalch_type, LONGTEXT):
-                return True
-            # 允许从 String/Text 升级到 VARCHAR(1048576) (StarRocks)
-            if isinstance(existing_sqlalch_type, (String, Text)) and \
-                    isinstance(expected_sqlalch_type, String) and expected_sqlalch_type.length == 1048576:
-                return True
-            # 允许从 VARCHAR(1048576) 降级到 LONGTEXT (如果 StarRocks -> MySQL)
-            if isinstance(existing_sqlalch_type, String) and existing_sqlalch_type.length == 1048576 and \
-                    isinstance(expected_sqlalch_type, LONGTEXT):
-                return True
 
             # 允许从 Integer 升级到 BigInteger
             if isinstance(existing_sqlalch_type, Integer) and isinstance(expected_sqlalch_type, BigInteger):
@@ -1562,18 +1552,29 @@ class Jdy2DbSyncService:
             if isinstance(existing_sqlalch_type, (Integer, BigInteger)) and isinstance(expected_sqlalch_type, Float):
                 return True
 
+            # 字符串类型处理
+            # 允许从 String/Text 升级到 LONGTEXT
+            if dialect_name != 'starrocks' and \
+                    isinstance(existing_sqlalch_type, (String, Text)) and isinstance(expected_sqlalch_type, LONGTEXT):
+                return True
+            # 对于 StarRocks，VARCHAR(65533) 和 Text 视为相同类型
+            if dialect_name == 'starrocks' and \
+                    isinstance(existing_sqlalch_type, String) and existing_sqlalch_type.length >= 65533 and \
+                    isinstance(expected_sqlalch_type, (String, Text)):
+                return False
+            # 对于 StarRocks，允许从 String 升级到 VARCHAR(1048576)
+            if dialect_name == 'starrocks' and \
+                    isinstance(existing_sqlalch_type, String) and existing_sqlalch_type.length <= 65533 and \
+                    isinstance(expected_sqlalch_type, String) and expected_sqlalch_type.length > 65533:
+                return True
+
             # 其他类型不匹配
             return True
 
         # 对于 String 类型，还需要比较长度
         if isinstance(existing_sqlalch_type, String) and isinstance(expected_sqlalch_type, String):
             # 仅在期望长度大于现有长度时才认为不同 (允许扩展)
-            if (existing_sqlalch_type.length is not None and
-                    expected_sqlalch_type.length is not None and
-                    expected_sqlalch_type.length > existing_sqlalch_type.length):
-                # 排除 1048576 -> 1048576
-                if expected_sqlalch_type.length == 1048576 and existing_sqlalch_type.length == 1048576:
-                    return False
+            if expected_sqlalch_type.length > existing_sqlalch_type.length:
                 return True
             # 允许从 String 升级到 Text/LONGTEXT (已在 type check 中处理)
             return False
