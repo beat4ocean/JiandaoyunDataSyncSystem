@@ -1177,9 +1177,15 @@ def handle_jdy_webhook():
             logger.error(f"[Webhook] 400: Payload is not valid JSON (Task ID: {task_id}).")
             return jsonify({"error": "无效的 JSON 负载"}), 400
 
-        if not payload or not payload.get('data') or not payload.get('op'):
+        if not payload or not payload.get('op'):
             logger.error(f"[Webhook] 400: Invalid payload structure (op/data) (Task ID: {task_id})")
+            log_sync_error(task_config=task_config,
+                           error=Exception(f"[Webhook] 400: Invalid payload structure (op/data) (Task ID: {task_id})"),
+                           payload=payload)
             return jsonify({"error": "负载结构无效"}), 400
+
+        if payload and payload.get('op') == 'data_test':
+            return jsonify({"message": "测试成功"}), 200
 
         op = payload.get('op')
         data = payload.get('data')
