@@ -189,10 +189,18 @@ class FieldMappingService:
                     logger.warning(
                         f"Value '{data_value}' cannot be converted to BigInteger; Text will be used instead.")
                     return Text()  # Fallback if value cannot be converted
+
             # If type is mapped and doesn't need value adjustment, return instance
             # logger.debug(f"Returning instance: {sql_type_class.__name__}()")
 
-            return sql_type_class()  # 修正：返回实例
+            # If data_value was None, we skipped the length logic above.
+            # If the class is String, we MUST return an instance with a length
+            # to avoid the "VARCHAR requires a length" error on MySQL/etc.
+            if sql_type_class is String:
+                # Use the default length from the data-driven logic
+                return Text()
+
+            return sql_type_class()  # 修正：返回实例 (for Text, JSON, Float, etc.)
 
         # 3. 如果没有提供简道云类型或类型未知，则回退到基于值的推断
         # logger.debug(f"No JDY type or unknown type '{jdy_type}', inferring from value type: {type(data_value).__name__}")
