@@ -2,4 +2,4 @@ apiVersion: v2
 name: jdy-data-sync
 description: A Helm chart for deploying the JianDaoYun Data Sync System
 version: 0.1.0
-appVersion: "2.1.1" # Corresponds to your app image tag
+appVersion: "2.1.2" # Corresponds to your app image tag
