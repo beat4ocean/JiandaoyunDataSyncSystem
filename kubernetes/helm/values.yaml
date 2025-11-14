@@ -3,7 +3,7 @@ app:
   image:
     repository: jiandaoyundatasyncsystem
     pullPolicy: IfNotPresent
-    tag: "2.1.0"
+    tag: "2.1.1"
   service:
     type: ClusterIP # Change to LoadBalancer or NodePort for external access
     port: 8848

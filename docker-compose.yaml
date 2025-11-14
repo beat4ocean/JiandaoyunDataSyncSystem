@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   jdy-data-sync-system:
-    image: jiandaoyundatasyncsystem:2.1.0
+    image: jiandaoyundatasyncsystem:2.1.1
     container_name: jiandaoyundatasyncsystem
     env_file:
       - .env
